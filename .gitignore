@@ -1,0 +1,90 @@
+# ---- secrets / local config (never commit) ----------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*credentials*.json
+*service-account*.json
+client_secret*.json
+token.json
+.netrc
+.secrets/
+secrets/
+
+# ---- python -------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+build/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+
+# ---- databases / local state --------------------------------------------------
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+nodo.db*
+
+# ---- node / web ---------------------------------------------------------------
+node_modules/
+apps/web/dist/
+apps/web/.vite/
+*.tsbuildinfo
+
+# ---- logs / temp --------------------------------------------------------------
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# ---- voice: temporary recordings and audio are never versioned ---------------
+*.wav
+*.mp3
+*.ogg
+*.webm
+*.m4a
+*.flac
+*.opus
+*.pcm
+recordings/
+voice_cache/
+tts_cache/
+
+# ---- local model artifacts ----------------------------------------------------
+*.gguf
+*.ggml
+*.safetensors
+*.onnx
+*.pt
+*.pth
+models/
+.ollama/
+
+# ---- os / editors -------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
