@@ -27,7 +27,7 @@ class Event:
         return {"type": self.type, "request_id": self.request_id, "at": self.at.isoformat(), **self.payload}
 
 
-PERSISTED_PREFIXES = ("agent.", "tool.", "approval.", "memory.", "voice.session", "request.", "model.failed")
+PERSISTED_PREFIXES = ("agent.", "tool.", "approval.", "memory.", "voice.", "request.", "model.failed")
 
 
 class EventBus:

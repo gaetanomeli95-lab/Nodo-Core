@@ -2,6 +2,7 @@
 inference, streams the answer, and records everything. Each step emits traceable events."""
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -42,9 +43,14 @@ PLANS: dict[str, list[str]] = {
     "today": ["retrieve_projects", "retrieve_tasks", "agent:pm", "rank_priorities", "synthesize"],
     "prepare_content": ["resolve_entity", "retrieve_content_history", "retrieve_client_memory", "agent:content", "synthesize"],
     "tech_status": ["resolve_entity", "retrieve_repositories", "agent:dev", "synthesize"],
+    "compare": ["resolve_entities", "retrieve_projects", "retrieve_tasks", "agent:pm", "rank_comparison", "synthesize"],
     "general": ["synthesize"],
     "stop": ["acknowledge"],
+    "approve": ["acknowledge"],
+    "reject": ["acknowledge"],
 }
+
+_SENT_END = re.compile(r"(?<=[.!?…])\s+|\n+")
 
 
 @dataclass
@@ -100,6 +106,12 @@ class NodoCore:
             if intent.name == "stop":
                 outcome.text = "Ok, mi fermo."
                 yield _ev("token", request_id, delta=outcome.text)
+            elif intent.name == "approve":
+                outcome.text = "Ricevuto. La conferma conta solo per una richiesta di approvazione attiva."
+                yield _ev("token", request_id, delta=outcome.text)
+            elif intent.name == "reject":
+                outcome.text = "Ricevuto, non eseguo nulla."
+                yield _ev("token", request_id, delta=outcome.text)
             elif intent.unresolved or intent.ambiguous:
                 outcome.text = self._clarify(intent)
                 yield _ev("token", request_id, delta=outcome.text)
@@ -121,9 +133,17 @@ class NodoCore:
                         yield _ev("step", request_id, step=step, status="done")
                 grounded = self._grounded_summary(intent, pkg, outcome.reports)
                 yield _ev("step", request_id, step="synthesize", status="running")
+                pending = ""
                 async for piece in self._synthesize(request_id, pkg, intent, grounded, lang):
                     outcome.text += piece
+                    pending += piece
                     yield _ev("token", request_id, delta=piece)
+                    while m := _SENT_END.search(pending):
+                        sent, pending = pending[: m.end()].strip(), pending[m.end():]
+                        if sent:
+                            yield _ev("sentence", request_id, text=sent)
+                if pending.strip():  # trailing fragment closes the last sentence
+                    yield _ev("sentence", request_id, text=pending.strip())
                 d = self.router.last_decision
                 outcome.provider, outcome.model = (d.descriptor.provider, d.descriptor.model) if d else (None, None)
                 yield _ev("step", request_id, step="synthesize", status="done")
@@ -167,6 +187,12 @@ class NodoCore:
         if intent.entity:
             ctx.update(entity_type=intent.entity.entity_type, entity_id=intent.entity.entity_id,
                        entity_name=intent.entity.name)
+            seen = [e for e in intent.entities] if intent.entities else [intent.entity]
+            hist = [{"entity_type": e.entity_type, "entity_id": e.entity_id, "entity_name": e.name}
+                    for e in seen]
+            hist += [e for e in ctx.get("entities", [])
+                     if e.get("entity_id") not in {h["entity_id"] for h in hist}]
+            ctx["entities"] = hist[:4]  # recency-ordered; "le due" resolves here
         conv.active_context = ctx
         self.s.flush()
 
@@ -194,6 +220,8 @@ class NodoCore:
                 lines += [f"- {p['name']} ({p['kind']}, priorità {p['priority']}, stato {p['status']})" for p in pkg.projects]
         if intent.name == "today":
             lines += self._rank_today(pkg)
+        if intent.name == "compare":
+            lines += self._compare(pkg, reports)
         for r in reports:
             lines += r.summary_lines
             if r.risks:
@@ -223,6 +251,33 @@ class NodoCore:
                 "scade oggi" if (t["due_date"] or "").startswith(today) else f"priorità {t['priority']}"
             out.append(f"- {t['title']} [{names.get(t['project_id'], '-')}] ({tag})")
         return out
+
+    def _compare(self, pkg: ContextPackage, reports: list[AgentReport]) -> list[str]:
+        """Deterministic comparison grounded in PM findings: who needs attention and why."""
+        pm = next((r for r in reports if r.agent == "pm"), None)
+        if not pm or not pm.findings or len(pkg.projects) < 2:
+            return []
+        scored = []
+        for p in pkg.projects:
+            f = pm.findings.get(p["id"], {})
+            score = (f.get("blocked", 0) * 3 + f.get("overdue", 0) * 2 + f.get("open_decisions", 0)
+                     + (2 if f.get("stale") else 0) + (6 - f.get("priority", 3)))
+            scored.append((score, p["name"], f))
+        scored.sort(key=lambda x: -x[0])
+        top, rest = scored[0], scored[1:]
+        reasons = []
+        if top[2].get("blocked"):
+            reasons.append(f"{top[2]['blocked']} attività bloccate")
+        if top[2].get("overdue"):
+            reasons.append(f"{top[2]['overdue']} in ritardo")
+        if top[2].get("open_decisions"):
+            reasons.append(f"{top[2]['open_decisions']} decisioni aperte")
+        if top[2].get("stale"):
+            reasons.append("fermo da più di 10 giorni")
+        why = ", ".join(reasons) or "priorità più alta"
+        others = ", ".join(n for _, n, _ in rest)
+        return [f"Confronto ({', '.join(n for _, n, _ in scored)}): la più urgente è {top[1]} ({why}). "
+                f"Più tranquill{'o' if len(rest) == 1 else 'i'} invece: {others}."]
 
     async def _synthesize(self, request_id: str, pkg: ContextPackage, intent: Intent, grounded: str,
                           lang: str) -> AsyncIterator[str]:

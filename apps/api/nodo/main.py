@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from nodo.api import command, entities, voice
+from nodo.api import command, entities, voice, voice_ws
 from nodo.app import build_container
 from nodo.config import Settings, get_settings
 from nodo.db.session import get_engine, session_scope
@@ -38,6 +38,7 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
     app.include_router(entities.router)
     app.include_router(command.router)
     app.include_router(voice.router)
+    app.include_router(voice_ws.router)
 
     @app.get("/health")
     def health():

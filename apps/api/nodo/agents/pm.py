@@ -26,7 +26,7 @@ class PMAgent:
             blocked = [t for t in open_t if t["status"] == "BLOCKED"]
             overdue = [t for t in open_t if t["overdue"]]
             in_prog = [t for t in open_t if t["status"] == "IN_PROGRESS"]
-            open_dec = [d for d in pkg.decisions if d["status"] == "open"]
+            open_dec = [d for d in pkg.decisions if d["status"] == "open" and d.get("project_id") in (None, p["id"])]
             stale = False
             if p.get("updated_at"):
                 upd = datetime.fromisoformat(p["updated_at"])

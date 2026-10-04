@@ -16,10 +16,15 @@ router = APIRouter(prefix="/api/v1/voice", dependencies=[Depends(auth)])
 
 @router.get("/config")
 def config(c: Container = Depends(container)):
-    """Tells the client where speech is processed so it can pick Web Speech API vs. audio upload."""
-    return {"stt": {"name": c.stt.name, "location": c.stt.location},
-            "tts": {"name": c.tts.name, "location": c.tts.location, "voice": c.settings.tts_voice},
-            "language": c.settings.default_language, "push_to_talk": True, "wake_word": False, "streaming": False}
+    """Tells the client where speech is processed and which transports are available."""
+    return {"stt": {"name": c.stt.name, "location": c.stt.location,
+                    "streaming": bool(getattr(c.stt, "streaming", False))},
+            "tts": {"name": c.tts.name, "location": c.tts.location, "voice": c.settings.tts_voice,
+                    "streaming": bool(getattr(c.tts, "streaming", False))},
+            "language": c.settings.default_language, "push_to_talk": True, "wake_word": False,
+            "streaming": True, "ws_path": "/api/v1/voice/stream",
+            "states": [str(s) for s in VoiceState],
+            "audio_persistence": False}  # raw audio is never stored server-side (ADR-005)
 
 
 @router.post("/sessions", status_code=201)
@@ -49,6 +54,8 @@ def set_state(session_id: str, state: VoiceState, c: Container = Depends(contain
 
 @router.post("/sessions/{session_id}/interrupt")
 def interrupt(session_id: str, c: Container = Depends(container)):
+    """REST fallback (push-to-talk client without WS): marks the session interrupted. The state lands in
+    INTERRUPTED; the client should then move to LISTENING/IDLE via /state."""
     s = c.voice_sessions.get(session_id)
     if not s:
         raise HTTPException(404, "voice session not found")

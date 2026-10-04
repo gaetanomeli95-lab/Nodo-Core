@@ -63,6 +63,13 @@ class ContextEngine:
         elif intent.name == "today":
             self._all_projects(pkg)
             self._tasks(pkg, project_ids=None)
+        elif intent.name == "compare":
+            for e in intent.entities or ([intent.entity] if intent.entity else []):
+                pkg.focus = pkg.focus or asdict(e)
+                if e.entity_type == "project":
+                    self._project(pkg, e.entity_id, deep=True)
+                else:
+                    self._client(pkg, e.entity_id, with_projects=True)
         elif intent.entity:
             pkg.focus = asdict(intent.entity)
             if intent.entity.entity_type == "project":
@@ -93,7 +100,8 @@ class ContextEngine:
             return
         self._tasks(pkg, [p.id])
         for d in self.s.scalars(select(Decision).where(Decision.project_id == p.id).order_by(Decision.created_at.desc()).limit(10)):
-            pkg.decisions.append({"id": d.id, "title": d.title, "status": d.status, "rationale": d.rationale})
+            pkg.decisions.append({"id": d.id, "project_id": p.id, "title": d.title, "status": d.status,
+                                  "rationale": d.rationale})
         for r in self.s.scalars(select(Repository).where(Repository.project_id == p.id)):
             pkg.repositories.append({"id": r.id, "owner": r.owner, "name": r.name, "default_branch": r.default_branch,
                                      "last_synced_at": r.last_synced_at.isoformat() if r.last_synced_at else None,

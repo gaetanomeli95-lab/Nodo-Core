@@ -74,20 +74,28 @@ def test_voice_flow(client):
     audio = client.post("/api/v1/voice/speak", data={"text": r["text"]})
     assert audio.status_code == 200 and audio.headers["X-NODO-TTS-Provider"] == "fake" and audio.content.startswith(b"RIFF")
     i = client.post(f"/api/v1/voice/sessions/{s['id']}/interrupt").json()
-    assert i["state"] == "IDLE" and i["interrupted"]
+    assert i["state"] == "INTERRUPTED" and i["interrupted"]
     # illegal transition is rejected
     assert client.post(f"/api/v1/voice/sessions/{s['id']}/state", params={"state": "SPEAKING"}).status_code == 409
+    # INTERRUPTED -> IDLE is legal
+    assert client.post(f"/api/v1/voice/sessions/{s['id']}/state", params={"state": "IDLE"}).json()["state"] == "IDLE"
 
 
 def test_voice_state_machine_unit():
     s = VoiceSession()
-    for st in (VoiceState.LISTENING, VoiceState.UNDERSTANDING, VoiceState.THINKING, VoiceState.SPEAKING):
+    for st in (VoiceState.LISTENING, VoiceState.TRANSCRIBING, VoiceState.UNDERSTANDING,
+               VoiceState.THINKING, VoiceState.ACTING, VoiceState.SPEAKING):
         s.transition(st)
     s.transition(VoiceState.LISTENING)  # barge-in while speaking
     with pytest.raises(InvalidTransition):
         s.transition(VoiceState.SPEAKING)
     s.interrupt()
-    assert s.state == VoiceState.IDLE and s.interrupted
+    assert s.state == VoiceState.INTERRUPTED and s.interrupted
+    s.transition(VoiceState.LISTENING)  # after an interrupt NODO listens again
+    s.transition(VoiceState.IDLE)
+    s.transition(VoiceState.CLOSED)
+    with pytest.raises(InvalidTransition):
+        s.transition(VoiceState.IDLE)  # nothing escapes CLOSED
 
 
 def test_auth_token_enforced(engine, container):

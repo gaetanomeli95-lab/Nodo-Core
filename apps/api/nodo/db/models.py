@@ -295,3 +295,30 @@ class EventLog(Base):
     organization_id: Mapped[str | None] = mapped_column(String(36))
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class VoiceTurnMetric(Base):
+    """One row per completed voice turn (Phase 2M): per-stage timestamps plus computed latencies (ms).
+    Timestamps are nullable — an interrupted/error turn may never reach later stages."""
+    __tablename__ = "voice_turn_metrics"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    session_id: Mapped[str] = mapped_column(String(36), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    request_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    turn_number: Mapped[int] = mapped_column(Integer, default=0)
+    interrupted: Mapped[bool] = mapped_column(Boolean, default=False)
+    turn_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    speech_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    speech_end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    transcript_partial_first_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    transcript_final_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    intent_resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    context_built_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    model_first_token_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    model_done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tts_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tts_first_audio_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tts_done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    turn_done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    latency_ms: Mapped[dict] = mapped_column(JSON, default=dict)  # stt | context | model_ttft | model_total | tts_tfa | tts_total | total
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
