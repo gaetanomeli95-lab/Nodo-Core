@@ -58,8 +58,17 @@ code { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; font-si
 .mic.listening .mic-dot { background: var(--danger); box-shadow: 0 0 0 4px rgba(210,118,107,.25); }
 .mic.understanding .mic-dot, .mic.thinking .mic-dot { background: var(--warn); animation: blink 1s infinite; }
 .mic.speaking .mic-dot { background: var(--accent); box-shadow: 0 0 0 4px rgba(143,179,169,.25); }
+.voice-dock { display: flex; align-items: center; gap: 8px; }
+.voice-dock .ghost { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+.partial { font-size: 12px; color: var(--muted); font-style: italic; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mic.interrupted .mic-dot, .mic.error .mic-dot { background: var(--danger); }
+.mic.waiting_for_approval .mic-dot { background: var(--warn); }
 .voice-state { font-size: 10px; letter-spacing: .14em; color: var(--muted); padding: 4px 10%; background: var(--panel); }
 .voice-state.listening { color: var(--danger); } .voice-state.speaking { color: var(--accent); }
+.voice-state.waiting_for_approval { color: var(--warn); } .voice-state.error { color: var(--danger); }
+.approval-banner { margin: 12px 10%; padding: 10px 14px; border: 1px solid var(--warn); border-radius: 8px; background: #1e1b16; font-size: 13px; display: flex; gap: 10px; align-items: center; }
+.approval-banner button { background: var(--accent); color: #0f1114; border: 0; border-radius: 6px; padding: 6px 12px; font-weight: 600; cursor: pointer; }
+.approval-banner button.ghost { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
 
 .trace li { display: grid; grid-template-columns: 110px 1fr; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
 .trace li code { color: var(--muted); } .trace li.agent code, .trace li.tool code { color: var(--accent); }

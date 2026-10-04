@@ -1,6 +1,8 @@
 /** Typed client for the NODO CORE API. Token (optional) is read from localStorage "nodo_token". */
 
 export type NodoEvent = { type: string; request_id: string; at: string; [k: string]: unknown };
+/** Realtime voice protocol event (nodo/voice/protocol.py). */
+export type VoiceEvent = { type: string; session_id: string; turn: number; seq: number; [k: string]: unknown };
 export type Project = { id: string; name: string; kind: string; status: string; priority: number; client_id: string | null };
 export type Task = { id: string; title: string; status: string; priority: number; due_date: string | null; project_id: string | null };
 export type Usage = { local_requests: number; cloud_requests: number; premium_requests: number; agent_runs: number; tool_executions: number; tokens: number; estimated_cost: number };
@@ -58,6 +60,26 @@ export async function transcribe(input: { blob?: Blob; text?: string; sessionId?
   const r = await fetch("/api/v1/voice/transcribe", { method: "POST", body: fd, headers: t ? { Authorization: `Bearer ${t}` } : {} });
   if (!r.ok) throw new Error(`transcribe: ${r.status}`);
   return r.json();
+}
+
+/** WebSocket URL for the realtime voice channel (token via query param: browsers can't set WS headers). */
+export function voiceWsUrl(): string {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const t = localStorage.getItem("nodo_token");
+  return `${proto}://${location.host}/api/v1/voice/stream${t ? `?token=${encodeURIComponent(t)}` : ""}`;
+}
+
+export class VoiceSocket {
+  private ws: WebSocket;
+  constructor(onEvent: (e: VoiceEvent) => void, onClose: (e: CloseEvent) => void) {
+    this.ws = new WebSocket(voiceWsUrl());
+    this.ws.onmessage = (m) => onEvent(JSON.parse(m.data as string));
+    this.ws.onclose = onClose;
+  }
+  send(o: Record<string, unknown>): void {
+    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(o));
+  }
+  close(): void { this.ws.close(); }
 }
 
 export async function speak(text: string): Promise<{ mime: string; data: Blob }> {
