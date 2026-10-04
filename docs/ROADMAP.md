@@ -11,10 +11,14 @@ entity resolution, conversational references, Context Engine, telemetry.
 *Next within phase:* model-backed intent classifier behind `IntentEngine.classify`; fact extraction from
 conversations (NODO MEMORY agent); staleness job.
 
-## Phase 2 — Voice (push-to-talk ✅ → streaming)
-Seams: `SpeechToTextProvider`, `TextToSpeechProvider`, `VoiceSession` (states + barge-in), `TurnDetector`.
-Next: WebSocket `/voice/stream` for incremental STT and chunked TTS; sentence-level TTS during token
-streaming; selectable voices; local Whisper provider.
+## Phase 2 — Voice (push-to-talk ✅ → realtime transport ✅ → streaming providers)
+Done on this branch: typed WS protocol (`/voice/stream`), `VoiceRuntime` over the same Core, partial/final
+transcripts, token+sentence streaming, sentence-level TTS (browser `tts.speak` + `tts.chunk` seam),
+barge-in with generation suppression, fast stop-command path, bound voice approvals, `voice_turn_metrics`
+latency telemetry, conversational continuity (incl. `compare` intent).
+Seams: `StreamingSTT/TTS` protocols + fakes, `TurnDetector`, `WakeWordEngine`, provider `location`.
+Next: real streaming STT (faster-whisper/local), silence-based end-of-turn, selectable voices,
+wake word on a local Node.
 
 ## Phase 3 — Agents (PM/DEV/CONTENT ✅ → richer)
 Seams: `Agent`, `AgentContext`, `Budget`, `AgentRunner`, `AgentReport`.

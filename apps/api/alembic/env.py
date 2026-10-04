@@ -2,7 +2,6 @@
 from logging.config import fileConfig
 
 from alembic import context
-
 from nodo.config import get_settings
 from nodo.db.models import Base
 from nodo.db.session import make_engine

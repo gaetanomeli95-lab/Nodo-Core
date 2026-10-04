@@ -1,6 +1,8 @@
 # ADR-005 — Voice architecture: a transport into the Core, not a separate assistant
 
-**Status:** accepted · **Date:** 2026-10-04 (V0.1 push-to-talk; Phase 2 realtime in progress on this branch)
+**Status:** accepted · **Date:** 2026-10-04 · **Amended:** Phase 2 realtime channel implemented on
+`integration/nodo-core-v01` (WebSocket `/voice/stream`, typed protocol, VoiceRuntime, barge-in, bound
+approvals, per-turn latency metrics)
 
 ## Context
 Voice is a primary interface of NODO, not a feature bolted onto a chat box. The failure mode to avoid is a
@@ -46,32 +48,35 @@ privacy and latency, and FREE mode must remain valid.
 − Push-to-talk is less fluid than hands-free; hands-free requires local VAD/wake word to be acceptable.
 − Barge-in across a network requires the backend to really cancel generation, not just the client to mute.
 
-## Current V0.1 implementation (implemented)
-- `nodo/voice/base.py`: `Transcript`, `AudioResult`, `SpeechToTextProvider`, `TextToSpeechProvider`,
-  `VoiceState` (IDLE, LISTENING, UNDERSTANDING, THINKING, ACTING, SPEAKING, WAITING_FOR_APPROVAL, ERROR),
-  `TRANSITIONS`, `VoiceSession.transition()/interrupt()`, `VoiceSessionStore` (in-memory).
-- `nodo/voice/providers.py`: `FakeSTT/FakeTTS` (tests), `BrowserSTT/BrowserTTS`, `OpenAISpeech` (paid,
-  gated), `build_voice()` enforcing FREE mode.
-- `nodo/api/voice.py`: `/voice/config`, `/voice/sessions` (create/get/state/interrupt), `/voice/transcribe`,
-  `/voice/speak`. Push-to-talk UI in `apps/web/src/components/VoiceButton.tsx`.
-- Flow: hold → LISTENING → release → UNDERSTANDING → `POST /command` (SSE) → SPEAKING → IDLE; mic during
-  SPEAKING cancels playback and posts `/interrupt`.
+## Current implementation (implemented)
 
-## Architecturally prepared (seams exist, no implementation)
-- `TurnDetector` and `WakeWordEngine` protocols.
-- Provider `location` and `VoiceSession.conversation_id` linking to text context.
+### V0.1 (batch push-to-talk, still present)
+- `nodo/api/voice.py`: `/voice/config`, `/voice/sessions`, `/voice/transcribe`, `/voice/speak`.
 
-## Future evolution (planned — Phase 2 "Realtime Voice", starting on this branch)
-- Extended session lifecycle (CONNECTING, TRANSCRIBING, INTERRUPTED, CLOSED) with traceable transitions.
-- Typed event protocol over WebSocket `/voice/stream` (session, audio chunks, partial/final transcripts, tokens,
-  TTS chunks, interrupt, approval, error).
-- `StreamingSpeechToTextProvider` (partial transcripts) and `StreamingTextToSpeechProvider` (sentence-level
-  audio while tokens stream), each with deterministic fakes; browser and local implementations first.
-- `TurnDetector` implementations: push-to-talk (reliable default), silence-based end-of-turn.
-- Barge-in that cancels backend generation/TTS and persists the partial assistant turn.
-- Fast interrupt command path ("fermati", "stop", "basta") that bypasses the full reasoning pipeline.
-- Typed voice approvals bound to a pending `Approval` id; arbitrary "sì" is never authorisation.
-- Latency telemetry per turn (speech end → final transcript → first token → first audio → done).
+### Phase 2 realtime (this branch)
+- `nodo/voice/protocol.py`: typed inbound frames (`session.start`, `audio.chunk`, `speech.end`,
+  `transcript.partial|final`, `interrupt`, `approval.answer`, `session.end`) and the canonical outbound
+  envelope (`session_id`, `turn`, `seq`) — see `docs/VOICE.md` for the full event list.
+- `nodo/voice/base.py`: extended `VoiceState` (adds CONNECTING, TRANSCRIBING, INTERRUPTED, CLOSED),
+  `VoiceSession` with turn counters, latency `mark()`/`stamps`, `pending_approval_id`, `turn_active`.
+- `nodo/voice/runtime.py`: `VoiceRuntime` — transport-agnostic orchestration: partial echo, final-only
+  turn execution through `NodoCore.handle(channel="voice")`, sentence queue → `tts.speak`/`tts.chunk`,
+  generation-scoped suppression on interrupt, fast stop-command path (regex, no inference), bound
+  approval resolution, `voice_turn_metrics` persistence per turn.
+- `nodo/api/voice_ws.py`: `WS /api/v1/voice/stream` with token auth (`?token=` for browsers).
+- `nodo/voice/providers.py`: `StreamingSpeechToTextProvider`/`StreamingTextToSpeechProvider` protocols +
+  deterministic `FakeStreamingSTT`/`FakeStreamingTTS`; batch providers unchanged.
+- `apps/web/src/components/Voice.tsx`: `useVoiceSession` hook + `VoiceDock` (push-to-talk, Web Speech
+  partials, MediaRecorder fallback, `speechSynthesis`/`tts.chunk` playback, barge-in, approval banner).
+- Frontend `vite.config.ts` proxies `/api` with `ws: true`.
+
+## Architecturally prepared (seams exist, partial or no implementation)
+- `TurnDetector` and `WakeWordEngine` protocols; `speech.end` is the client-driven end-of-turn signal.
+- `StreamingSTT` is exercised via fakes; real audio today buffers and transcribes on `speech.end`.
+- Provider `location` routing between browser/local/cloud.
+
+## Future evolution (planned)
+- Real streaming STT (faster-whisper / cloud realtime) behind `StreamingSpeechToTextProvider`.
+- Silence-based `TurnDetector`; hands-free mode only when a local VAD is reliable.
 - Wake word ("Node.") only on a local Node (ADR-008), never as continuous cloud upload.
-
-This ADR will be amended when Phase 2 lands with the implemented protocol and the resulting state machine.
+- WebRTC reconsidered for remote/mobile Nodes if WebSocket audio proves limiting.

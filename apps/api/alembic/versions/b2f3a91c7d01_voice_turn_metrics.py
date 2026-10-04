@@ -5,16 +5,17 @@ Revises: 51ea0000e744
 Create Date: 2026-10-04
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b2f3a91c7d01"
-down_revision: Union[str, Sequence[str], None] = "51ea0000e744"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "51ea0000e744"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 _STAMPS = ("turn_started", "speech_started", "speech_end", "transcript_partial_first", "transcript_final",
            "intent_resolved", "context_built", "model_first_token", "model_done", "tts_started",

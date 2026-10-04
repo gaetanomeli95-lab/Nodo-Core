@@ -49,5 +49,35 @@
     "id": "dangerous_action_requires_approval",
     "tool": {"name": "github", "action": "create_issue", "params": {"owner": "o", "name": "n", "title": "x"}},
     "expect": {"tool_status": "pending_approval"}
+  },
+  {
+    "id": "voice_entity_switch_with_conjunction",
+    "turns": ["Fammi il punto su Prosperya.", "E PB CARe?"],
+    "expect": {"intent": "project_status", "contains": ["PB CARe"], "entity_from_context": true}
+  },
+  {
+    "id": "voice_compare_two_discussed_entities",
+    "turns": ["Fammi il punto su Prosperya.", "E PB CARe?", "Quale dei due è più urgente?"],
+    "expect": {"intent": "compare", "contains": ["urgente", "PB CARe"], "agents": ["pm"]}
+  },
+  {
+    "id": "voice_stop_is_fast_and_free",
+    "turns": ["Fermati."],
+    "expect": {"intent": "stop", "contains": ["mi fermo"], "max_inference_calls": 0}
+  },
+  {
+    "id": "voice_priority_followup",
+    "turns": ["Fammi il punto su Prosperya.", "E PB CARe?", "Dimmi solo la priorità."],
+    "expect": {"intent": "today", "contains": ["Priorità secondo NODO"], "not_contains": ["Non ho capito"]}
+  },
+  {
+    "id": "bare_yes_is_not_an_approval",
+    "turns": ["sì"],
+    "expect": {"intent": "approve", "contains": ["conferma conta solo"], "max_inference_calls": 0}
+  },
+  {
+    "id": "bare_no_is_not_a_rejection_of_anything",
+    "turns": ["no"],
+    "expect": {"intent": "reject", "contains": ["non eseguo nulla"], "max_inference_calls": 0}
   }
 ]

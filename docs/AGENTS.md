@@ -18,7 +18,7 @@ This keeps FREE mode at ≤1 inference per request and makes agents unit-testabl
 ## Agents
 | Agent | Intent(s) | What it really does |
 |---|---|---|
-| **PM** | project_status, today | open/in-progress/blocked/overdue tasks per project, open decisions, staleness (≥10 days), next actions |
+| **PM** | project_status, today, compare | open/in-progress/blocked/overdue tasks per project, open decisions, staleness (≥10 days), next actions, per-project findings for comparisons |
 | **DEV** | tech_status, project_status (if repos) | `github.snapshot` via ToolExecutor (level 0), persists `Repository.tech_state`, flags CI failure / inactivity / open PRs, degrades to cached snapshot with freshness note |
 | **CONTENT** | prepare_content | picks the least-covered angle from published history, uses client facts, creates a `ContentItem` draft (level 2) |
 

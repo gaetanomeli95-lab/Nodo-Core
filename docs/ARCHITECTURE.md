@@ -19,13 +19,15 @@ Free-tier provider limits (encoded as config, not code); quality of rule-based i
 Web Speech API availability per browser (Chrome/Edge yes, Firefox partial); Windows dev environments.
 
 ### Hard problems deferred by design
-Streaming duplex voice (Phase 2), semantic retrieval (embeddings), approval-executed writes, distributed Nodes.
+Semantic retrieval (embeddings), approval-executed writes, distributed Nodes, wake word.
+*Realtime duplex voice (Phase 2) is implemented: WebSocket `/voice/stream`, `VoiceRuntime`, typed protocol.*
 
 ## 2. Stack (ADR-001, ADR-007)
 - **API/Core:** Python 3.12, FastAPI, SQLAlchemy 2 (typed mapped classes), Alembic, Pydantic v2, httpx.
 - **DB:** SQLite for dev/test, PostgreSQL for production; one model, batch-mode migrations for SQLite.
 - **Web:** React 18 + TypeScript + Vite (no SSR needed; API-first; PWA/mobile-friendly later).
-- **Realtime:** SSE for command streaming (ADR-001 §realtime). WebSocket reserved for duplex voice.
+- **Realtime:** SSE for text command streaming; WebSocket `/api/v1/voice/stream` for duplex voice
+  (`nodo/voice/protocol.py` typed frames → `VoiceRuntime` → same `NodoCore.handle`).
 - **Jobs:** none yet; `events.py` + append-only `event_log` are the hook for a job runner (Phase 6).
 
 ## 3. Request lifecycle
@@ -60,7 +62,8 @@ flexible payloads (`tech_state`, `budget`, `usage`, `payload`). The graph is `re
 
 ## 6. Observability
 `InferenceRun` (provider, model, tokens, latency, cost, status), `AgentRun` (budget, usage, status),
-`ToolExecution` (level, status, duration), `EventLog` (append-only). `request_id` ties them together.
+`ToolExecution` (level, status, duration), `EventLog` (append-only), `VoiceTurnMetric` (per-turn latency
+stamps: speech end → final transcript → first token → first audio → done). `request_id` ties them together.
 
 ## 7. What is deliberately NOT here
 Redis, Kafka, Kubernetes, Neo4j, microservices, embeddings, wake word, background workers, RBAC.

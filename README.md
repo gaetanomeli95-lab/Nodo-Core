@@ -129,8 +129,9 @@ All external systems have deterministic doubles: `FakeModelProvider`, `FakeGitHu
   draft); agent budgets (time/model/tool/depth) and crash isolation.
 - Model Router: FREE/BALANCED/PERFORMANCE/PRIVATE, sensitivity gate, fallback chain, per-call telemetry.
 - Permissions: action levels 0–4; levels ≥3 create an `Approval` instead of executing.
-- Voice: `SpeechToTextProvider`/`TextToSpeechProvider`, `VoiceSession` state machine with barge-in,
-  push-to-talk UI, browser (free/on-device) or OpenAI speech.
+- Voice (Phase 2 realtime): WebSocket `/voice/stream` with typed protocol, `VoiceRuntime` over the same
+  Core — partial/final transcripts, token+sentence streaming, sentence-level TTS, real barge-in, bound
+  voice approvals, per-turn latency metrics. Push-to-talk UX; browser (free/on-device) or OpenAI speech.
 - Telemetry: `/telemetry/usage`, `/telemetry/trace/{request_id}`, `/timeline` (append-only event log).
 - Single-user token auth (`NODO_API_TOKEN`), CORS, migrations, CI.
 
@@ -139,7 +140,8 @@ All external systems have deterministic doubles: `FakeModelProvider`, `FakeGitHu
 - Natural phrasing requires a configured LLM; the deterministic provider returns structured summaries.
 - Intent classification is rule-based; a model-backed classifier plugs into `IntentEngine.classify`.
 - Approvals are recorded and resolvable but no write connector executes approved actions yet.
-- Voice is push-to-talk; no wake word, no streaming STT/TTS (Phase 2/5).
+- Voice realtime transport is in place but real streaming STT/TTS providers are still fakes/browser-only;
+  no wake word, no VAD-based hands-free turn detection (Phase 5 local Node).
 - GitHub connector is read-only and un-cached beyond the stored `tech_state` snapshot.
 - Memory retrieval is relational (no embeddings yet); pgvector is an additive step.
 - Single workspace; multi-tenant fields exist, RBAC does not.
