@@ -8,7 +8,16 @@ from collections.abc import AsyncIterator
 import httpx
 
 from nodo.db.models import Sensitivity
-from nodo.providers.base import ChatChunk, ChatMessage, ModelDescriptor, ProviderError, estimate_tokens
+from nodo.providers.base import (
+    ChatChunk,
+    ChatMessage,
+    FunctionSpec,
+    ModelDescriptor,
+    ProviderError,
+    ToolCall,
+    ToolTurn,
+    estimate_tokens,
+)
 
 
 class AnthropicProvider:
@@ -67,6 +76,51 @@ class AnthropicProvider:
         except httpx.HTTPError as e:
             raise ProviderError(f"anthropic transport error: {e}") from e
         yield ChatChunk(done=True, tokens_in=tin, tokens_out=tout)
+
+
+    async def complete_tools(self, model: str, messages: list[dict], tools: list[FunctionSpec], *,
+                             temperature: float = 0.4, max_tokens: int = 1200) -> ToolTurn:
+        system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+        turns: list[dict] = []
+
+        def push(role: str, blocks: list[dict]) -> None:
+            if turns and turns[-1]["role"] == role:
+                turns[-1]["content"] += blocks
+            else:
+                turns.append({"role": role, "content": list(blocks)})
+
+        for m in messages:
+            if m["role"] == "system":
+                continue
+            if m["role"] == "user":
+                push("user", [{"type": "text", "text": m["content"] or "."}])
+            elif m["role"] == "assistant":
+                blocks = [{"type": "text", "text": m["content"]}] if m.get("content") else []
+                blocks += [{"type": "tool_use", "id": c["id"], "name": c["name"], "input": c["arguments"]}
+                           for c in m.get("tool_calls") or []]
+                push("assistant", blocks or [{"type": "text", "text": "."}])
+            elif m["role"] == "tool":
+                push("user", [{"type": "tool_result", "tool_use_id": m["tool_call_id"], "content": m["content"]}])
+        body = {"model": model, "max_tokens": max_tokens, "temperature": temperature,
+                "messages": turns or [{"role": "user", "content": "."}]}
+        if system:
+            body["system"] = system
+        if tools:
+            body["tools"] = [{"name": t.name, "description": t.description, "input_schema": t.parameters} for t in tools]
+        headers = {"x-api-key": self.api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+                r = await client.post(f"{self.base_url}/messages", json=body, headers=headers)
+        except httpx.HTTPError as e:
+            raise ProviderError(f"anthropic transport error: {e}") from e
+        if r.status_code >= 400:
+            raise ProviderError(f"anthropic HTTP {r.status_code}: {r.text[:300]}")
+        data = r.json()
+        text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+        calls = [ToolCall(b["id"], b["name"], b.get("input") or {}) for b in data.get("content", [])
+                 if b.get("type") == "tool_use"]
+        usage = data.get("usage") or {}
+        return ToolTurn(text, calls, usage.get("input_tokens", 0), usage.get("output_tokens", 0))
 
 
 def anthropic_descriptors(model: str) -> list[ModelDescriptor]:

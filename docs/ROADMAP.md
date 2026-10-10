@@ -32,6 +32,11 @@ Seams: `ToolSpec`/`ToolAction` with levels, `ToolExecutor` with approvals, `Appr
 Next: execute approved actions (resume `ToolExecution` on `approval.approved`); GitHub issues/PR comments;
 Google Drive/Calendar/Gmail; documents ingestion → `Document` + facts; coding-agent execution provider.
 
+## Phase 4b — Brain ✅
+- Tool-calling across providers (Anthropic, OpenAI-compatible incl. Gemini/Groq, Claude subscription via Claude Code)
+- Conversation loop with memory, state snapshot, guarded decisions, background site changes (docs/CERVELLO.md)
+- Next: free voice stack (local Whisper STT, natural TTS, wake word), streaming answers for voice, desktop app
+
 ## Phase 5 — Local Node
 Seams: provider `is_local`, `max_sensitivity`, `PRIVATE` mode, `WakeWordEngine` protocol, voice provider
 `location`. See `LOCAL_NODE.md` for the Node protocol boundary.

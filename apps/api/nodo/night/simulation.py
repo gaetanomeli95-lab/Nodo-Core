@@ -373,6 +373,22 @@ class SimulatedModelProvider:
                                            "test_hint": "Apri la pagina e verifica che si carichi."}, ensure_ascii=False)
             return json.dumps({"diagnosis": "Non ho trovato una causa certa nei file disponibili.",
                                "confidence": "low", "title": "", "files": []})
+        if "[NODO_CHANGE_REQUEST]" in prompt:
+            # requested change: "... 'old text' in 'new text'" -> replace it in the files that contain it
+            self.calls.append("change")
+            files = dict(re.findall(r"=== FILE: (.+?) ===\n(.*?)\n=== END FILE ===", prompt, re.DOTALL))
+            req = m.group(1) if (m := re.search(r"RICHIESTA DI GAETANO: (.+)", prompt)) else ""
+            q = re.findall(r"[\"'«“]([^\"'«»“”]+)[\"'»”]", req)
+            if len(q) >= 2:
+                for old, new in ((q[0], q[1]), (q[1], q[0])):   # "'A' in 'B'" or "'B' al posto di 'A'"
+                    for path, content in files.items():
+                        if old in content and new not in content:
+                            return json.dumps({"diagnosis": f"Ho sostituito «{old}» con «{new}» in {path}.",
+                                               "confidence": "high", "title": f"feat: {new}",
+                                               "files": [{"path": path, "content": content.replace(old, new)}],
+                                               "test_hint": "Apri la home."}, ensure_ascii=False)
+            return json.dumps({"diagnosis": "Non ho capito cosa cambiare: mi dici il testo esatto?",
+                               "confidence": "low", "title": "", "files": []})
         if "[NODO_DRAFT_REQUEST]" in prompt:
             self.calls.append("draft")
             title = m.group(1) if (m := re.search(r"Titolo: (.+)", prompt)) else "contenuto"

@@ -45,17 +45,19 @@ Ti servono in tutto 4 cose: le prime 3 bastano per il turno di notte completo.
    NODO non scrive mai direttamente sul branch principale: crea `nodo/fix-…` e una pull request. Il merge
    avviene solo quando lo approvi tu.
 
-## 3. Un'AI che sa scrivere codice (per preparare le correzioni)
+## 3. L'AI: il cervello di NODO (conversazione e correzioni)
 
-Consigliato **Anthropic (Claude)**:
+Consigliato: **il tuo abbonamento Claude (Pro o Max)**, senza costi in più. Installa Claude Code e fai l'accesso
+una volta, come spiegato in **[CERVELLO.md](CERVELLO.md)** (due comandi in PowerShell). Non serve scrivere niente
+nel `.env`: NODO lo trova da solo e lo usa sia per parlare con te sia per preparare correzioni e modifiche.
 
-1. <https://console.anthropic.com> → *Settings* → *API Keys* → **Create Key**.
-2. Ricarica un po' di credito (*Billing*): NODO non spende più di $1 a notte (`NODO_NIGHT_MAX_COST_USD`).
-3. ```
-   NODO_ANTHROPIC_API_KEY=sk-ant-...
-   ```
-In alternativa va bene `NODO_OPENAI_API_KEY`. Senza nessuna delle due, NODO controlla, fa rollback, rilancia
-le build e ti scrive la diagnosi, ma non prepara correzioni.
+Alternative:
+- gratis: `NODO_GEMINI_API_KEY` (<https://aistudio.google.com/apikey>) o `NODO_GROQ_API_KEY`;
+- a consumo: `NODO_ANTHROPIC_API_KEY` (<https://console.anthropic.com> → *API Keys*, con un po' di credito;
+  NODO non spende più di $1 a notte, `NODO_NIGHT_MAX_COST_USD`) oppure `NODO_OPENAI_API_KEY`.
+
+Senza nessuna AI, NODO controlla, fa rollback, rilancia le build e ti scrive la diagnosi, ma non prepara
+correzioni e risponde con regole fisse invece di dialogare.
 
 ## 4. Telegram (facoltativo, consigliato): il briefing sul telefono
 

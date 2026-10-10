@@ -4,10 +4,12 @@ from __future__ import annotations
 from nodo.config import Settings
 from nodo.providers.anthropic import AnthropicProvider
 from nodo.providers.base import ModelProvider
+from nodo.providers.claude_cli import ClaudeCodeProvider
 from nodo.providers.deterministic import DeterministicProvider
 from nodo.providers.ollama import OllamaProvider
 from nodo.providers.openai_compat import (
     OpenAICompatProvider,
+    gemini_descriptors,
     groq_descriptors,
     openai_descriptors,
     openrouter_descriptors,
@@ -25,8 +27,15 @@ def build_providers(s: Settings) -> list[ModelProvider]:
         providers.append(OpenAICompatProvider("openrouter", "https://openrouter.ai/api/v1", s.openrouter_api_key,
                                               openrouter_descriptors(s.openrouter_model),
                                               extra_headers={"X-Title": "NODO CORE"}))
+    if s.gemini_api_key:
+        providers.append(OpenAICompatProvider("gemini", "https://generativelanguage.googleapis.com/v1beta/openai",
+                                              s.gemini_api_key, gemini_descriptors(s.gemini_model)))
     if s.anthropic_api_key:
         providers.append(AnthropicProvider(s.anthropic_api_key, s.anthropic_model, s.anthropic_base_url))
+    if s.claude_subscription and s.env not in ("TEST", "DEMO"):
+        cc = ClaudeCodeProvider(s.claude_cli_model, s.claude_cli_path, effort=s.claude_cli_effort or None)
+        if cc.executable:  # Claude Code installed: your subscription becomes NODO's best brain at no extra cost
+            providers.append(cc)
     if s.openai_api_key:
         providers.append(OpenAICompatProvider("openai", s.openai_base_url, s.openai_api_key,
                                               openai_descriptors(s.openai_model)))

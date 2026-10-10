@@ -838,24 +838,35 @@ class NightShift:
             if draft.diagnosis:
                 inc.details = (inc.details or {}) | {"diagnosis": draft.diagnosis}
             return
+        await self._publish_draft(site, inc, draft, ev.failing_paths)
+
+    async def _publish_draft(self, site: Site, inc: Incident | None, draft, failing_paths: list[str],
+                             instruction: str | None = None) -> FixProposal:
+        """Branch + one commit + PR + preview check + merge approval, for a night fix (inc) or a change you asked
+        for in conversation (instruction). The merge is level 4: it always waits for you."""
+        is_change = inc is None
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
         slug = re.sub(r"[^a-z0-9]+", "-", site.name.lower()).strip("-")[:30] or "site"
-        branch = f"nodo/fix-{slug}-{stamp}"
-        body = (f"## Correzione preparata da NODO durante il turno di notte\n\n**Problema:** {inc.title}\n\n"
-                f"**Diagnosi:** {draft.diagnosis}\n\n**File modificati:**\n"
+        branch = f"nodo/{'change' if is_change else 'fix'}-{slug}-{stamp}"
+        what = f"Richiesta: {instruction}" if is_change else f"Problema: {inc.title}"
+        noun = "la modifica" if is_change else "la correzione"
+        head = ("## Modifica preparata da NODO su tua richiesta" if is_change
+                else "## Correzione preparata da NODO durante il turno di notte")
+        body = (f"{head}\n\n**{what.split(': ', 1)[0]}:** {what.split(': ', 1)[1]}\n\n"
+                f"**{'Cosa ho cambiato' if is_change else 'Diagnosi'}:** {draft.diagnosis}\n\n**File modificati:**\n"
                 + "\n".join(f"- `{x['path']}` (+{x['added']} / -{x['removed']})" for x in draft.stats)
                 + f"\n\n**Come verificare:** {draft.test_hint or 'apri l anteprima e controlla la pagina.'}\n\n"
                   f"Confidenza del modello: {draft.confidence} · modello: {draft.model}\n\n"
                   "> Non unire senza aver visto l'anteprima. Puoi approvare o rifiutare dal pannello di NODO.")
         res = await self.tools.run("github", "open_fix_pr", {
             "owner": site.repo_owner, "name": site.repo_name, "base_branch": site.default_branch, "branch": branch,
-            "files": draft.files, "message": f"{draft.title}\n\nProposta da NODO (turno di notte). {inc.title}",
+            "files": draft.files, "message": f"{draft.title}\n\nProposta da NODO. {what}",
             "title": f"[NODO] {draft.title}", "body": body}, request_id=self.request_id,
-            reason=f"Correzione proposta per {site.name}: {inc.title}")
-        prop = FixProposal(organization_id=self.org, site_id=site.id, incident_id=inc.id, run_id=self.run.id,
-                           title=draft.title, diagnosis=draft.diagnosis, confidence=draft.confidence, files=draft.stats,
-                           diff=draft.diff, branch=branch, model=draft.model, status="proposed",
-                           preview_note=",".join(ev.failing_paths))
+            reason=f"{noun.capitalize()} proposta per {site.name}: {what}")
+        prop = FixProposal(organization_id=self.org, site_id=site.id, incident_id=inc.id if inc else None,
+                           run_id=self.run.id if self.run else None, title=draft.title, diagnosis=draft.diagnosis,
+                           confidence=draft.confidence, files=draft.stats, diff=draft.diff, branch=branch,
+                           model=draft.model, status="proposed", preview_note=",".join(failing_paths))
         self.s.add(prop)
         self.s.flush()
         self._fixes_this_run += 1
@@ -863,29 +874,65 @@ class NightShift:
             prop.status, prop.approval_id = "proposed", res.approval_id
             prop.preview_status = "unknown"
             self._action(site, inc, "fix_pr", "pending_approval",
-                         "Ho preparato una correzione: aspetta il tuo ok per aprire la pull request.",
+                         f"Ho preparato {noun}: aspetta il tuo ok per aprire la pull request.",
                          {"key": "pr", "fix_id": prop.id}, approval_id=res.approval_id)
-            return
+            return prop
         if not res.ok:
             prop.status = "failed"
             self._action(site, inc, "fix_pr", "failed", f"Non sono riuscito ad aprire la pull request: {res.error}",
                          {"key": "pr", "fix_id": prop.id})
-            return
+            return prop
         prop.commit_sha, prop.pr_number, prop.pr_url = res.output.get("sha"), res.output.get("pr_number"), \
             res.output.get("pr_url")
+        self.s.commit()   # the preview can take minutes: release the database meanwhile
         await self.check_preview(prop, site, wait=True)
         merge = await self.tools.run("github", "merge_pr", {"owner": site.repo_owner, "name": site.repo_name,
                                                             "number": prop.pr_number, "method": "squash"},
                                      request_id=self.request_id,
-                                     reason=f"Pubblicare la correzione per {site.name} (PR #{prop.pr_number})")
+                                     reason=f"Pubblicare {noun} per {site.name} (PR #{prop.pr_number})")
         prop.approval_id = merge.approval_id
         preview = {"ok": "l'anteprima funziona", "failed": "ATTENZIONE: l'anteprima non funziona",
                    "protected": "l'anteprima è protetta, controllala tu", "pending": "l'anteprima è ancora in costruzione",
                    "unknown": "anteprima non verificata"}[prop.preview_status]
         self._action(site, inc, "fix_pr", "pending_approval",
-                     f"Ho preparato la correzione (PR #{prop.pr_number}): {preview}. Aspetta il tuo ok per pubblicarla.",
+                     f"Ho preparato {noun} (PR #{prop.pr_number}): {preview}. Aspetta il tuo ok per pubblicarla.",
                      {"key": "pr", "fix_id": prop.id, "pr_url": prop.pr_url, "preview_url": prop.preview_url},
                      approval_id=merge.approval_id)
+        return prop
+
+    async def propose_change(self, site: Site, instruction: str, trigger: str = "voice") -> tuple[FixProposal | None, str]:
+        """A change you asked for in conversation: branch + PR + preview, then it waits for your ok to publish."""
+        from nodo.night.changer import ChangeAgent, page_paths
+        if not (self.deps.repo and site.repo_owner and site.repo_name):
+            return None, f"{site.name} non ha un repository GitHub collegato (o manca NODO_GITHUB_TOKEN)."
+        run = NightRun(organization_id=self.org, request_id=self.request_id, kind="change", trigger=trigger,
+                       summary={"instruction": instruction[:500], "site": site.name})
+        self.s.add(run)
+        self.s.commit()   # never hold the database while the model writes code (minutes)
+        self.run = run
+        # you asked for it: opening the PR on a separate branch is fine; publishing still needs your ok
+        self.tools.policy = PermissionPolicy(auto_approve_actions={"github.open_fix_pr", "github.close_pr"})
+        prop: FixProposal | None = None
+        try:
+            agent = ChangeAgent(self.deps.repo, self.fix_router, self.request_id)
+            draft = await agent.draft_change(site, instruction, site.sensitivity)
+            if not draft.ok:
+                why = draft.diagnosis or draft.reason or "non ho una modifica sicura da proporre"
+                self._action(site, None, "change", "skipped", f"Modifica richiesta non preparata: {why}",
+                             {"instruction": instruction[:500], "model": draft.model})
+                run.status, run.summary = "done", run.summary | {"result": "skipped"}
+                return None, why
+            prop = await self._publish_draft(site, None, draft, page_paths(list(draft.files)), instruction)
+            run.status, run.summary = "done", run.summary | {"result": prop.status, "fix_id": prop.id}
+            return prop, draft.diagnosis
+        except Exception as e:
+            run.status, run.error = "failed", str(e)[:500]
+            self._action(site, None, "change", "failed", f"Modifica richiesta non riuscita: {str(e)[:200]}",
+                         {"instruction": instruction[:500]})
+            return prop, f"errore: {str(e)[:200]}"
+        finally:
+            run.finished_at = datetime.now(UTC)
+            self.s.flush()
 
     async def check_preview(self, prop: FixProposal, site: Site, wait: bool = False) -> str:
         v = self.deps.vercel

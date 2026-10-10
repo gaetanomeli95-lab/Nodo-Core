@@ -163,3 +163,4 @@ pre.diff .add { color: #9fd3a8; background: rgba(120, 200, 140, .08); } pre.diff
 p.small { font-size: 11px; margin: 6px 0 0; }
 @media (max-width: 900px) { .tabs, .view { padding-inline: 16px; } .two { grid-template-columns: 1fr; } .decision { flex-direction: column; } .decision .choose { flex-direction: row; } }
 .tab-body > .command { flex: 1; min-height: 0; height: auto; }
+.doing { color: var(--muted, #8a93a6); font-style: italic; }

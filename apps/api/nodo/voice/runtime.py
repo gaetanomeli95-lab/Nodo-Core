@@ -276,7 +276,7 @@ class VoiceRuntime:
                     await self._send("nodo.context", sources=e["sources"], size=e["size"],
                                      sensitivity=e["sensitivity"])
                 elif t == "step":
-                    if e["step"].startswith("agent:") and e["status"] == "running":
+                    if e["step"].startswith(("agent:", "tool:")) and e["status"] == "running":
                         await self._set_state(VoiceState.ACTING)
                     await self._send("nodo.step", step=e["step"], status=e["status"])
                 elif t == "approval.requested":

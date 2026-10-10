@@ -57,6 +57,29 @@ async def run_checks(c) -> list[Check]:
         except Exception as e:
             out.append(Check("GitHub", "error", f"il token non funziona: {str(e)[:200]}",
                              "Rigenera il fine-grained token e includi i repository dei tuoi siti."))
+    # --- brain (conversation with tools)
+    cc = next((p for p in c.providers if p.name == "claude-subscription"), None)
+    brain_router = ModelRouter(c.providers, s.mode, s.allow_paid_in_free_mode)
+    brains = [d.descriptor.id for d in brain_router.eligible(RouteRequest(purpose="brain", needs_tools=True,
+                                                                           min_reasoning=3))
+              if hasattr(c.providers_by_name().get(d.descriptor.provider), "complete_tools")]
+    if cc is not None:
+        ok = await cc.available()
+        out.append(Check("Cervello (abbonamento Claude)", "ok" if ok else "error",
+                         f"Claude Code trovato: NODO ragiona con il tuo abbonamento ({cc.model}), senza costi extra."
+                         if ok else "Claude Code è installato ma non hai fatto l'accesso.",
+                         "" if ok else "Apri il Terminale e scrivi: claude   poi segui l'accesso con il tuo account "
+                                       "Claude (Pro). Riavvia NODO."))
+    elif s.brain == "off":
+        out.append(Check("Cervello", "optional", "disattivato (NODO_BRAIN=off): risposte a regole.", "NODO_BRAIN=auto"))
+    elif brains:
+        out.append(Check("Cervello", "ok", f"conversazione con strumenti attiva con {brains[0]}."))
+    else:
+        out.append(Check("Cervello", "optional", "nessun modello capace di usare strumenti: NODO risponde con regole "
+                                                 "fisse (funziona, ma non dialoga davvero).",
+                         "Consigliato (usa il tuo abbonamento Claude Pro): installa Claude Code e fai l'accesso, "
+                         "vedi docs/CERVELLO.md. Gratis: NODO_GEMINI_API_KEY (aistudio.google.com) o "
+                         "NODO_GROQ_API_KEY."))
     # --- models
     fix_router = ModelRouter(c.providers, s.mode, s.allow_paid_in_free_mode or s.night_fix_allow_paid)
     coders = [d.descriptor.id for d in fix_router.eligible(RouteRequest(purpose="code_fix", min_coding=4,
@@ -68,7 +91,8 @@ async def run_checks(c) -> list[Check]:
     else:
         out.append(Check("AI per le correzioni", "missing", "nessun modello adatto al codice: NODO farà diagnosi e "
                                                             "rollback, ma non preparerà correzioni.",
-                         "Imposta NODO_ANTHROPIC_API_KEY (consigliato) oppure NODO_OPENAI_API_KEY."))
+                         "Installa Claude Code e fai l'accesso con il tuo abbonamento (docs/CERVELLO.md), oppure "
+                         "imposta NODO_ANTHROPIC_API_KEY o NODO_OPENAI_API_KEY."))
     talk = [d.descriptor.id for d in ModelRouter(c.providers, s.mode, s.allow_paid_in_free_mode)
             .eligible(RouteRequest(min_reasoning=3)) if d.descriptor.provider != "deterministic"]
     out.append(Check("AI per conversazione e bozze", "ok" if talk else "optional",

@@ -102,6 +102,20 @@ class NodoCore:
         outcome = RequestOutcome(request_id, conv.id, "", "general")
         try:
             intent = self.intents.classify(text, conv.active_context)
+            if intent.name != "stop" and self.brain_enabled():
+                async for ev in self._brain_turn(text, conv, request_id, channel, outcome):
+                    yield ev
+                if outcome.intent == "conversation":  # the brain answered; otherwise fall back to the rules below
+                    self.s.add(Message(conversation_id=conv.id, role="nodo", content=outcome.text,
+                                       request_id=request_id))
+                    self.events.emit("request.completed", {"intent": outcome.intent, "provider": outcome.provider,
+                                                           "model": outcome.model, "brain": True},
+                                     request_id=request_id, organization_id=self.org)
+                    self.s.flush()
+                    yield _ev("done", request_id, conversation_id=conv.id, text=outcome.text, intent=outcome.intent,
+                              provider=outcome.provider, model=outcome.model, confidence="known", agents=["brain"])
+                    return
+                cursor = len(self.events.history)
             outcome.intent = intent.name
             yield _ev("intent", request_id, name=intent.name, entity=intent.entity.__dict__ if intent.entity else None,
                       from_context=intent.from_context, reference_reapplied=intent.reference_reapplied,
@@ -177,6 +191,35 @@ class NodoCore:
                              organization_id=self.org)
             self.s.flush()
             yield _ev("error", request_id, message=f"{type(e).__name__}: {e}")
+
+    # ------------------------------------------------------------------ brain (nodo/brain)
+    def brain_enabled(self) -> bool:
+        mode = (self.settings.brain or "auto").lower()
+        if mode == "off":
+            return False
+        return self.router.has_tool_model(RouteRequest(purpose="brain", min_reasoning=3))
+
+    async def _brain_turn(self, text: str, conv: Conversation, request_id: str, channel: str,
+                          outcome: RequestOutcome) -> AsyncIterator[dict]:
+        from nodo.brain.loop import Brain, BrainUnavailable
+        brain = Brain(self, conv, request_id, channel)
+        yield _ev("intent", request_id, name="conversation", entity=None, from_context=False,
+                  reference_reapplied=False, confidence=1.0)
+        yield _ev("plan", request_id, steps=["brain"])
+        try:
+            async for ev in brain.run(text):
+                yield ev
+        except BrainUnavailable as e:
+            self.events.emit("model.failed", {"error": f"brain: {e}"[:500]}, request_id=request_id,
+                             organization_id=self.org)
+            yield _ev("step", request_id, step="brain", status="fallback")
+            return
+        outcome.intent, outcome.text = "conversation", brain.text
+        outcome.provider, outcome.model = brain.provider, brain.model
+        ctx = dict(conv.active_context or {})
+        ctx["last_intent"] = "conversation"
+        conv.active_context = ctx
+        self.s.flush()
 
     async def run_once(self, text: str, conversation_id: str | None = None, **kw) -> RequestOutcome:
         """Convenience for tests/CLI: consume the stream and return the outcome."""

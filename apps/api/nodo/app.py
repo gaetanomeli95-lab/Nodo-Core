@@ -41,6 +41,9 @@ class Container:
     night_retry_delay: float = 5.0
     night_poll_interval: float = 15.0
 
+    def providers_by_name(self) -> dict[str, ModelProvider]:
+        return {p.name: p for p in self.providers}
+
     def core(self, session: Session) -> NodoCore:
         org, user = ensure_workspace(session)
         return NodoCore(session, self.settings, org.id, self.providers, self.github, self.policy, user.id,

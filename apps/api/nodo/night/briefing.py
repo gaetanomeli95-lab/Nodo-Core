@@ -93,7 +93,8 @@ def pending_decisions(s: Session, org: str) -> list[dict]:
         act = s.scalars(select(NightAction).where(NightAction.approval_id == a.id)).first()
         site = s.get(Site, fix.site_id if fix else act.site_id) if (fix or act) else None
         if fix:
-            label = f"pubblicare la correzione per {site.name if site else '?'}" + \
+            noun = "la correzione" if fix.incident_id else f"la modifica «{fix.title}»"
+            label = f"pubblicare {noun} per {site.name if site else '?'}" + \
                     (f" (PR #{fix.pr_number})" if fix.pr_number else "")
         elif a.tool_name == "vercel" and a.action == "rollback":
             label = f"riportare {site.name if site else 'il sito'} alla versione precedente (rollback)"
@@ -111,7 +112,7 @@ def pending_decisions(s: Session, org: str) -> list[dict]:
 def compose_briefing(s: Session, org: str, since: datetime, until: datetime | None = None, tz=UTC,
                      greeting: bool = True) -> Briefing:
     until = until or datetime.now(UTC)
-    runs = list(s.scalars(select(NightRun).where(NightRun.organization_id == org, NightRun.kind != "briefing",
+    runs = list(s.scalars(select(NightRun).where(NightRun.organization_id == org, NightRun.kind.notin_(("briefing", "change")),
                                                  NightRun.started_at >= since, NightRun.started_at <= until)))
     run_ids = [r.id for r in runs]
     sites = {x.id: x for x in s.scalars(select(Site).where(Site.organization_id == org))}

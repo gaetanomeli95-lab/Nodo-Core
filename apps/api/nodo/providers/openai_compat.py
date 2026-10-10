@@ -7,13 +7,24 @@ from collections.abc import AsyncIterator
 import httpx
 
 from nodo.db.models import Sensitivity
-from nodo.providers.base import ChatChunk, ChatMessage, ModelDescriptor, ProviderError, estimate_tokens
+from nodo.providers.base import (
+    ChatChunk,
+    ChatMessage,
+    FunctionSpec,
+    ModelDescriptor,
+    ProviderError,
+    ToolCall,
+    ToolTurn,
+    estimate_tokens,
+)
 
 
 class OpenAICompatProvider:
     def __init__(self, name: str, base_url: str, api_key: str, descriptors: list[ModelDescriptor],
-                 timeout: float = 60.0, extra_headers: dict | None = None):
+                 timeout: float = 60.0, extra_headers: dict | None = None,
+                 transport: httpx.AsyncBaseTransport | None = None):
         self.name = name
+        self._transport = transport
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self._descriptors = descriptors
@@ -58,6 +69,46 @@ class OpenAICompatProvider:
         yield ChatChunk(done=True, tokens_in=tin, tokens_out=tout)
 
 
+    async def complete_tools(self, model: str, messages: list[dict], tools: list[FunctionSpec], *,
+                             temperature: float = 0.4, max_tokens: int = 1200) -> ToolTurn:
+        """Non-streaming chat with function calling (OpenAI-compatible: OpenAI, Groq, OpenRouter, Gemini)."""
+        wire = []
+        for m in messages:
+            if m["role"] == "assistant" and m.get("tool_calls"):
+                wire.append({"role": "assistant", "content": m.get("content") or None, "tool_calls": [
+                    {"id": c["id"], "type": "function",
+                     "function": {"name": c["name"], "arguments": json.dumps(c["arguments"], ensure_ascii=False)}}
+                    for c in m["tool_calls"]]})
+            elif m["role"] == "tool":
+                wire.append({"role": "tool", "tool_call_id": m["tool_call_id"], "content": m["content"]})
+            else:
+                wire.append({"role": m["role"], "content": m["content"]})
+        body = {"model": model, "messages": wire, "temperature": temperature, "max_tokens": max_tokens}
+        if tools:
+            body["tools"] = [{"type": "function", "function": {"name": t.name, "description": t.description,
+                                                               "parameters": t.parameters}} for t in tools]
+            body["tool_choice"] = "auto"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, transport=getattr(self, "_transport", None)) as client:
+                r = await client.post(f"{self.base_url}/chat/completions", json=body, headers=self._headers)
+        except httpx.HTTPError as e:
+            raise ProviderError(f"{self.name} transport error: {e}") from e
+        if r.status_code >= 400:
+            raise ProviderError(f"{self.name} HTTP {r.status_code}: {r.text[:300]}")
+        data = r.json()
+        msg = ((data.get("choices") or [{}])[0].get("message") or {})
+        calls = []
+        for i, c in enumerate(msg.get("tool_calls") or []):
+            fn = c.get("function") or {}
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {"_raw": fn.get("arguments")}
+            calls.append(ToolCall(c.get("id") or f"call_{i}", fn.get("name", ""), args if isinstance(args, dict) else {}))
+        usage = data.get("usage") or {}
+        return ToolTurn(msg.get("content") or "", calls, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
+
+
 def openai_descriptors(model: str) -> list[ModelDescriptor]:
     return [ModelDescriptor(provider="openai", model=model, reasoning=4, coding=4, vision=True, tool_calling=True,
                             context_window=128_000, cost_in_per_1k=0.00015, cost_out_per_1k=0.0006, tier="paid",
@@ -77,3 +128,13 @@ def groq_descriptors(model: str) -> list[ModelDescriptor]:
     return [ModelDescriptor(provider="groq", model=model, reasoning=3, coding=3, tool_calling=True,
                             context_window=32_000, latency_class="low", tier="free",
                             max_sensitivity=Sensitivity.INTERNAL, daily_quota=1000)]
+
+
+def gemini_descriptors(model: str) -> list[ModelDescriptor]:
+    """Google Gemini through its OpenAI-compatible endpoint. The free tier covers Flash models (with daily limits)."""
+    flash = "flash" in model
+    return [ModelDescriptor(provider="gemini", model=model, reasoning=4, coding=4 if not flash else 3, vision=True,
+                            tool_calling=True, context_window=1_000_000, latency_class="low",
+                            tier="free" if flash else "paid", cost_in_per_1k=0 if flash else 0.00125,
+                            cost_out_per_1k=0 if flash else 0.01, max_sensitivity=Sensitivity.INTERNAL,
+                            daily_quota=None)]

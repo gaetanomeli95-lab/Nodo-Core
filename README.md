@@ -29,6 +29,15 @@ you can also ask questions and approve or reject a fix with one tap.
 Publishing a fix always waits for your approval. Details: [docs/NIGHT_SHIFT.md](docs/NIGHT_SHIFT.md) ·
 decision record: [ADR-009](docs/adr/ADR-009-night-shift.md).
 
+## Brain (cervello)
+
+Talk to NODO like a person — chat, voice or Telegram. A tool-calling loop (`nodo/brain/`) looks things up (night
+shift, sites, projects, tasks, memory), acts ("sul sito di X cambia…" → branch + PR + tested preview in the
+background) and executes a pending decision only after it presented it in the conversation **and** you said an
+explicit yes (enforced in code). It runs on your **Claude Pro/Max subscription** through the locally installed
+Claude Code CLI (`claude -p`, all Claude Code tools disabled), or on Gemini/Groq/Anthropic/OpenAI; with no
+tool-capable model it falls back to the rule-based pipeline. Setup and guard rails: [docs/CERVELLO.md](docs/CERVELLO.md).
+
 ## Architecture in one picture
 
 ```

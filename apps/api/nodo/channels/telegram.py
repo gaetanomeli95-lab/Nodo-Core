@@ -30,7 +30,8 @@ PREVIEW_IT = {"ok": "anteprima funzionante", "failed": "ATTENZIONE: anteprima no
               "protected": "anteprima protetta: controllala tu", "pending": "anteprima in costruzione",
               "unknown": "anteprima non verificata"}
 HELP = ("Sono NODO. Puoi scrivermi (o mandarmi un vocale) come faresti a voce, per esempio:\n"
-        "«cosa hai fatto stanotte?» · «come stanno i siti?» · «controlla i siti» · «cosa devo approvare?»\n\n"
+        "«cosa hai fatto stanotte?» · «come stanno i siti?» · «cosa devo approvare?» · "
+        "«sul sito di … cambia il titolo della home» · «segnati di … venerdì»\n\n"
         "Comandi rapidi: /briefing /siti /controlla /approvazioni /aiuto\n"
         "Quando ti propongo una decisione puoi usare i pulsanti oppure rispondere «sì» o «no».")
 

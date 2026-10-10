@@ -20,5 +20,10 @@ Per avviarlo da solo quando accedi a Windows:
 powershell -ExecutionPolicy Bypass -File scripts\avvio-automatico.ps1
 ```
 
-Domande da fare a NODO: «cosa hai fatto stanotte?», «come stanno i siti?», «controlla i siti»,
-«cosa devo approvare?». Come funziona tutto, nel dettaglio: [docs/NIGHT_SHIFT.md](docs/NIGHT_SHIFT.md).
+## 4. Accendi il cervello (con il tuo abbonamento Claude)
+Installa Claude Code e fai l'accesso con il tuo account Claude Pro: due comandi, spiegati in
+**[docs/CERVELLO.md](docs/CERVELLO.md)**. Da lì parli con NODO come con una persona: «com'è andata stanotte?»,
+«cosa cambia in quella correzione?», «va bene, pubblicala», «sul sito di Prosperya cambia il titolo della home»,
+«segnati di chiamare il commercialista venerdì». Le pubblicazioni partono solo dopo il tuo sì.
+
+Il turno di notte nel dettaglio: [docs/NIGHT_SHIFT.md](docs/NIGHT_SHIFT.md).

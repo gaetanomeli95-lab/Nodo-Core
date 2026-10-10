@@ -87,3 +87,39 @@ async def collect(stream: AsyncIterator[ChatChunk]) -> ChatResult:
 
 def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
+
+
+# ---------------------------------------------------------------------------------------------- tool calling
+# Messages for tool-using conversations use the OpenAI chat shape (the lingua franca); each provider converts:
+#   {"role": "system"|"user", "content": str}
+#   {"role": "assistant", "content": str|None, "tool_calls": [{"id", "name", "arguments": dict}]}
+#   {"role": "tool", "tool_call_id": str, "name": str, "content": str}
+
+@dataclass(frozen=True)
+class FunctionSpec:
+    """A capability the model may call (JSON-schema parameters)."""
+    name: str
+    description: str
+    parameters: dict
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict
+
+
+@dataclass
+class ToolTurn:
+    text: str = ""
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    tokens_in: int = 0
+    tokens_out: int = 0
+
+
+class ToolCapableProvider(Protocol):
+    name: str
+
+    async def complete_tools(self, model: str, messages: list[dict], tools: list[FunctionSpec], *,
+                             temperature: float = 0.4, max_tokens: int = 1200) -> ToolTurn: ...

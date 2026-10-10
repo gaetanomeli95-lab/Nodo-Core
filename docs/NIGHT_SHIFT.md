@@ -69,7 +69,9 @@ la PR e cancella il branch.
 
 ## Parlarci
 
-Testo o voce, nel pannello *Comando*:
+Con il cervello acceso ([CERVELLO.md](CERVELLO.md)) gli parli liberamente, come a una persona, e puoi chiedergli
+anche modifiche ai siti («sul sito di X cambia…»): le prepara su un branch con anteprima e le pubblica solo dopo
+il tuo sì. Senza cervello capisce comunque queste domande (testo o voce, nel pannello *Comando*):
 
 - «cosa hai fatto stanotte?» → il briefing. Se c'è una decisione in attesa, la propone, e con la voce basta
   rispondere «sì» o «no».

@@ -45,10 +45,23 @@ class Settings(BaseSettings):
     openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
     groq_api_key: str | None = None
     groq_model: str = "llama-3.3-70b-versatile"
+    gemini_api_key: str | None = None            # Google AI Studio key: free tier on Flash models
+    gemini_model: str = "gemini-2.5-flash"
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-sonnet-4-5"
     anthropic_base_url: str = "https://api.anthropic.com/v1"
     allow_paid_in_free_mode: bool = False  # explicit override; default is NEVER charge in FREE
+    # Claude through your Claude Pro/Max subscription: uses the Claude Code CLI installed and logged in on this PC
+    # ("claude" command). No API key and no extra cost: it uses your plan's limits.
+    claude_subscription: bool = True            # used automatically when the "claude" command is found
+    claude_cli_model: str = "sonnet"            # sonnet | opus | haiku (or a full model name)
+    claude_cli_path: str | None = None          # full path to claude(.exe/.cmd) if it is not on PATH
+    claude_cli_effort: str = "low"              # conversation speed: low (fast) | medium | high (code fixes: default)
+
+    # --- Brain: conversation with tools (nodo/brain) ---
+    brain: str = "auto"                         # auto (on when a model with tool calling is available) | on | off
+    brain_max_steps: int = 6                    # tool rounds per message
+    brain_history: int = 16                     # previous messages of the conversation it remembers
 
     # --- Voice ---
     stt_provider: str = "browser"   # browser | openai | fake

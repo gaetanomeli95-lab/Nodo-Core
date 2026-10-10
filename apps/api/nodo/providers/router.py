@@ -16,7 +16,15 @@ from dataclasses import dataclass, field
 
 from nodo.config import NodoMode
 from nodo.db.models import SENSITIVITY_RANK, Sensitivity
-from nodo.providers.base import ChatChunk, ChatMessage, ModelDescriptor, ModelProvider, ProviderError
+from nodo.providers.base import (
+    ChatChunk,
+    ChatMessage,
+    FunctionSpec,
+    ModelDescriptor,
+    ModelProvider,
+    ProviderError,
+    ToolTurn,
+)
 
 
 @dataclass
@@ -149,6 +157,33 @@ class ModelRouter:
                 if produced:  # cannot transparently switch provider mid-stream
                     raise
         raise NoEligibleModel("All candidates failed: " + "; ".join(errors))
+
+    async def complete_tools(self, messages: list[dict], tools: list[FunctionSpec], req: RouteRequest, *,
+                             request_id: str | None = None, temperature: float = 0.4,
+                             max_tokens: int = 1200) -> ToolTurn:
+        """One function-calling step on the best eligible tool-capable model, with fallback."""
+        req.needs_tools = True
+        errors: list[str] = []
+        for cand in self.eligible(req):
+            d = cand.descriptor
+            provider = self.providers[d.provider]
+            if not hasattr(provider, "complete_tools") or not await provider.available():
+                continue
+            self.last_decision = cand
+            t0 = time.perf_counter()
+            try:
+                turn = await provider.complete_tools(d.model, messages, tools, temperature=temperature,
+                                                     max_tokens=max_tokens)
+                self._record(request_id, None, d, req, turn.tokens_in, turn.tokens_out, t0, "ok")
+                return turn
+            except ProviderError as e:
+                self._record(request_id, None, d, req, 0, 0, t0, "failed", str(e))
+                errors.append(f"{d.id}: {e}")
+        raise NoEligibleModel("No tool-capable model available: " + ("; ".join(errors) or "none configured"))
+
+    def has_tool_model(self, req: RouteRequest) -> bool:
+        req.needs_tools = True
+        return any(hasattr(self.providers[c.descriptor.provider], "complete_tools") for c in self.eligible(req))
 
     def _record(self, request_id, agent_run_id, d: ModelDescriptor, req: RouteRequest, tin, tout, t0, status,
                 error: str | None = None) -> None:

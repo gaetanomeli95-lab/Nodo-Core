@@ -14,7 +14,8 @@ def make_engine(url: str | None = None) -> Engine:
     url = url or get_settings().database_url
     kwargs: dict = {"future": True}
     if url.startswith("sqlite"):
-        kwargs["connect_args"] = {"check_same_thread": False}
+        # short wait for a concurrent writer (threads); long jobs commit before slow network/model waits instead
+        kwargs["connect_args"] = {"check_same_thread": False, "timeout": 10}
         if ":memory:" in url:
             from sqlalchemy.pool import StaticPool
             kwargs["poolclass"] = StaticPool
@@ -23,6 +24,8 @@ def make_engine(url: str | None = None) -> Engine:
         @event.listens_for(engine, "connect")
         def _fk_on(dbapi_conn, _):  # enforce FKs on SQLite like PostgreSQL would
             dbapi_conn.execute("PRAGMA foreign_keys=ON")
+            if ":memory:" not in url:  # readers never block the writer (and vice versa)
+                dbapi_conn.execute("PRAGMA journal_mode=WAL")
     return engine
 
 
