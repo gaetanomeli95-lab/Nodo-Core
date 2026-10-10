@@ -172,6 +172,8 @@ def as_dicts(checks: list[Check]) -> list[dict]:
 
 
 def main() -> int:
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # la console Windows non sa stampare →
     from nodo.app import build_container
     c = build_container()
     checks = asyncio.run(run_checks(c))
