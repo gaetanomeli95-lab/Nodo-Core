@@ -167,10 +167,13 @@ class NightShift:
         if deps.github or deps.repo:
             self.tools.register(github_tool(deps.github, deps.repo))
         allow_paid = settings.allow_paid_in_free_mode or settings.night_fix_allow_paid
-        self.fix_router = ModelRouter(deps.providers, settings.mode, allow_paid, recorder=self.telemetry.record_inference)
+        self.fix_router = ModelRouter(deps.providers, settings.mode, allow_paid, recorder=self.telemetry.record_inference,
+                                  cooldown_minutes=settings.provider_cooldown_minutes)
         self.router = ModelRouter(deps.providers, settings.mode, settings.allow_paid_in_free_mode,
-                                  recorder=self.telemetry.record_inference)
+                                  recorder=self.telemetry.record_inference,
+                                  cooldown_minutes=settings.provider_cooldown_minutes)
         self.run: NightRun | None = None
+        self.last_review = None
         self._fixes_this_run = 0
 
     # ------------------------------------------------------------------ policy
@@ -841,10 +844,33 @@ class NightShift:
         await self._publish_draft(site, inc, draft, ev.failing_paths)
 
     async def _publish_draft(self, site: Site, inc: Incident | None, draft, failing_paths: list[str],
-                             instruction: str | None = None) -> FixProposal:
+                             instruction: str | None = None) -> FixProposal | None:
         """Branch + one commit + PR + preview check + merge approval, for a night fix (inc) or a change you asked
-        for in conversation (instruction). The merge is level 4: it always waits for you."""
+        for in conversation (instruction). The merge is level 4: it always waits for you.
+        Before the PR a different model reviews the diff (nodo/night/reviewer.py); "bloccante" = no PR."""
         is_change = inc is None
+        review_line = ""
+        self.last_review = None
+        if self.settings.code_review:
+            from nodo.night.reviewer import review_draft
+            rv = await review_draft(self.fix_router, self.request_id, site_name=site.name,
+                                    request_text=instruction or (inc.title if inc else ""), diff=draft.diff,
+                                    writer=draft.model, sensitivity=site.sensitivity)
+            self.last_review = rv
+            if rv.verdict == "bloccante":
+                self._action(site, inc, "change" if is_change else "fix_pr", "skipped",
+                             f"Il secondo controllo ({rv.model}) ha bloccato la modifica: {rv.note}",
+                             {"key": "review-blocked", "review": rv.note, "reviewer": rv.model,
+                              "diagnosis": draft.diagnosis})
+                return None
+            if rv.verdict == "dubbi":
+                draft.confidence = "low"
+                draft.diagnosis = (f"{draft.diagnosis} · Secondo parere ({rv.model}): {rv.note}").strip(" ·")
+                review_line = f"**Secondo controllo ({rv.model}): DUBBI.** {rv.note}\n\n"
+            elif rv.verdict == "ok":
+                review_line = f"**Secondo controllo ({rv.model}):** ok. {rv.note}\n\n"
+            else:
+                review_line = f"**Secondo controllo:** non eseguito ({rv.note}).\n\n"
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
         slug = re.sub(r"[^a-z0-9]+", "-", site.name.lower()).strip("-")[:30] or "site"
         branch = f"nodo/{'change' if is_change else 'fix'}-{slug}-{stamp}"
@@ -856,7 +882,8 @@ class NightShift:
                 f"**{'Cosa ho cambiato' if is_change else 'Diagnosi'}:** {draft.diagnosis}\n\n**File modificati:**\n"
                 + "\n".join(f"- `{x['path']}` (+{x['added']} / -{x['removed']})" for x in draft.stats)
                 + f"\n\n**Come verificare:** {draft.test_hint or 'apri l anteprima e controlla la pagina.'}\n\n"
-                  f"Confidenza del modello: {draft.confidence} · modello: {draft.model}\n\n"
+                + review_line
+                + f"Confidenza del modello: {draft.confidence} · modello: {draft.model}\n\n"
                   "> Non unire senza aver visto l'anteprima. Puoi approvare o rifiutare dal pannello di NODO.")
         res = await self.tools.run("github", "open_fix_pr", {
             "owner": site.repo_owner, "name": site.repo_name, "base_branch": site.default_branch, "branch": branch,
@@ -923,6 +950,11 @@ class NightShift:
                 run.status, run.summary = "done", run.summary | {"result": "skipped"}
                 return None, why
             prop = await self._publish_draft(site, None, draft, page_paths(list(draft.files)), instruction)
+            if prop is None:
+                rv = self.last_review
+                note = f"il secondo controllo ({rv.model}) l'ha bloccata: {rv.note}" if rv else "bloccata"
+                run.status, run.summary = "done", run.summary | {"result": "blocked"}
+                return None, note
             run.status, run.summary = "done", run.summary | {"result": prop.status, "fix_id": prop.id}
             return prop, draft.diagnosis
         except Exception as e:

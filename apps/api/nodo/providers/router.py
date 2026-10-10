@@ -10,6 +10,7 @@ Fallback: on ProviderError the next candidate is tried. Every attempt is recorde
 """
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
@@ -65,10 +66,28 @@ class NoEligibleModel(RuntimeError):
     pass
 
 
+# Models that hit their usage limit (subscription weekly limit, free-tier quota, 429) are skipped for a while,
+# so NODO does not waste seconds on every message retrying a provider that cannot answer. Process-wide.
+_LIMIT_RE = re.compile(r"limit|quota|rate.?limit|\b429\b|too many requests|usage|resets? (at|on|in)|esaurit",
+                       re.I)
+_cooldown: dict[str, float] = {}
+
+
+def cooldowns() -> dict[str, float]:
+    """provider name -> seconds left in the pause (only providers currently paused)."""
+    now = time.monotonic()
+    return {k: round(v - now) for k, v in _cooldown.items() if v > now}
+
+
+def clear_cooldowns() -> None:
+    _cooldown.clear()
+
+
 class ModelRouter:
     def __init__(self, providers: list[ModelProvider], mode: NodoMode = NodoMode.FREE,
                  allow_paid_in_free: bool = False,
-                 recorder: Callable[[InferenceRecord], None] | None = None):
+                 recorder: Callable[[InferenceRecord], None] | None = None, cooldown_minutes: float = 30):
+        self.cooldown_seconds = cooldown_minutes * 60
         self.providers = {p.name: p for p in providers}
         self.mode = mode
         self.allow_paid_in_free = allow_paid_in_free
@@ -127,6 +146,14 @@ class ModelRouter:
         self.last_decision = cands[0]
         return cands[0]
 
+    def _paused(self, provider: str) -> bool:
+        until = _cooldown.get(provider)
+        return until is not None and until > time.monotonic()
+
+    def _maybe_pause(self, provider: str, error: str) -> None:
+        if self.cooldown_seconds > 0 and provider != "deterministic" and _LIMIT_RE.search(error):
+            _cooldown[provider] = time.monotonic() + self.cooldown_seconds
+
     # ------------------------------------------------------------------ execution with fallback
     async def stream(self, messages: list[ChatMessage], req: RouteRequest, *, request_id: str | None = None,
                      agent_run_id: str | None = None, temperature: float = 0.3,
@@ -135,6 +162,9 @@ class ModelRouter:
         for cand in self.eligible(req):
             d = cand.descriptor
             provider = self.providers[d.provider]
+            if self._paused(d.provider):
+                errors.append(f"{d.id}: in pausa (limite d'uso)")
+                continue
             if not await provider.available():
                 errors.append(f"{d.id}: unavailable")
                 continue
@@ -153,6 +183,7 @@ class ModelRouter:
                 return
             except ProviderError as e:
                 self._record(request_id, agent_run_id, d, req, tin, tout, t0, "failed", str(e))
+                self._maybe_pause(d.provider, str(e))
                 errors.append(f"{d.id}: {e}")
                 if produced:  # cannot transparently switch provider mid-stream
                     raise
@@ -167,7 +198,8 @@ class ModelRouter:
         for cand in self.eligible(req):
             d = cand.descriptor
             provider = self.providers[d.provider]
-            if not hasattr(provider, "complete_tools") or not await provider.available():
+            if not hasattr(provider, "complete_tools") or self._paused(d.provider) \
+                    or not await provider.available():
                 continue
             self.last_decision = cand
             t0 = time.perf_counter()
@@ -178,6 +210,7 @@ class ModelRouter:
                 return turn
             except ProviderError as e:
                 self._record(request_id, None, d, req, 0, 0, t0, "failed", str(e))
+                self._maybe_pause(d.provider, str(e))
                 errors.append(f"{d.id}: {e}")
         raise NoEligibleModel("No tool-capable model available: " + ("; ".join(errors) or "none configured"))
 

@@ -36,7 +36,9 @@ shift, sites, projects, tasks, memory), acts ("sul sito di X cambia…" → bran
 background) and executes a pending decision only after it presented it in the conversation **and** you said an
 explicit yes (enforced in code). It runs on your **Claude Pro/Max subscription** through the locally installed
 Claude Code CLI (`claude -p`, all Claude Code tools disabled), or on Gemini/Groq/Anthropic/OpenAI; with no
-tool-capable model it falls back to the rule-based pipeline. Setup and guard rails: [docs/CERVELLO.md](docs/CERVELLO.md).
+tool-capable model it falls back to the rule-based pipeline. With a ChatGPT subscription too (Codex CLI,
+`codex exec`), the two cooperate: backup when one hits its usage limit (paused, not retried) and a second-model
+review of every code change before the PR (`nodo/night/reviewer.py`). Setup and guard rails: [docs/CERVELLO.md](docs/CERVELLO.md).
 
 ## Architecture in one picture
 

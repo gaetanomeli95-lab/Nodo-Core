@@ -51,6 +51,9 @@ Consigliato: **il tuo abbonamento Claude (Pro o Max)**, senza costi in più. Ins
 una volta, come spiegato in **[CERVELLO.md](CERVELLO.md)** (due comandi in PowerShell). Non serve scrivere niente
 nel `.env`: NODO lo trova da solo e lo usa sia per parlare con te sia per preparare correzioni e modifiche.
 
+Se hai anche **ChatGPT Plus**, collegalo come secondo cervello con `attiva-chatgpt.bat` (vedi
+[CERVELLO.md](CERVELLO.md)): fa da riserva quando Claude è al limite e rilegge ogni modifica al codice.
+
 Alternative:
 - gratis: `NODO_GEMINI_API_KEY` (<https://aistudio.google.com/apikey>) o `NODO_GROQ_API_KEY`;
 - a consumo: `NODO_ANTHROPIC_API_KEY` (<https://console.anthropic.com> → *API Keys*, con un po' di credito;

@@ -189,3 +189,18 @@ def test_ws_turn_metrics_persisted(client, db):
         _, done = _recv_until(ws, "voice.turn.done")
     row = db.scalars(select(VoiceTurnMetric).where(VoiceTurnMetric.turn_number == done["turn"])).first()
     assert row is not None and row.turn_done_at and "total" in row.latency_ms
+
+
+def test_ws_works_with_the_web_panel_mounted(engine, settings, container, tmp_path, monkeypatch):
+    """As on your PC: the built panel is served at "/" and the voice WebSocket must still connect."""
+    from fastapi.testclient import TestClient
+
+    from nodo.main import create_app
+    (tmp_path / "index.html").write_text("<!doctype html><title>NODO</title>", encoding="utf-8")
+    monkeypatch.setenv("NODO_WEB_DIST", str(tmp_path))
+    app = create_app(settings, container)
+    with TestClient(app) as c:
+        assert "NODO" in c.get("/").text
+        with c.websocket_connect(WS) as ws:
+            started = _start(ws)
+            assert started["state"] == "IDLE"

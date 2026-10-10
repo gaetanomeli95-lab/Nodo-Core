@@ -51,6 +51,27 @@ regole fisse (meno conversazione, stesse funzioni) o con un'altra AI se ne hai c
 **Velocità.** Ogni risposta richiede qualche secondo (Claude Code si avvia a ogni messaggio): in chat e su
 Telegram va benissimo; a voce senti prima una frase breve tipo «Un attimo, controllo» e poi la risposta.
 
+## Secondo cervello: il tuo abbonamento ChatGPT (Plus)
+
+Se hai anche ChatGPT, NODO lo usa insieme a Claude tramite **Codex CLI**, il programma ufficiale di OpenAI che
+funziona con l'accesso «Sign in with ChatGPT»:
+
+- **riserva**: quando Claude arriva al limite del piano, risponde ChatGPT (poi Gemini, poi le regole fisse);
+- **secondo parere sul codice**: ogni correzione o modifica scritta da uno dei due viene riletta dall'altro prima
+  di aprire la pull request. Se il revisore trova un problema serio la PR non parte; se ha dei dubbi la PR parte
+  ma te lo dice (pannello, decisioni, Telegram) e la confidenza scende a «bassa»;
+- **niente tentativi a vuoto**: un modello che ha finito il limite viene messo in pausa per 30 minuti
+  (`NODO_PROVIDER_COOLDOWN_MINUTES`); lo vedi nella scheda Accessi.
+
+Per collegarlo: doppio click su **`attiva-chatgpt.bat`** nella cartella di NODO. Installa Codex CLI (serve
+Node.js, che hai già per NODO), apre il browser per l'accesso con ChatGPT e controlla che sia andato a buon fine.
+Poi riavvia NODO. A mano, in PowerShell: `npm install -g @openai/codex` e poi `codex login`.
+
+OpenAI prevede l'accesso con l'abbonamento per l'uso di Codex sul tuo computer; per automazioni su server consiglia
+le chiavi API. NODO gira sul tuo PC e lo usi solo tu. Se un giorno l'abbonamento smettesse di rispondere, NODO
+passa da solo agli altri modelli. Impostazioni: `NODO_CHATGPT_SUBSCRIPTION`, `NODO_CODEX_CLI_MODEL`,
+`NODO_CODEX_CLI_PATH`, `NODO_CODE_REVIEW` (secondo parere sì/no).
+
 ## Alternative gratuite
 
 Se preferisci non usare l'abbonamento, il cervello funziona anche con:

@@ -38,62 +38,9 @@ from nodo.providers.base import (
     ToolTurn,
     estimate_tokens,
 )
-
-TOOL_PROTOCOL = """
-
-## Strumenti
-Puoi usare questi strumenti (nome: descrizione | parametri JSON-schema):
-{catalog}
-
-## Formato della risposta (obbligatorio)
-Rispondi SEMPRE e SOLO con un oggetto JSON valido, senza testo prima o dopo e senza blocchi ```:
-{{"say": "testo per Gaetano (vuoto se prima devi usare strumenti)", "calls": [{{"name": "nome_strumento", "arguments": {{...}}}}]}}
-- Se ti servono dati o devi fare un'azione: metti le chiamate in "calls" (anche più di una) e lascia "say" vuoto o
-  al massimo una frase brevissima ("Un attimo, controllo."): viene detta subito, quindi dopo non ripeterla.
-- Quando hai tutto quello che serve: "calls": [] e in "say" la risposta finale.
-- I risultati degli strumenti ti arrivano nei messaggi successivi come [RISULTATO nome]."""
+from nodo.providers.text_tools import TOOL_PROTOCOL, _parse, _render_transcript  # noqa: F401
 
 OPTIONAL_FLAGS = ["--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--effort"]
-
-
-def _render_transcript(messages: list[dict]) -> str:
-    out = []
-    for m in messages:
-        role = m["role"]
-        if role == "system":
-            continue
-        if role == "user":
-            out.append(f"[GAETANO]\n{m['content']}")
-        elif role == "assistant":
-            if m.get("content"):
-                out.append(f"[NODO]\n{m['content']}")
-            for c in m.get("tool_calls") or []:
-                out.append(f"[CHIAMATA {c['name']}] {json.dumps(c['arguments'], ensure_ascii=False)}")
-        elif role == "tool":
-            out.append(f"[RISULTATO {m.get('name', 'strumento')}]\n{m['content']}")
-    out.append("[ORA TOCCA A TE: rispondi con il JSON richiesto]")
-    return "\n\n".join(out)
-
-
-def _parse(text: str) -> tuple[str, list[tuple[str, dict]]]:
-    """Lenient parse of the JSON protocol. Plain prose (no JSON) is taken as the final answer."""
-    t = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
-    try:
-        data = json.loads(t[t.index("{"):t.rindex("}") + 1])
-    except (ValueError, json.JSONDecodeError):
-        return text.strip(), []
-    if not isinstance(data, dict):
-        return text.strip(), []
-    calls: list[tuple[str, dict]] = []
-    for c in data.get("calls") or data.get("tool_calls") or []:
-        if not isinstance(c, dict) or not c.get("name"):
-            continue
-        args = next((c[k] for k in ("arguments", "input", "args", "parameters") if isinstance(c.get(k), dict)), {})
-        calls.append((str(c["name"]), args))
-    say = data.get("say")
-    if say is None:
-        say = data.get("text") or data.get("message") or ""
-    return str(say), calls
 
 
 def _find_claude() -> str | None:
@@ -116,7 +63,7 @@ class ClaudeCodeProvider:
         self.model, self.effort = model, effort
         self.executable = executable or _find_claude()
         self.timeout = timeout
-        self._auth_checked_at = 0.0
+        self._auth_checked_at: float | None = None   # never checked yet
         self._auth_ok = False
         self._dropped: set[str] = set()
         self._cwd = Path(tempfile.gettempdir()) / "nodo-claude-cwd"
@@ -141,7 +88,7 @@ class ClaudeCodeProvider:
     async def available(self) -> bool:
         if not self.executable:
             return False
-        if time.monotonic() - self._auth_checked_at < 600:
+        if self._auth_checked_at is not None and time.monotonic() - self._auth_checked_at < 600:
             return self._auth_ok
         self._auth_checked_at = time.monotonic()
         try:

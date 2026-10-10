@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     claude_cli_path: str | None = None          # full path to claude(.exe/.cmd) if it is not on PATH
     claude_cli_effort: str = "low"              # conversation speed: low (fast) | medium | high (code fixes: default)
 
+    # ChatGPT through your ChatGPT Plus/Pro subscription: uses the Codex CLI installed and logged in on this PC
+    # ("codex" command, "Sign in with ChatGPT"). Second brain and second opinion on code changes.
+    chatgpt_subscription: bool = True           # used automatically when the "codex" command is found
+    codex_cli_model: str = ""                   # empty = your plan's default model
+    codex_cli_path: str | None = None           # full path to codex(.cmd/.exe) if it is not on PATH
+    provider_cooldown_minutes: int = 30         # a model that hit its usage limit is skipped for this long
+    code_review: bool = True                    # a second model reviews every code change before the PR
+
     # --- Brain: conversation with tools (nodo/brain) ---
     brain: str = "auto"                         # auto (on when a model with tool calling is available) | on | off
     brain_max_steps: int = 6                    # tool rounds per message

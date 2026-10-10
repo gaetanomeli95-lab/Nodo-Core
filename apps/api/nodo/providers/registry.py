@@ -5,6 +5,7 @@ from nodo.config import Settings
 from nodo.providers.anthropic import AnthropicProvider
 from nodo.providers.base import ModelProvider
 from nodo.providers.claude_cli import ClaudeCodeProvider
+from nodo.providers.codex_cli import CodexCliProvider
 from nodo.providers.deterministic import DeterministicProvider
 from nodo.providers.ollama import OllamaProvider
 from nodo.providers.openai_compat import (
@@ -36,6 +37,10 @@ def build_providers(s: Settings) -> list[ModelProvider]:
         cc = ClaudeCodeProvider(s.claude_cli_model, s.claude_cli_path, effort=s.claude_cli_effort or None)
         if cc.executable:  # Claude Code installed: your subscription becomes NODO's best brain at no extra cost
             providers.append(cc)
+    if s.chatgpt_subscription and s.env not in ("TEST", "DEMO"):
+        cx = CodexCliProvider(s.codex_cli_model or None, s.codex_cli_path)
+        if cx.executable:  # registered after Claude: same scores, so Claude leads and ChatGPT is the backup
+            providers.append(cx)
     if s.openai_api_key:
         providers.append(OpenAICompatProvider("openai", s.openai_base_url, s.openai_api_key,
                                               openai_descriptors(s.openai_model)))

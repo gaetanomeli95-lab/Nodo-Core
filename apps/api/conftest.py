@@ -75,3 +75,11 @@ def world():
     """Simulated Vercel + GitHub + sites + coder (nodo/night/simulation.py)."""
     from nodo.night.simulation import build_demo_world
     return build_demo_world()
+
+
+@pytest.fixture(autouse=True)
+def _no_paused_models():
+    from nodo.providers.router import clear_cooldowns
+    clear_cooldowns()
+    yield
+    clear_cooldowns()

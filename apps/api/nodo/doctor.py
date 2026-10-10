@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 
 import httpx
 
-from nodo.providers.router import ModelRouter, RouteRequest
+from nodo.providers.router import ModelRouter, RouteRequest, cooldowns
 
 
 @dataclass
@@ -70,6 +70,25 @@ async def run_checks(c) -> list[Check]:
                          if ok else "Claude Code è installato ma non hai fatto l'accesso.",
                          "" if ok else "Apri il Terminale e scrivi: claude   poi segui l'accesso con il tuo account "
                                        "Claude (Pro). Riavvia NODO."))
+    cx = next((p for p in c.providers if p.name == "chatgpt-subscription"), None)
+    if cx is not None:
+        ok = await cx.available()
+        out.append(Check("Cervello di riserva (abbonamento ChatGPT)", "ok" if ok else "error",
+                         "Codex CLI trovato: ChatGPT risponde quando Claude non può e rilegge le modifiche al codice."
+                         if ok else "Codex CLI è installato ma non hai fatto l'accesso con ChatGPT.",
+                         "" if ok else "Apri PowerShell, scrivi: codex login  e accedi con il tuo account ChatGPT. "
+                                       "Riavvia NODO."))
+    elif cc is not None:
+        out.append(Check("Cervello di riserva (abbonamento ChatGPT)", "optional",
+                         "non collegato: quando Claude arriva al limite NODO passa alle risposte fisse (o a Gemini).",
+                         "Se hai ChatGPT Plus: installa Codex CLI e fai l'accesso (docs/CERVELLO.md)."))
+    paused = cooldowns()
+    if paused:
+        out.append(Check("Modelli in pausa", "warning",
+                         ", ".join(f"{k} per altri {max(1, v // 60)} min" for k, v in paused.items())
+                         + ": hanno raggiunto il limite d'uso, NODO usa gli altri.", ""))
+    if cc is not None or cx is not None:
+        pass  # the subscription rows above already describe the brain
     elif s.brain == "off":
         out.append(Check("Cervello", "optional", "disattivato (NODO_BRAIN=off): risposte a regole.", "NODO_BRAIN=auto"))
     elif brains:

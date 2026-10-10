@@ -78,7 +78,8 @@ class NodoCore:
         self.events = EventBus(session)
         self.telemetry = Telemetry(session)
         self.router = ModelRouter(providers, settings.mode, settings.allow_paid_in_free_mode,
-                                  recorder=self.telemetry.record_inference)
+                                  recorder=self.telemetry.record_inference,
+                                  cooldown_minutes=settings.provider_cooldown_minutes)
         self.memory = MemoryService(session, organization_id, self.events)
         self.resolver = EntityResolver(session, organization_id)
         self.intents = IntentEngine(self.resolver)
