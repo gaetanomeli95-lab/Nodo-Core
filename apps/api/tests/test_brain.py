@@ -243,9 +243,16 @@ print(json.dumps({{"type": "result", "is_error": False, "result": result,
 
 @pytest.fixture
 def fake_claude(tmp_path, monkeypatch):
-    exe = tmp_path / "claude"
-    exe.write_text(FAKE_CLAUDE.format(python=sys.executable), encoding="utf-8")
-    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    # Windows cannot run shebang scripts: there the fake CLI is a .cmd shim that calls python
+    script = tmp_path / "claude.py"
+    script.write_text(FAKE_CLAUDE.format(python=sys.executable), encoding="utf-8")
+    if sys.platform == "win32":
+        exe = tmp_path / "claude.cmd"
+        exe.write_text(f'@echo off\n"{sys.executable}" "{script}" %*\n', encoding="utf-8")
+    else:
+        exe = tmp_path / "claude"
+        exe.write_text(FAKE_CLAUDE.format(python=sys.executable), encoding="utf-8")
+        exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
     log = tmp_path / "log.jsonl"
     monkeypatch.setenv("FAKE_CLAUDE_LOG", str(log))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-be-used")

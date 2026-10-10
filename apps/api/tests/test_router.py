@@ -67,6 +67,38 @@ def test_performance_mode_prefers_capability():
     assert r.select(RouteRequest()).descriptor.provider == "paid"
 
 
+class SlowSubscription:
+    """A smart but slow brain (subscription CLI): wins on quality, loses on speed."""
+    name = "slowsub"
+
+    def models(self):
+        return [ModelDescriptor("slowsub", "big", reasoning=5, coding=5, tier="free", latency_class="high",
+                                max_sensitivity=Sensitivity.CONFIDENTIAL)]
+
+    async def available(self):
+        return True
+
+
+class FastCloud:
+    """A faster, slightly weaker API model (e.g. Groq/Gemini free tier)."""
+    name = "fastcloud"
+
+    def models(self):
+        return [ModelDescriptor("fastcloud", "small", reasoning=3, coding=3, tier="free", latency_class="low",
+                                max_sensitivity=Sensitivity.INTERNAL)]
+
+    async def available(self):
+        return True
+
+
+def test_prefer_fast_puts_quick_models_ahead():
+    r = ModelRouter([SlowSubscription(), FastCloud()], NodoMode.FREE)
+    # a written question still goes to the smartest brain
+    assert r.select(RouteRequest(min_reasoning=3)).descriptor.provider == "slowsub"
+    # a spoken question goes to the fastest one, so the reply arrives in seconds
+    assert r.select(RouteRequest(min_reasoning=3, prefer_fast=True)).descriptor.provider == "fastcloud"
+
+
 def test_no_eligible_model_raises():
     r = ModelRouter([FreeCloud()], NodoMode.FREE)
     with pytest.raises(NoEligibleModel):

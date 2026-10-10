@@ -37,6 +37,7 @@ class RouteRequest:
     needs_vision: bool = False
     needs_tools: bool = False
     prefer_local: bool = False
+    prefer_fast: bool = False   # voice turns: a quick answer matters more than the smartest one
     exclude: set[str] = field(default_factory=set)
 
 
@@ -131,6 +132,8 @@ class ModelRouter:
             s -= 100
         s -= 50 * (d.cost_in_per_1k + d.cost_out_per_1k)
         s += {"low": 3, "medium": 1, "high": 0}[d.latency_class]
+        if req.prefer_fast:  # a spoken answer that takes 30s feels broken: fast models jump ahead
+            s += {"low": 15, "medium": 6, "high": 0}[d.latency_class]
         return s
 
     def _reason(self, d: ModelDescriptor, req: RouteRequest) -> str:

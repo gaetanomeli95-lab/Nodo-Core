@@ -96,6 +96,11 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     speaking.current = true;
     const u = new SpeechSynthesisUtterance(text);
     u.lang = config?.language === "it" ? "it-IT" : config?.language || "it-IT";
+    const voices = window.speechSynthesis.getVoices().filter((v) => v.lang?.toLowerCase().startsWith("it"));
+    // "natural"/online voices sound human; Google and Microsoft both ship good Italian ones
+    const best = voices.find((v) => /natural|online|neural/i.test(v.name))
+      || voices.find((v) => /google/i.test(v.name)) || voices[0];
+    if (best) u.voice = best;
     u.onend = browserTtsNext;
     u.onerror = (ev) => {
       const code = (ev as SpeechSynthesisErrorEvent).error;

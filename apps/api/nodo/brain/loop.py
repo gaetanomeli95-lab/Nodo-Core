@@ -112,7 +112,8 @@ class Brain:
             last = step == max_steps
             # release the database while the model thinks (seconds): background jobs and the night shift can write
             self.s.commit()
-            req = RouteRequest(purpose="brain", sensitivity=Sensitivity.INTERNAL, min_reasoning=3)
+            req = RouteRequest(purpose="brain", sensitivity=Sensitivity.INTERNAL, min_reasoning=3,
+                               prefer_fast=self.channel == "voice")
             try:
                 turn = await self.core.router.complete_tools(messages, [] if last else specs, req, request_id=rid,
                                                              temperature=0.4, max_tokens=1500)
