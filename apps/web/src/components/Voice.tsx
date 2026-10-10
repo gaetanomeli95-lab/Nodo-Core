@@ -87,60 +87,77 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   };
 
   useEffect(() => {
-    const s = new VoiceSocket(
-      (e) => {
-        const c = cbRef.current;
-        c.onEvent(e);
-        switch (e.type) {
-          case "voice.session.state":
-            setState(e.state as VoiceState);
-            break;
-          case "voice.session.started":
-            setConnected(true);
-            break;
-          case "transcript.partial":
-            setPartial(e.text as string);
-            break;
-          case "transcript.final":
-            setPartial("");
-            c.onUserText(e.text as string);
-            break;
-          case "nodo.thinking":
-            c.onNodoStart();
-            break;
-          case "nodo.token": {
-            if (!streamingStarted.current) { streamingStarted.current = true; c.onNodoStart(); }
-            c.onNodoDelta(e.delta as string);
-            break;
+    let closed = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+    const connect = () => {
+      const s = new VoiceSocket(
+        (e) => {
+          const c = cbRef.current;
+          c.onEvent(e);
+          switch (e.type) {
+            case "voice.session.state":
+              setState(e.state as VoiceState);
+              break;
+            case "voice.session.started":
+              attempt = 0;
+              setConnected(true);
+              break;
+            case "transcript.partial":
+              setPartial(e.text as string);
+              break;
+            case "transcript.final":
+              setPartial("");
+              c.onUserText(e.text as string);
+              break;
+            case "nodo.thinking":
+              c.onNodoStart();
+              break;
+            case "nodo.token": {
+              if (!streamingStarted.current) { streamingStarted.current = true; c.onNodoStart(); }
+              c.onNodoDelta(e.delta as string);
+              break;
+            }
+            case "tts.speak":
+              speechQueue.current.push(e.text as string);
+              if (!speaking.current) browserTtsNext();
+              break;
+            case "tts.chunk":
+              player.current.push(e.audio as string, e.mime as string);
+              break;
+            case "voice.interrupted":
+              setPartial("");
+              stopLocalAudio();
+              break;
+            case "nodo.response":
+              streamingStarted.current = false;
+              c.onNodoDone(e as unknown as Record<string, unknown>);
+              break;
+            case "voice.turn.done":
+              streamingStarted.current = false;
+              break;
+            case "error":
+              c.onError(e.message as string);
+              break;
           }
-          case "tts.speak":
-            speechQueue.current.push(e.text as string);
-            if (!speaking.current) browserTtsNext();
-            break;
-          case "tts.chunk":
-            player.current.push(e.audio as string, e.mime as string);
-            break;
-          case "voice.interrupted":
-            setPartial("");
-            stopLocalAudio();
-            break;
-          case "nodo.response":
-            streamingStarted.current = false;
-            c.onNodoDone(e as unknown as Record<string, unknown>);
-            break;
-          case "voice.turn.done":
-            streamingStarted.current = false;
-            break;
-          case "error":
-            c.onError(e.message as string);
-            break;
-        }
-      },
-      () => setConnected(false),
-    );
-    s.send({ type: "session.start", language: config?.language || "it", client_stt: true });
-    sock.current = s;
-    return () => { s.close(); stopLocalAudio(); };
+        },
+        () => {
+          // NODO restarted or the network dropped: try again (2s, 4s, ... up to 15s)
+          setConnected(false);
+          setState("CONNECTING");
+          if (closed) return;
+          attempt += 1;
+          retry = setTimeout(connect, Math.min(15000, 2000 * attempt));
+        },
+      );
+      let conversation: string | undefined;
+      try { conversation = localStorage.getItem("nodo.conversation") || undefined; } catch { /* private mode */ }
+      // same conversation as the text chat: the brain remembers what you wrote and what you said
+      s.send({ type: "session.start", language: config?.language || "it", client_stt: true, conversation_id: conversation });
+      sock.current = s;
+    };
+    connect();
+    return () => { closed = true; if (retry) clearTimeout(retry); sock.current?.close(); stopLocalAudio(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

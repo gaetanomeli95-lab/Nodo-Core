@@ -71,15 +71,25 @@ export function voiceWsUrl(): string {
 
 export class VoiceSocket {
   private ws: WebSocket;
+  private pending: string[] = [];   // messages sent before the connection is open (e.g. session.start)
   constructor(onEvent: (e: VoiceEvent) => void, onClose: (e: CloseEvent) => void) {
     this.ws = new WebSocket(voiceWsUrl());
+    this.ws.onopen = () => {
+      for (const m of this.pending) this.ws.send(m);
+      this.pending = [];
+    };
     this.ws.onmessage = (m) => onEvent(JSON.parse(m.data as string));
     this.ws.onclose = onClose;
   }
   send(o: Record<string, unknown>): void {
-    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(o));
+    const m = JSON.stringify(o);
+    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(m);
+    else if (this.ws.readyState === WebSocket.CONNECTING) this.pending.push(m);
   }
-  close(): void { this.ws.close(); }
+  close(): void {
+    this.ws.onclose = null;   // closing on purpose: no reconnect
+    this.ws.close();
+  }
 }
 
 export async function speak(text: string): Promise<{ mime: string; data: Blob }> {
