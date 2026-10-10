@@ -68,6 +68,9 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const rec = useRef<Recognition | null>(null);
   const player = useRef(new ChunkPlayer());
   const held = useRef(false);
+  const toggled = useRef(false);
+  const listening = useRef(false);   // browser speech recognition running for this press     // started with a click: listening until the next click
+  const pressedAt = useRef(0);
   const speechQueue = useRef<string[]>([]);
   const speaking = useRef(false);
   const finalBuf = useRef("");
@@ -102,6 +105,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
             case "voice.session.started":
               attempt = 0;
               setConnected(true);
+              setState(((e.state as VoiceState) || "IDLE"));   // ready: the button works from here
               break;
             case "transcript.partial":
               setPartial(e.text as string);
@@ -170,9 +174,13 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
 
   const pressStart = () => {
     if (!connected) return;
+    if (toggled.current) { toggled.current = false; finishListening(); return; }  // second click: send
     if (state === "SPEAKING" || state === "THINKING" || state === "ACTING") interrupt(); // barge-in
-    if (state !== "IDLE" && state !== "LISTENING" && state !== "INTERRUPTED") return;
+    if (state !== "IDLE" && state !== "LISTENING" && state !== "INTERRUPTED" && state !== "CONNECTING"
+        && state !== "ERROR") return;
     held.current = true;
+    pressedAt.current = Date.now();
+    setState("LISTENING");
     finalBuf.current = "";
     const SR = (window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition });
     const Ctor = SR.SpeechRecognition || SR.webkitSpeechRecognition;
@@ -191,10 +199,25 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
         const live = (finalBuf.current + " " + interim).trim();
         if (live) sock.current?.send({ type: "transcript.partial", text: live });
       };
-      r.onerror = () => { };
-      r.onend = () => { if (held.current) commit(); };
+      r.onerror = (ev: unknown) => {
+        const why = (ev as { error?: string } | null)?.error;
+        if (why === "no-speech" || why === "aborted") return;
+        held.current = false; toggled.current = false; listening.current = false;
+        setState("IDLE");
+        cbRef.current.onError(why === "not-allowed" || why === "service-not-allowed"
+          ? "il browser non mi lascia usare il microfono: clicca il lucchetto vicino all'indirizzo e consenti il microfono, poi ricarica la pagina"
+          : why === "network" ? "il riconoscimento vocale del browser non è raggiungibile (serve internet): prova con Chrome o Edge aggiornati"
+          : why === "audio-capture" ? "nessun microfono trovato: controlla che sia collegato e attivo in Windows"
+          : `riconoscimento vocale non riuscito (${why ?? "errore sconosciuto"})`);
+      };
+      // ends when you release/click again, or by itself after a long silence: either way send what was heard
+      r.onend = () => { if (listening.current) { listening.current = false; commit(); } };
       rec.current = r;
-      r.start();
+      listening.current = true;
+      try { r.start(); } catch {
+        listening.current = false; held.current = false; toggled.current = false; setState("IDLE");
+        cbRef.current.onError("il riconoscimento vocale non è partito: riprova tra un attimo");
+      }
     } else {
       // no browser STT: capture audio and let the server transcribe on release
       void startAudioCapture();
@@ -227,16 +250,24 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   };
 
   const commit = () => {
+    toggled.current = false;
+    held.current = false;
     const text = finalBuf.current.trim();
     if (text) sock.current?.send({ type: "transcript.final", text });
     else sock.current?.send({ type: "speech.end" });
   };
 
-  const pressStop = () => {
-    if (!held.current) return;
+  // hold to talk, or click to start and click again to send
+  const finishListening = () => {
     held.current = false;
     if (rec.current) { rec.current.stop(); return; } // onend -> commit
     stopAudioCapture();
+  };
+
+  const pressStop = () => {
+    if (!held.current || toggled.current) return;
+    if (Date.now() - pressedAt.current < 400) { toggled.current = true; return; }  // a click: keep listening
+    finishListening();
   };
 
   const interrupt = (reason = "user") => {
@@ -270,7 +301,7 @@ export function VoiceDock({ voice, onInterrupt }: {
 }) {
   const { state, connected, partial, pressStart, pressStop } = voice;
   const label = !connected ? "voce offline"
-    : state === "LISTENING" ? "Ti ascolto"
+    : state === "LISTENING" ? "Ti ascolto · clicca per inviare"
     : state === "TRANSCRIBING" ? "Trascrivo"
     : state === "UNDERSTANDING" ? "Capisco"
     : state === "THINKING" ? "Sto pensando"
