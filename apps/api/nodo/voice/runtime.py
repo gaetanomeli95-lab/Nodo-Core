@@ -75,6 +75,7 @@ class VoiceRuntime:
         # --- Gemini Live engine (voice_engine=auto + key configured): real speech-to-speech ---
         self._live: live_engine.LiveBridge | None = None
         self._live_reconnects = 0         # transparent reconnects attempted (never loop forever)
+        self._live_failed_models: set[str] = set()   # models that dropped us: skipped on reconnect
         self._live_muted = False          # "Ferma" pressed: drop outgoing audio until the turn ends
         self._in_text = ""                # accumulated input transcription of the current turn
         self._out_text: list[str] = []    # accumulated output transcription (what NODO is saying)
@@ -123,6 +124,8 @@ class VoiceRuntime:
         self._audio_mime = msg.audio_mime
         if vs.state == VoiceState.CONNECTING:
             await self._set_state(VoiceState.IDLE)
+        self._live_failed_models = set()
+        self._live_reconnects = 0
         if self._want_live():
             try:
                 await asyncio.wait_for(self._start_live(), timeout=25)
@@ -362,7 +365,7 @@ class VoiceRuntime:
                      for s in Toolbox(core, conv, rid, "", "voice").specs()]
         self._live = live_engine.LiveBridge(self.c.settings, self._on_live_event,
                                             getattr(self.c, "live_connect", None))
-        await self._live.start(system, decls, self.vs.language)
+        await self._live.start(system, decls, self.vs.language, exclude=self._live_failed_models)
 
     async def _live_go(self, *path: VoiceState) -> None:
         """Walk the state machine step by step: skips transitions that are not allowed."""
@@ -423,14 +426,17 @@ class VoiceRuntime:
         elif kind == "closed":
             if self._live is not None and not self._dead:
                 live, self._live = self._live, None
+                if live.model:                                # don't pick the same model again
+                    self._live_failed_models.add(live.model)
                 await live.close()
                 reason = str(ev.get("error") or "")[:150]
-                log.warning("live session closed (%s); reconnects so far: %s",
-                            reason or "nessun motivo", self._live_reconnects)
-                if self._live_reconnects < 1:
+                log.warning("live session closed on %s (%s); reconnects so far: %s",
+                            live.model, reason or "nessun motivo", self._live_reconnects)
+                if self._live_reconnects < 3:
                     self._live_reconnects += 1
                     try:
-                        await self._start_live()             # one transparent reconnect, then stop
+                        await asyncio.sleep(1)               # let the server breathe before retrying
+                        await self._start_live()             # transparent reconnect on the next model
                         return
                     except Exception as e:
                         log.warning("live reconnect failed: %s", e)

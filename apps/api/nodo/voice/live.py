@@ -26,8 +26,11 @@ log = logging.getLogger("nodo.voice.live")
 IN_MIME = "audio/pcm;rate=16000"    # what the browser microphone sends us (16-bit PCM, mono)
 OUT_MIME = "audio/pcm;rate=24000"   # what Gemini Live sends back (16-bit PCM, mono)
 
-# tried in order until one accepts the connection (names change; a free key may not have them all)
-LIVE_MODELS = ("gemini-2.5-flash-native-audio-preview-12-2025", "gemini-live-2.5-flash-preview",
+# tried in order until one accepts the connection (names change; a key may not have them all).
+# The *-preview-12/09-2025 snapshots are known to drop sessions mid-call (server-side 1007),
+# so the newer live models come first and a dropped model is skipped on reconnect.
+LIVE_MODELS = ("gemini-3.1-flash-live-preview", "gemini-live-2.5-flash-native-audio",
+               "gemini-2.5-flash-native-audio-preview-12-2025",
                "gemini-2.5-flash-native-audio-preview-09-2025", "gemini-2.0-flash-live-001")
 
 # returns an async context manager yielding a live session (duck-typed: send_realtime_input,
@@ -81,7 +84,8 @@ class LiveBridge:
         self._dead = False
         self._send_lock = asyncio.Lock()
 
-    async def start(self, system: str, tool_decls: list[dict], language: str) -> None:
+    async def start(self, system: str, tool_decls: list[dict], language: str,
+                    exclude: set[str] | None = None) -> None:
         lang = language if "-" in language else f"{language}-{language.upper()}"
         config = {
             "response_modalities": ["AUDIO"],
@@ -99,6 +103,7 @@ class LiveBridge:
         config["context_window_compression"] = {"sliding_window": {}}
         config["session_resumption"] = {}
         models = [self.settings.gemini_live_model] if self.settings.gemini_live_model else LIVE_MODELS
+        models = [m for m in models if not exclude or m not in exclude]   # skip models that just dropped us
         last: Exception | None = None
         for model in models:
             try:
