@@ -10,7 +10,7 @@ from nodo.config import Settings, get_settings
 from nodo.core.orchestrator import NodoCore
 from nodo.core.permissions import PermissionPolicy
 from nodo.db.models import Organization, User
-from nodo.night.notify import Notifier, build_notifier
+from nodo.night.notify import Notifier, NullNotifier, build_notifier  # demo never messages your phone
 from nodo.night.probe import BrowserProber, HttpProber, Prober
 from nodo.providers.base import ModelProvider
 from nodo.providers.registry import build_providers
@@ -36,6 +36,7 @@ class Container:
     notifier: Notifier | None = None
     demo: object | None = None            # DemoWorld in NODO_ENV=DEMO
     scheduler: object | None = None       # NightScheduler when running inside the API
+    telegram: object | None = None        # TelegramChannel (two-way) when configured
     night_verify_delay: float = 20.0
     night_retry_delay: float = 5.0
     night_poll_interval: float = 15.0
@@ -94,7 +95,7 @@ def build_container(settings: Settings | None = None, **overrides) -> Container:
         else:
             prober = BrowserProber() if s.night_browser_checks else HttpProber()
     c = Container(s, providers, gh, stt, tts, VoiceSessionStore(), PermissionPolicy(), vercel=vercel, repo=repo,
-                  prober=prober, notifier=build_notifier(s), demo=demo)
+                  prober=prober, notifier=build_notifier(s) if demo is None else NullNotifier(), demo=demo)
     for k, v in overrides.items():
         setattr(c, k, v)
     return c

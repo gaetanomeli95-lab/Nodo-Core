@@ -78,6 +78,22 @@ Testo o voce, nel pannello *Comando*:
 - «cosa devo approvare?» → le decisioni in attesa.
 - «buongiorno, cosa abbiamo oggi?» → le priorità del giorno più una riga sul turno di notte.
 
+## Dal telefono (Telegram)
+
+Con `NODO_TELEGRAM_BOT_TOKEN` e `NODO_TELEGRAM_CHAT_ID` NODO ti scrive e ti ascolta (`nodo/channels/telegram.py`):
+
+- Al mattino arrivano il briefing e una notifica per ogni decisione, con i pulsanti **Pubblica/Approva** e
+  **Rifiuta**. Ogni pulsante è legato a *quella* approvazione: toccarlo la esegue e aggiorna il messaggio con
+  l'esito. Dopo un merge ti arriva anche il risultato della verifica.
+- Di notte, se un sito va giù, il messaggio d'allarme è seguito dalla correzione pronta, con i pulsanti.
+- Puoi scrivergli come nel pannello, o con /briefing /siti /controlla /approvazioni /aiuto. «sì» e «no»
+  valgono solo per la decisione che ti ha appena mostrato, oppure se ce n'è una sola in attesa: altrimenti ti
+  chiede di usare i pulsanti.
+- I vocali vengono trascritti se c'è un riconoscimento vocale sul server (`NODO_STT_PROVIDER=openai`).
+- Funziona con il long polling: non serve un indirizzo pubblico né aprire porte del router. Risponde solo al
+  tuo chat id e ignora i messaggi vecchi arrivati mentre NODO era spento. Si disattiva con
+  `NODO_TELEGRAM_COMMANDS=false` (resteranno solo le notifiche). In modalità DEMO non scrive mai al telefono.
+
 ## Prova senza accessi
 
 `demo-nodo.bat` (oppure `NODO_ENV=DEMO`) avvia un mondo simulato con tre siti finti. Una notte simulata

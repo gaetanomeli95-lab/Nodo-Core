@@ -192,6 +192,8 @@ async def night_status(c: Container = Depends(container), db: Session = Depends(
         "connectors": {"vercel": type(c.vercel).__name__ if c.vercel else None,
                        "github": type(c.repo).__name__ if c.repo else None,
                        "notifier": c.notifier.name if c.notifier and c.notifier.enabled else None,
+                       "telegram_listening": c.telegram is not None,
+                       "telegram_error": getattr(c.telegram, "last_error", None),
                        "prober": type(c.prober).__name__},
         "demo": c.demo is not None,
     }

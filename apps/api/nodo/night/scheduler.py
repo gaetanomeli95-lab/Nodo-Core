@@ -197,6 +197,9 @@ class NightScheduler:
                 text = b.text
                 if b.pending:
                     text += "\n\nApri NODO per approvare o rifiutare."
-                sent = await self.c.notifier.send(text)
+                sent = await self.c.notifier.send(text if not b.pending else b.text)
+                if sent and b.pending:  # each decision as its own message, with Pubblica/Rifiuta buttons
+                    from nodo.channels.telegram import send_decisions
+                    await send_decisions(self.c.notifier, db, org)
                 run.summary = b.to_dict() | {"sent_via": self.c.notifier.name if sent else None}
             return {"run_id": run.id, "sent": sent, **b.to_dict()}

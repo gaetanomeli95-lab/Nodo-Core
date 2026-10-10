@@ -24,7 +24,8 @@ Status: **V0.2 — foundation + night shift** (see [Current capabilities](#curre
 While you sleep NODO watches every Vercel site (deploys, pages with a real browser, runtime errors, certificate,
 Dependabot, CI), rolls back a deploy that took production down, rebuilds builds that failed on transient errors,
 prepares a fix as a branch + PR with a tested Vercel preview, writes drafts of planned content, and in the
-morning tells you what happened ("cosa hai fatto stanotte?"), in the dashboard, by voice or on Telegram.
+morning tells you what happened ("cosa hai fatto stanotte?"), in the dashboard, by voice or on Telegram — where
+you can also ask questions and approve or reject a fix with one tap.
 Publishing a fix always waits for your approval. Details: [docs/NIGHT_SHIFT.md](docs/NIGHT_SHIFT.md) ·
 decision record: [ADR-009](docs/adr/ADR-009-night-shift.md).
 
@@ -122,7 +123,7 @@ Modes: `FREE` (default; never pays), `BALANCED`, `PERFORMANCE`, `PRIVATE` (local
 
 ```bash
 cd apps/api
-pytest -q                 # 85 tests: router, permissions, memory, orchestrator, agents, API, voice, night shift
+pytest -q                 # 95 tests: router, permissions, memory, orchestrator, agents, API, voice, night shift
 pytest -q evals           # AI behaviour scenarios (evals/scenarios/v01.json), deterministic & free
 ruff check nodo tests evals
 cd ../web && npm run build

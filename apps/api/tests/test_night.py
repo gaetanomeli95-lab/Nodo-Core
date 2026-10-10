@@ -15,7 +15,7 @@ from nodo.night.briefing import compose_briefing, latest_or_live, tzinfo
 from nodo.night.fixer import FixAgent
 from nodo.night.notify import FakeNotifier
 from nodo.night.scheduler import SchedulerState, decide, window_bounds
-from nodo.night.simulation import DEMO_BUG, DEMO_OWNER, SimHealth, build_demo_world
+from nodo.night.simulation import DEMO_BUG, DEMO_OWNER, SimHealth
 from nodo.providers.deterministic import FakeModelProvider
 
 
@@ -26,11 +26,6 @@ def make_container(world, settings: Settings | None = None, with_coder: bool = T
                         notifier=FakeNotifier())
     c.night_verify_delay = c.night_retry_delay = c.night_poll_interval = 0
     return c
-
-
-@pytest.fixture
-def world():
-    return build_demo_world()
 
 
 @pytest.fixture
@@ -112,7 +107,9 @@ async def test_full_night(db, seeded, nc, world):
     assert item.status == "draft" and "Bozza" in item.body and item.generated_by_run_id == run.id
 
     # critical alert sent immediately, once
-    assert len(nc.notifier.sent) == 1 and "pbcare-platform" in nc.notifier.sent[0]
+    assert len(nc.notifier.sent) == 2 and "pbcare-platform" in nc.notifier.sent[0]
+    assert nc.notifier.buttons[0] is None and "Da decidere" in nc.notifier.sent[1]
+    assert nc.notifier.buttons[1][0][0] == ("Pubblica", f"a:{fix.approval_id}:y")
 
     b = latest_or_live(db, seeded, nc.settings)
     assert "rollback" in b.text.lower() or "versione" in b.text

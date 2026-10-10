@@ -37,12 +37,19 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
             from nodo.night.scheduler import NightScheduler
             c.scheduler = NightScheduler(c)
             c.scheduler.start()
+        s = settings
+        if s.telegram_bot_token and s.telegram_chat_id and s.telegram_commands and s.env not in ("TEST", "DEMO"):
+            from nodo.channels.telegram import TelegramApi, TelegramChannel
+            c.telegram = TelegramChannel(c, TelegramApi(s.telegram_bot_token), s.telegram_chat_id)
+            c.telegram.start()
         log.info("NODO CORE started env=%s mode=%s providers=%s vercel=%s github=%s night=%s", settings.env,
                  settings.mode, [p.name for p in c.providers], type(c.vercel).__name__ if c.vercel else None,
                  type(c.repo).__name__ if c.repo else None, "on" if c.scheduler else "off")
         yield
         if c.scheduler is not None:
             await c.scheduler.stop()
+        if c.telegram is not None:
+            await c.telegram.stop()
 
     app = FastAPI(title="NODO CORE", version="0.2.0", lifespan=lifespan)
     app.state.settings = settings

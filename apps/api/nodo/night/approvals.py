@@ -214,6 +214,12 @@ async def post_merge_watch(c: Container, fix_id: str, merge_sha: str | None, tim
                 summary = f"La correzione (PR #{pr}) è online ma il sito non risponde bene ({r.short()})."
     except Exception as e:
         summary = f"Verifica dopo la pubblicazione non riuscita: {e}"
+    notifier = c.notifier
+    if notifier is not None and notifier.enabled:  # you approved it (maybe from the phone): tell how it went
+        try:
+            await notifier.send(f"NODO · {summary}")
+        except Exception:
+            pass
     with session_scope() as db:
         db.add(NightAction(organization_id=org, site_id=site_id, incident_id=incident_id, action="verify",
                            status=status, summary=summary, details=details))

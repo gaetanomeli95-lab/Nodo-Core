@@ -17,39 +17,39 @@ class Notifier(Protocol):
     @property
     def enabled(self) -> bool: ...
 
-    async def send(self, text: str) -> bool: ...
+    async def send(self, text: str, buttons=None) -> bool: ...
 
 
 class NullNotifier:
     name = "none"
     enabled = False
+    supports_buttons = False
 
-    async def send(self, text: str) -> bool:
+    async def send(self, text: str, buttons=None) -> bool:
         return False
 
 
 class TelegramNotifier:
     name = "telegram"
+    supports_buttons = True
 
     def __init__(self, bot_token: str, chat_id: str, transport: httpx.AsyncBaseTransport | None = None):
-        self.bot_token, self.chat_id, self.transport = bot_token, chat_id, transport
+        from nodo.channels.telegram import TelegramApi
+        self.bot_token, self.chat_id = bot_token, chat_id
+        self.api = TelegramApi(bot_token, transport=transport)
 
     @property
     def enabled(self) -> bool:
         return bool(self.bot_token and self.chat_id)
 
-    async def send(self, text: str) -> bool:
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+    async def send(self, text: str, buttons=None) -> bool:
+        from nodo.channels.telegram import TelegramError, chunks
         try:
-            async with httpx.AsyncClient(timeout=15, transport=self.transport) as c:
-                for i in range(0, len(text), 3900):  # Telegram limit is 4096 chars per message
-                    r = await c.post(url, json={"chat_id": self.chat_id, "text": text[i:i + 3900],
-                                                "disable_web_page_preview": True})
-                    if r.status_code >= 400:
-                        log.warning("telegram send failed: HTTP %s %s", r.status_code, r.text[:200])
-                        return False
+            parts = chunks(text)
+            for i, part in enumerate(parts):  # buttons go under the last part
+                await self.api.send_message(self.chat_id, part, buttons if i == len(parts) - 1 else None)
             return True
-        except httpx.HTTPError as e:
+        except (TelegramError, httpx.HTTPError) as e:
             log.warning("telegram send failed: %s", e)
             return False
 
@@ -57,12 +57,15 @@ class TelegramNotifier:
 class FakeNotifier:
     name = "fake"
     enabled = True
+    supports_buttons = True
 
     def __init__(self):
         self.sent: list[str] = []
+        self.buttons: list[list | None] = []
 
-    async def send(self, text: str) -> bool:
+    async def send(self, text: str, buttons=None) -> bool:
         self.sent.append(text)
+        self.buttons.append(buttons)
         return True
 
 

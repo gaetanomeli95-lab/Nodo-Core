@@ -68,3 +68,10 @@ def client(engine, settings, container):
         with session_scope() as s:
             seed_demo(s)
         yield c
+
+
+@pytest.fixture
+def world():
+    """Simulated Vercel + GitHub + sites + coder (nodo/night/simulation.py)."""
+    from nodo.night.simulation import build_demo_world
+    return build_demo_world()

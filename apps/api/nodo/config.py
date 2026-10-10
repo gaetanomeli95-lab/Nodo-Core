@@ -97,6 +97,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     notify_critical: bool = True                # send an alert immediately for critical incidents (if a notifier is set)
+    telegram_commands: bool = True              # two-way: answer your messages, buttons and "sì"/"no" from the phone
 
 
 @lru_cache

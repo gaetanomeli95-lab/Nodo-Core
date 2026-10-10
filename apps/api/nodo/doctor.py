@@ -79,7 +79,8 @@ async def run_checks(c) -> list[Check]:
     if c.notifier is not None and c.notifier.enabled:
         ok = await _telegram_ok(s.telegram_bot_token)
         out.append(Check("Notifiche Telegram", "ok" if ok else "error",
-                         "il bot risponde: il briefing del mattino arriverà sul telefono." if ok else
+                         ("il bot risponde: briefing e decisioni arrivano sul telefono"
+                          + (", e puoi scrivergli e approvare con i pulsanti." if s.telegram_commands else ".")) if ok else
                          "il token del bot non è valido.", "" if ok else "Ricrea il token con @BotFather."))
     else:
         out.append(Check("Notifiche Telegram", "optional", "non configurate: il briefing resta nel pannello di NODO.",

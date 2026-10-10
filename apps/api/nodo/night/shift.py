@@ -977,6 +977,8 @@ class NightShift:
         if await n.send("\n".join(lines)):
             for inc in fresh:
                 inc.notified_at = datetime.now(UTC)
+            from nodo.channels.telegram import send_decisions
+            await send_decisions(n, self.s, self.org, site_id=site.id)  # e.g. the fix, with Pubblica/Rifiuta
 
 
 def bypass_secret(raw: str | None, site: Site) -> str | None:

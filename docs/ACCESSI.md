@@ -71,6 +71,10 @@ le build e ti scrive la diagnosi, ma non prepara correzioni.
    NODO_TELEGRAM_CHAT_ID=123456789
    ```
 5. Riavvia NODO. Da ora ricevi il briefing alle 7:30, e subito un messaggio se di notte un sito va giù.
+6. Puoi anche **scrivergli**: «cosa hai fatto stanotte?», «come stanno i siti?», «controlla i siti», oppure i
+   comandi /briefing /siti /controlla /approvazioni. Le decisioni arrivano con i pulsanti **Pubblica** e
+   **Rifiuta**: li tocchi dal telefono e NODO esegue e ti dice com'è andata. Risponde solo a te (al tuo
+   chat id); per i messaggi vocali serve `NODO_STT_PROVIDER=openai` con una chiave OpenAI.
 
 ---
 
