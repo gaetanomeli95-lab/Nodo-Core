@@ -29,14 +29,18 @@ OUT_MIME = "audio/pcm;rate=24000"   # what Gemini Live sends back (16-bit PCM, m
 # tried in order until one accepts the connection (names change; a key may not have them all).
 # The *-preview-12/09-2025 snapshots are known to drop sessions mid-call (server-side 1007),
 # so the newer live models come first and a dropped model is skipped on reconnect.
-LIVE_MODELS = ("gemini-3.1-flash-live-preview", "gemini-live-2.5-flash-native-audio",
+LIVE_MODELS = ("gemini-3.8-live", "gemini-3.1-flash-live-preview", "gemini-2.5-flash-native-audio-latest",
                "gemini-2.5-flash-native-audio-preview-12-2025",
-               "gemini-2.5-flash-native-audio-preview-09-2025", "gemini-2.0-flash-live-001")
+               "gemini-2.5-flash-native-audio-preview-09-2025")
 
 # returns an async context manager yielding a live session (duck-typed: send_realtime_input,
 # send_client_content, send_tool_response, receive()). In tests a fake factory replaces this.
 ConnectFactory = Callable[[str, str, dict], Any]
 OnEvent = Callable[[dict], Awaitable[None]]
+
+
+class LiveDropped(Exception):
+    """The live socket is gone (closed mid-send): the runtime treats it like a 'closed' event."""
 
 
 def missing_reason(settings, container=None) -> str | None:
@@ -123,24 +127,36 @@ class LiveBridge:
         if self._session is None or self._dead:
             return
         async with self._send_lock:
-            await self._session.send_realtime_input(audio={"data": pcm, "mime_type": IN_MIME})
+            try:
+                await self._session.send_realtime_input(audio={"data": pcm, "mime_type": IN_MIME})
+            except Exception as e:
+                self._dead = True                       # the socket is gone: tell the runtime to drop us
+                raise LiveDropped(f"{type(e).__name__}: {e}") from e
 
     async def inject(self, text: str, respond: bool) -> None:
         """Text into the conversation: context-only (respond=False) or a turn the model answers."""
         if self._session is None or self._dead:
             return
         async with self._send_lock:
-            await self._session.send_client_content(turns=[{"role": "user", "parts": [{"text": text}]}],
-                                                    turn_complete=respond)
+            try:
+                await self._session.send_client_content(
+                    turns=[{"role": "user", "parts": [{"text": text}]}], turn_complete=respond)
+            except Exception as e:
+                self._dead = True
+                raise LiveDropped(f"{type(e).__name__}: {e}") from e
 
     async def tool_response(self, calls: list[tuple[str, str, dict]]) -> None:
         """(call_id, name, result_dict) back to the model so it can comment on the outcome."""
         if self._session is None or self._dead:
             return
         async with self._send_lock:
-            await self._session.send_tool_response(function_responses=[
-                {"id": cid, "name": name, "response": {"result": result}}
-                for cid, name, result in calls])
+            try:
+                await self._session.send_tool_response(function_responses=[
+                    {"id": cid, "name": name, "response": {"result": result}}
+                    for cid, name, result in calls])
+            except Exception as e:
+                self._dead = True
+                raise LiveDropped(f"{type(e).__name__}: {e}") from e
 
     async def close(self) -> None:
         self._dead = True

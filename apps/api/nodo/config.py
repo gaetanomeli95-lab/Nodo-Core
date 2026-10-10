@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     groq_model: str = "llama-3.3-70b-versatile"
     gemini_api_key: str | None = None            # Google AI Studio key: free tier on Flash models
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.5-flash"     # 2.5 is closed to keys created after the 3.x rollout
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-sonnet-4-5"
     anthropic_base_url: str = "https://api.anthropic.com/v1"

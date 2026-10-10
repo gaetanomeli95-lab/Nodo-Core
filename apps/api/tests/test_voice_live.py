@@ -74,6 +74,14 @@ def make_connect(script, holder, fail_models=()):
     return connect
 
 
+def _open_live(ws):
+    """session.start only marks the engine as wanted; the live session opens on the first input."""
+    ws.send_json({"type": "session.start", "language": "it"})
+    _, started = _recv_until(ws, "voice.session.started")
+    ws.send_json({"type": "audio.chunk", "data": "AAECAwQ=", "mime": "audio/pcm;rate=16000"})
+    return started
+
+
 def _recv_until(ws, types, limit=300):
     want = (types,) if isinstance(types, str) else types
     events = []
@@ -96,10 +104,8 @@ def test_live_turn_streams_audio_and_text(client, container):
     holder = []
     container.live_connect = make_connect(script, holder)
     with client.websocket_connect(WS) as ws:
-        ws.send_json({"type": "session.start", "language": "it"})
-        _, started = _recv_until(ws, "voice.session.started")
+        started = _open_live(ws)
         assert started["engine"] == "live"
-        ws.send_json({"type": "audio.chunk", "data": "AAECAwQ=", "mime": "audio/pcm;rate=16000"})
         events, done = _recv_until(ws, "voice.turn.done")
         types = [e["type"] for e in events]
         assert "transcript.final" in types and "nodo.token" in types and "tts.chunk" in types
@@ -120,8 +126,8 @@ def test_live_tool_call_uses_the_same_toolbox(client, container, seeded):
     holder = []
     container.live_connect = make_connect(script, holder)
     with client.websocket_connect(WS) as ws:
-        ws.send_json({"type": "session.start", "language": "it"})
-        _recv_until(ws, "voice.session.started")
+        started = _open_live(ws)
+        assert started["engine"] == "live"
         events, _ = _recv_until(ws, "voice.turn.done")
         steps = [e for e in events if e["type"] == "nodo.step"]
         assert any(s["step"] == "tool:sites_status" and s["status"] == "done" for s in steps)
@@ -139,8 +145,8 @@ def test_live_barge_in(client, container):
     holder = []
     container.live_connect = make_connect(script, holder)
     with client.websocket_connect(WS) as ws:
-        ws.send_json({"type": "session.start", "language": "it"})
-        _recv_until(ws, "voice.session.started")
+        started = _open_live(ws)
+        assert started["engine"] == "live"
         events, interrupted = _recv_until(ws, "voice.interrupted")
         assert interrupted["reason"] == "barge_in"
         more, _ = _recv_until(ws, "voice.turn.done")
@@ -150,14 +156,15 @@ def test_live_barge_in(client, container):
 
 def test_live_ladder_tries_the_next_model(client, container):
     """A model name this key does not have -> the next rung on the ladder is tried."""
+    from nodo.voice.live import LIVE_MODELS
     holder = []
     container.live_connect = make_connect([_sc(turn_complete=True)], holder,
-                                          fail_models={"gemini-2.5-flash-native-audio-preview-12-2025"})
+                                          fail_models={LIVE_MODELS[0]})
     with client.websocket_connect(WS) as ws:
-        ws.send_json({"type": "session.start", "language": "it"})
-        _, started = _recv_until(ws, "voice.session.started")
+        started = _open_live(ws)
         assert started["engine"] == "live"
-    assert holder and holder[0][0] != "gemini-2.5-flash-native-audio-preview-12-2025"
+        _recv_until(ws, "voice.turn.done")
+    assert holder and holder[0][0] == LIVE_MODELS[1]
 
 
 def test_live_reconnects_once_when_the_session_drops(client, container):
@@ -177,8 +184,7 @@ def test_live_reconnects_once_when_the_session_drops(client, container):
 
     container.live_connect = connect
     with client.websocket_connect(WS) as ws:
-        ws.send_json({"type": "session.start", "language": "it"})
-        _, started = _recv_until(ws, "voice.session.started")
+        started = _open_live(ws)
         assert started["engine"] == "live"
         _recv_until(ws, "voice.turn.done")
         deadline = time.time() + 5
@@ -230,8 +236,7 @@ def test_approval_answer_speaks_through_live(client, db, container):
     holder = []
     container.live_connect = make_connect([], holder)
     with client.websocket_connect(WS) as ws:
-        ws.send_json({"type": "session.start", "language": "it"})
-        _, started = _recv_until(ws, "voice.session.started")
+        started = _open_live(ws)
         vs = container.voice_sessions.get(started["session_id"])
         vs.pending_approval_id = a.id
         vs.state = VoiceState.WAITING_FOR_APPROVAL

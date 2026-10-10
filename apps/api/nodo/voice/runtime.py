@@ -74,6 +74,8 @@ class VoiceRuntime:
         self._stt_task: asyncio.Task | None = None
         # --- Gemini Live engine (voice_engine=auto + key configured): real speech-to-speech ---
         self._live: live_engine.LiveBridge | None = None
+        self._live_wanted = False         # live engine available: it connects on the FIRST input, not at page load
+        self._live_used = False           # the session has carried real conversation: worth reconnecting
         self._live_reconnects = 0         # transparent reconnects attempted (never loop forever)
         self._live_failed_models: set[str] = set()   # models that dropped us: skipped on reconnect
         self._live_muted = False          # "Ferma" pressed: drop outgoing audio until the turn ends
@@ -126,15 +128,10 @@ class VoiceRuntime:
             await self._set_state(VoiceState.IDLE)
         self._live_failed_models = set()
         self._live_reconnects = 0
-        if self._want_live():
-            try:
-                await asyncio.wait_for(self._start_live(), timeout=25)
-            except Exception as e:
-                log.exception("live voice engine failed to start")
-                self._live = None
-                await self._send("error", where="live",
-                                 message=f"voce dal vivo non partita ({str(e)[:160]}): uso la voce del browser")
-        engine = "live" if self._live is not None else "browser"
+        self._live_used = False
+        self._live_wanted = self._want_live()
+        # the live session opens lazily on the first real input: no idle sessions dying every 20s
+        engine = "live" if self._live_wanted else "browser"
         self._log("voice.session.started", {"language": vs.language, "engine": engine})
         await self._send("voice.session.started", state=str(vs.state), conversation_id=vs.conversation_id,
                          stt=self.c.stt.name, tts=self.c.tts.name, engine=engine)
@@ -142,14 +139,39 @@ class VoiceRuntime:
     def _want_live(self) -> bool:
         return live_engine.missing_reason(self.c.settings, self.c) is None
 
+    async def _ensure_live(self) -> bool:
+        """Opens the live session on demand. False = fell back to the browser chain for good."""
+        if self._live is not None:
+            return True
+        if not self._live_wanted:
+            return False
+        try:
+            await asyncio.wait_for(self._start_live(), timeout=25)
+            return True
+        except Exception as e:
+            log.exception("live voice engine failed to start")
+            self._live = None
+            self._live_wanted = False
+            self._audio.clear()
+            await self._send("error", where="live",
+                             message=f"voce dal vivo non partita ({str(e)[:160]}): uso la voce del browser")
+            await self._send("voice.engine", engine="browser")
+            return False
+
     async def _on_audio(self, msg: protocol.AudioChunk) -> None:
         vs = self.vs
-        if self._live is not None:
+        if self._live_wanted:
+            if not await self._ensure_live() or self._live is None:
+                return                                   # the mic PCM cannot feed the browser chain anyway
             if vs.state == VoiceState.IDLE:
                 await self._set_state(VoiceState.LISTENING)
             self._live_muted = False
+            self._live_used = True
             vs.mark("speech_started")
-            await self._live.send_audio(protocol.decode_audio(msg.data))   # Gemini hears you directly
+            try:
+                await self._live.send_audio(protocol.decode_audio(msg.data))  # Gemini hears you directly
+            except live_engine.LiveDropped as e:
+                await self._live_dropped(str(e))
             return
         if vs.state == VoiceState.IDLE:
             await self._set_state(VoiceState.LISTENING)
@@ -223,14 +245,19 @@ class VoiceRuntime:
 
     async def _on_final(self, text: str) -> None:
         self.vs.mark("speech_end")
-        if self._live is not None:      # typed text also works in a live session: Gemini answers it
-            if not self.vs.turn_active:
-                self.vs.begin_turn()
-                self.vs.turn_active = True
-            self._in_text = text
-            await self._send("transcript.final", text=text, provider="client")
-            await self._live.inject(text, respond=True)
-            return
+        if self._live_wanted:           # typed text also works in a live session: Gemini answers it
+            if await self._ensure_live() and self._live is not None:
+                if not self.vs.turn_active:
+                    self.vs.begin_turn()
+                    self.vs.turn_active = True
+                self._in_text = text
+                self._live_used = True
+                await self._send("transcript.final", text=text, provider="client")
+                try:
+                    await self._live.inject(text, respond=True)
+                except live_engine.LiveDropped as e:
+                    await self._live_dropped(str(e))
+                return
         await self._send("transcript.final", text=text, provider="client")
         await self._begin_turn(text)
 
@@ -365,7 +392,11 @@ class VoiceRuntime:
                      for s in Toolbox(core, conv, rid, "", "voice").specs()]
         self._live = live_engine.LiveBridge(self.c.settings, self._on_live_event,
                                             getattr(self.c, "live_connect", None))
-        await self._live.start(system, decls, self.vs.language, exclude=self._live_failed_models)
+        try:
+            await self._live.start(system, decls, self.vs.language, exclude=self._live_failed_models)
+        except Exception:
+            self._live = None                            # a half-open bridge would swallow the next audio
+            raise
 
     async def _live_go(self, *path: VoiceState) -> None:
         """Walk the state machine step by step: skips transitions that are not allowed."""
@@ -424,27 +455,35 @@ class VoiceRuntime:
         elif kind == "turn_complete":
             await self._live_end_turn()
         elif kind == "closed":
-            if self._live is not None and not self._dead:
-                live, self._live = self._live, None
-                if live.model:                                # don't pick the same model again
-                    self._live_failed_models.add(live.model)
-                await live.close()
-                reason = str(ev.get("error") or "")[:150]
-                log.warning("live session closed on %s (%s); reconnects so far: %s",
-                            live.model, reason or "nessun motivo", self._live_reconnects)
-                if self._live_reconnects < 3:
-                    self._live_reconnects += 1
-                    try:
-                        await asyncio.sleep(1)               # let the server breathe before retrying
-                        await self._start_live()             # transparent reconnect on the next model
-                        return
-                    except Exception as e:
-                        log.warning("live reconnect failed: %s", e)
-                why = f" ({reason})" if reason else ""
-                await self._send("error", where="live",
-                                 message=f"la voce dal vivo si è fermata{why}: "
-                                         "clicca il microfono per usare la voce del browser")
-                await self._send("voice.engine", engine="browser")   # client returns to push-to-talk
+            await self._live_dropped(str(ev.get("error") or ""))
+
+    async def _live_dropped(self, reason: str) -> None:
+        """The live session ended: reconnect transparently only if it was actually in use."""
+        if self._live is None or self._dead:
+            return
+        live, self._live = self._live, None
+        if reason and "terminata" not in reason and live.model:
+            self._live_failed_models.add(live.model)     # an error close: try the next model on the ladder
+        await live.close()
+        reason = reason[:150]
+        log.warning("live session closed on %s (%s); reconnects so far: %s",
+                    live.model, reason or "nessun motivo", self._live_reconnects)
+        if self._live_used and self._live_reconnects < 3:
+            self._live_reconnects += 1
+            try:
+                await asyncio.sleep(1)                   # let the server breathe before retrying
+                await self._start_live()
+                return
+            except Exception as e:
+                log.warning("live reconnect failed: %s", e)
+        if self._live_used:
+            self._live_wanted = False
+            self._audio.clear()
+            why = f" ({reason})" if reason else ""
+            await self._send("error", where="live",
+                             message=f"la voce dal vivo si è fermata{why}: "
+                                     "clicca il microfono per usare la voce del browser")
+            await self._send("voice.engine", engine="browser")   # client returns to push-to-talk
 
     async def _live_tool_calls(self, calls: list[dict]) -> None:
         """Execute a Live tool call through the SAME Toolbox as the text brain: guards unchanged."""
@@ -554,8 +593,11 @@ class VoiceRuntime:
         ack = out.get("message") or ("Confermato." if approve else "Va bene, non lo faccio.")
         await self._send("nodo.token", delta=ack)
         if self._live is not None:
-            await self._live.inject(f"[ISTRUZIONE DI NODO, non dell'utente] {ack} "
-                                    "Dillo a voce in una frase breve.", respond=True)
+            try:
+                await self._live.inject(f"[ISTRUZIONE DI NODO, non dell'utente] {ack} "
+                                        "Dillo a voce in una frase breve.", respond=True)
+            except live_engine.LiveDropped as e:
+                await self._live_dropped(str(e))
         else:
             await self._speak_text(ack)
         if vs.state == VoiceState.WAITING_FOR_APPROVAL:
