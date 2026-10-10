@@ -20,6 +20,8 @@ NODO usa **Claude Code**, il programma ufficiale di Anthropic che funziona con i
 una volta e fai l'accesso: da quel momento NODO ragiona con Claude, dentro i limiti del tuo piano, senza chiavi
 API e senza pagare altro.
 
+Il modo più semplice: dopo il passo 1, fai doppio click su **`attiva-cervello.bat`** (nella cartella di NODO): sistema il comando `claude` e ti fa fare l'accesso.
+
 1. Apri **PowerShell** (tasto Start, scrivi «PowerShell», Invio) e incolla:
    ```
    irm https://claude.ai/install.ps1 | iex
