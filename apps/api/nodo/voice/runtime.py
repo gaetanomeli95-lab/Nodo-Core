@@ -165,7 +165,9 @@ class VoiceRuntime:
                 return                                   # the mic PCM cannot feed the browser chain anyway
             if vs.state == VoiceState.IDLE:
                 await self._set_state(VoiceState.LISTENING)
-            self._live_muted = False
+            # Do not unmute on every PCM packet: "Ferma" must suppress the
+            # remainder of the current response even while the mic stays open.
+            # A new input transcription (or turn completion) unmutes instead.
             self._live_used = True
             vs.mark("speech_started")
             try:
@@ -431,6 +433,8 @@ class VoiceRuntime:
             if vs.state != VoiceState.UNDERSTANDING:
                 await self._live_go(VoiceState.LISTENING, VoiceState.UNDERSTANDING)
         elif kind == "output":                               # Gemini transcribing its own answer
+            if self._live_muted:
+                return  # a spoken stop also suppresses stale text from the interrupted response
             self._out_text.append(ev["text"])
             vs.mark("model_first_token")
             if vs.state != VoiceState.SPEAKING:
