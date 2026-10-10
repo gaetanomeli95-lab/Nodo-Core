@@ -157,6 +157,11 @@ pre.diff .add { color: #9fd3a8; background: rgba(120, 200, 140, .08); } pre.diff
 .setup-list li.warning .icon { border-color: var(--warn); color: var(--warn); }
 .setup-list p { margin: 2px 0 0; font-size: 13px; }
 .setup-list p.how { color: var(--muted); font-size: 12px; }
+.keyform { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.keyform h4 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.keyrow { display: flex; gap: 8px; }
+.keyrow select { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font: inherit; font-size: 12px; }
+.keyrow input { flex: 1.4; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font: inherit; font-size: 12px; }
 .pulse li.clickable { cursor: pointer; }
 .pulse b.warn { color: var(--warn); }
 .alerts li { cursor: pointer; } .alerts li.critical { border-left-color: var(--danger); }

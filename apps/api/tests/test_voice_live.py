@@ -201,6 +201,23 @@ def test_live_config_endpoint_reports_engine(client, container):
     assert r.json()["engine"] == "live"
 
 
+def test_save_key_from_the_panel(client, container, tmp_path, monkeypatch):
+    """Pasting a key in Accessi writes it to .env and activates it without a restart."""
+    env = tmp_path / ".env"
+    env.write_text("NODO_STT_PROVIDER=browser\n# NODO_GEMINI_API_KEY=\n", encoding="utf-8")
+    monkeypatch.setenv("NODO_ENV_FILE", str(env))
+    r = client.post("/api/v1/setup/key", json={"name": "nodo_gemini_api_key", "value": " AIza-test "})
+    assert r.status_code == 200 and r.json()["ok"]
+    text = env.read_text(encoding="utf-8")
+    assert "NODO_GEMINI_API_KEY=AIza-test" in text and "NODO_STT_PROVIDER=browser" in text
+    assert container.settings.gemini_api_key == "AIza-test"        # live, no restart needed
+    assert any(p.name == "gemini" for p in container.providers)    # provider list rebuilt too
+    r = client.post("/api/v1/setup/key", json={"name": "NODO_DATABASE_URL", "value": "x"})
+    assert r.status_code == 400                                    # only whitelisted keys
+    r = client.post("/api/v1/setup/key", json={"name": "NODO_GEMINI_API_KEY", "value": "  "})
+    assert r.status_code == 400
+
+
 def test_approval_answer_speaks_through_live(client, db, container):
     """Clicking 'approve' in the popup while live: the ack is spoken by Gemini, not browser TTS."""
     from nodo.app import ensure_workspace

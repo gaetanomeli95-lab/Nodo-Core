@@ -315,6 +315,61 @@ async def setup_check(c: Container = Depends(container)):
     return {"checks": as_dicts(checks), "ready": not any(x.status in ("missing", "error") for x in checks)}
 
 
+# keys the Accessi page is allowed to save from the panel (written to apps/api/.env, applied at once)
+_SETTABLE_KEYS = {
+    "NODO_GEMINI_API_KEY": "gemini_api_key",
+    "NODO_GROQ_API_KEY": "groq_api_key",
+    "NODO_OPENAI_API_KEY": "openai_api_key",
+    "NODO_ANTHROPIC_API_KEY": "anthropic_api_key",
+    "NODO_GITHUB_TOKEN": "github_token",
+    "NODO_VERCEL_TOKEN": "vercel_token",
+    "NODO_TELEGRAM_BOT_TOKEN": "telegram_bot_token",
+    "NODO_TELEGRAM_CHAT_ID": "telegram_chat_id",
+}
+# keys that unlock a model provider: rebuild the list so they work without restarting NODO
+_PROVIDER_KEYS = {"gemini_api_key", "groq_api_key", "openai_api_key", "anthropic_api_key"}
+
+
+class KeyIn(BaseModel):
+    name: str
+    value: str
+
+
+@router.post("/setup/key")
+async def save_key(body: KeyIn, c: Container = Depends(container)):
+    """Saves an access key from the Accessi page: into apps/api/.env and live into the settings,
+    so the live voice and the extra brains activate without restarting NODO. The value is never
+    returned or logged."""
+    import os
+    from pathlib import Path
+
+    name = body.name.strip().upper()
+    if name not in _SETTABLE_KEYS:
+        raise HTTPException(400, f"Chiave non consentita: usa una di {sorted(_SETTABLE_KEYS)}")
+    value = body.value.strip()
+    if not value or any(ch in value for ch in "\r\n"):
+        raise HTTPException(400, "Valore non valido.")
+    env = Path(os.environ.get("NODO_ENV_FILE") or Path(__file__).resolve().parents[2] / ".env")
+    lines = env.read_text(encoding="utf-8").splitlines() if env.exists() else []
+    out, written = [], False
+    for line in lines:
+        key = line.split("=", 1)[0].strip().lstrip("#").strip()
+        if key == name:
+            if not written:
+                out.append(f"{name}={value}")
+                written = True
+            continue                                    # drop duplicates of the same key
+        out.append(line)
+    if not written:
+        out.append(f"{name}={value}")
+    env.write_text("\n".join(out) + "\n", encoding="utf-8")
+    setattr(c.settings, _SETTABLE_KEYS[name], value)
+    if _SETTABLE_KEYS[name] in _PROVIDER_KEYS:
+        from nodo.providers.registry import build_providers
+        c.providers[:] = build_providers(c.settings)    # in place: every new Core picks them up
+    return {"ok": True, "name": name}
+
+
 @router.get("/setup/telegram")
 async def telegram_chats(c: Container = Depends(container)):
     """Helps find NODO_TELEGRAM_CHAT_ID: write any message to your bot, then open this page."""

@@ -56,6 +56,8 @@ Se hai anche **ChatGPT Plus**, collegalo come secondo cervello con `attiva-chatg
 
 Alternative:
 - gratis: `NODO_GEMINI_API_KEY` (<https://aistudio.google.com/apikey>) o `NODO_GROQ_API_KEY`;
+  - puoi incollarle direttamente nel pannello: scheda **Accessi** → «Incolla una chiave» — si attivano
+    subito, senza riavviare NODO (vengono salvate in `apps/api/.env`);
   - la chiave Gemini attiva anche la **voce dal vivo**: parli con NODO in tempo reale, voce naturale, e
     lo interrompi mentre parla (vedi [CERVELLO.md](CERVELLO.md) → «Parlare con NODO come con una persona»);
 - a consumo: `NODO_ANTHROPIC_API_KEY` (<https://console.anthropic.com> → *API Keys*, con un po' di credito;
