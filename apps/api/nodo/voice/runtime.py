@@ -424,6 +424,9 @@ class VoiceRuntime:
             if self._live is not None and not self._dead:
                 live, self._live = self._live, None
                 await live.close()
+                reason = str(ev.get("error") or "")[:150]
+                log.warning("live session closed (%s); reconnects so far: %s",
+                            reason or "nessun motivo", self._live_reconnects)
                 if self._live_reconnects < 1:
                     self._live_reconnects += 1
                     try:
@@ -431,8 +434,9 @@ class VoiceRuntime:
                         return
                     except Exception as e:
                         log.warning("live reconnect failed: %s", e)
+                why = f" ({reason})" if reason else ""
                 await self._send("error", where="live",
-                                 message="la voce dal vivo si è fermata: "
+                                 message=f"la voce dal vivo si è fermata{why}: "
                                          "clicca il microfono per usare la voce del browser")
                 await self._send("voice.engine", engine="browser")   # client returns to push-to-talk
 
@@ -483,6 +487,7 @@ class VoiceRuntime:
         self._in_text = ""
         self._out_text.clear()
         self._live_muted = False
+        self._live_reconnects = 0        # a healthy turn: the next drop deserves a fresh reconnect
         vs.mark("tts_done")
         vs.mark("turn_done")
         self._persist_metrics(vs.interrupted)

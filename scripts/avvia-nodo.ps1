@@ -108,5 +108,6 @@ $url = "http://127.0.0.1:$Port"
 Say "NODO e' acceso su $url  (chiudi questa finestra per spegnerlo)"
 if (-not $NoBrowser) { Start-Job -ScriptBlock { param($u) Start-Sleep 4; Start-Process $u } -ArgumentList $url | Out-Null }
 Push-Location $Api
-& $Py -m uvicorn nodo.main:app --host 127.0.0.1 --port $Port
+# il log resta anche in apps/api/nodo.log: utile per capire cosa e' successo dopo un errore
+& $Py -m uvicorn nodo.main:app --host 127.0.0.1 --port $Port 2>&1 | Tee-Object -FilePath (Join-Path $Api "nodo.log")
 Pop-Location

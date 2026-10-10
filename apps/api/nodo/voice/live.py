@@ -94,6 +94,10 @@ class LiveBridge:
         }
         if tool_decls:
             config["tools"] = [{"function_declarations": tool_decls}]
+        # sessions die after ~10 min without these: compression keeps the conversation alive,
+        # resumption lets a reconnect continue the same session
+        config["context_window_compression"] = {"sliding_window": {}}
+        config["session_resumption"] = {}
         models = [self.settings.gemini_live_model] if self.settings.gemini_live_model else LIVE_MODELS
         last: Exception | None = None
         for model in models:
@@ -150,7 +154,12 @@ class LiveBridge:
                 if self._dead:
                     return
                 for ev in self._normalize(msg):
-                    await self._on_event(ev)
+                    try:
+                        await self._on_event(ev)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        log.exception("live event handler failed (%s)", ev.get("kind"))
         except asyncio.CancelledError:
             raise
         except Exception as e:
