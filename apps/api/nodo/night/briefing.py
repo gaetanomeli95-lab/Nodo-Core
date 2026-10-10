@@ -186,15 +186,15 @@ def compose_briefing(s: Session, org: str, since: datetime, until: datetime | No
                 if it["kind"] in ("site_down", "page_broken", "runtime_errors", "js_errors"):
                     sent += f" (dalle {it['first_seen']})"
                 sent += "."
-                done_text = " ".join(a["summary"] for a in it["actions"] if a["action"] != "fix_pr")
+                done_text = " ".join(a["summary"] for a in it["actions"] if a["action"] not in ("fix_pr", "merge"))
                 if done_text:
                     sent += " " + done_text
                 fix = it["fix"]
                 if fix and fix["status"] == "proposed" and fix["pr_number"]:
                     sent += (f" Ho preparato la correzione (PR #{fix['pr_number']}): "
                              f"{PREVIEW_IT.get(fix['preview_status'], 'anteprima non verificata')}. Aspetta il tuo ok.")
-                elif fix and fix["status"] == "merged":
-                    sent += f" La correzione (PR #{fix['pr_number']}) è stata pubblicata."
+                elif fix and fix["status"] == "merged" and not any(a["action"] == "verify" for a in it["actions"]):
+                    sent += f" La correzione (PR #{fix['pr_number']}) è stata pubblicata: la verifico al prossimo giro."
                 else:
                     fix_note = next((a["summary"] for a in it["actions"] if a["action"] == "fix_pr"), None)
                     if fix_note:

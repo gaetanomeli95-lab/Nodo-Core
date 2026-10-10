@@ -40,6 +40,11 @@ export default function App() {
   useEffect(() => { refresh(); get<VoiceConfig>("/api/v1/voice/config").then(setVoice).catch(() => {}); }, [refresh]);
   useEffect(() => { const t = setInterval(refresh, 60_000); return () => clearInterval(t); }, [refresh]);
   useEffect(() => { try { history.replaceState(null, "", `#${tab}`); } catch { /* ignore */ } }, [tab]);
+  useEffect(() => {
+    const onHash = () => setTab(initialTab());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   const critical = sites.filter((s) => s.status === "critical").length;
   const tabs: [Tab, string, number][] = [

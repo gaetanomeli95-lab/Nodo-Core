@@ -70,6 +70,7 @@ async def resolve_approval(approval_id: str, decision: str, db: Session = Depend
         out = await A.resolve(db, c, approval_id, decision == "approve", via="api")
     except A.ApprovalError:
         raise HTTPException(404, "pending approval not found")
+    db.commit()
     a = db.get(Approval, approval_id)
     return S.ApprovalOut.model_validate(a).model_dump() | {"result": out}
 

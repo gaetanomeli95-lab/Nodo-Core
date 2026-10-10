@@ -217,8 +217,20 @@ async def post_merge_watch(c: Container, fix_id: str, merge_sha: str | None, tim
     with session_scope() as db:
         db.add(NightAction(organization_id=org, site_id=site_id, incident_id=incident_id, action="verify",
                            status=status, summary=summary, details=details))
-        if status == "verified" and incident_id and (inc := db.get(Incident, incident_id)) \
-                and inc.status in ("open", "mitigated"):
-            inc.status, inc.resolved_at = "resolved", datetime.now(UTC)
-            inc.resolution = (inc.resolution + "; " if inc.resolution else "") + "correzione verificata in produzione"
+        if status == "verified":
+            # the fix is live and the site answers: close the root incident and what the bad deploy had caused
+            for inc in db.scalars(select(Incident).where(Incident.site_id == site_id,
+                                                         Incident.status.in_(("open", "mitigated")))):
+                if inc.id == incident_id or inc.status == "mitigated":
+                    inc.status, inc.resolved_at = "resolved", datetime.now(UTC)
+                    inc.resolution = (inc.resolution + "; " if inc.resolution else "") + \
+                        "correzione verificata in produzione"
+            site = db.get(Site, site_id)
+            still = db.scalars(select(Incident).where(Incident.site_id == site_id,
+                                                      Incident.status.in_(("open", "mitigated")))).all()
+            if site is not None:
+                site.status = "ok" if not still else max(
+                    ("critical" if i.severity == "critical" and i.status == "open" else "warning" for i in still),
+                    key=lambda x: x == "critical")
+                site.status_note = None if not still else still[0].title
     return status

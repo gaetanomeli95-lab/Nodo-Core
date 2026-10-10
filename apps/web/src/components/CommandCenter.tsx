@@ -65,10 +65,18 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     try {
       await streamCommand({ text }, (ev) => {
         onTrace([ev]);
-        if (ev.type === "response") {
+        if (ev.type === "token") appendNodo(ev.delta as string);
+        if (ev.type === "done" || ev.type === "response") {
           setTurns((ts) => {
             const next = [...ts];
             next[next.length - 1] = { who: "nodo", text: ev.text as string, meta: `${ev.provider} · ${ev.intent}` };
+            return next;
+          });
+        }
+        if (ev.type === "error") {
+          setTurns((ts) => {
+            const next = [...ts];
+            next[next.length - 1] = { who: "nodo", text: `Errore: ${String(ev.message)}`, meta: "error" };
             return next;
           });
         }

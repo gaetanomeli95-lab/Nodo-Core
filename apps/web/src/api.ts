@@ -40,7 +40,7 @@ export async function streamCommand(
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
-    buf += dec.decode(value, { stream: true });
+    buf += dec.decode(value, { stream: true }).replace(/\r\n/g, "\n"); // sse-starlette separates with CRLF
     let idx: number;
     while ((idx = buf.indexOf("\n\n")) >= 0) {
       const chunk = buf.slice(0, idx);

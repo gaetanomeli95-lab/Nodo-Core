@@ -509,8 +509,25 @@ class NightShift:
             site.last_good_commit_sha = obs.production.commit_sha
         self.s.flush()
         await self.respond(site, obs)
+        self._refresh_status(site, evaluated)
         await self._notify_new_critical(site, new)
         return {"checks": len(outcomes), "new": len(new), "resolved": len(resolved)}
+
+    def _refresh_status(self, site: Site, evaluated: list[CheckOutcome]) -> None:
+        """After remediation the picture may have changed (rollback verified, build rebuilt): the site status is
+        the worst of its still-active incidents (a mitigated one counts as a warning) and of signal-less warnings."""
+        if not evaluated:
+            return
+        rank = max((STATUS_RANK[o.status] for o in evaluated if not o.signals), default=1)
+        for inc in self._open_incidents(site):
+            sev = "warning" if inc.status == "mitigated" else inc.severity
+            rank = max(rank, STATUS_RANK.get(sev, 1) if sev != "info" else 1)
+        new = {3: "critical", 2: "warning"}.get(rank, "ok")
+        if new != site.status:
+            site.status = new
+            active = sorted(self._open_incidents(site), key=lambda i: (i.status != "open", -SEVERITY_RANK[i.severity]))
+            site.status_note = (active[0].title if active[0].status == "open" else
+                                f"Tamponato ({active[0].resolution}); da correggere: {active[0].title}") if active else None
 
     def _open_incidents(self, site: Site) -> list[Incident]:
         return list(self.s.scalars(select(Incident).where(Incident.site_id == site.id,
@@ -655,6 +672,13 @@ class NightShift:
                                                                                      "js_errors"):
                     other.status = "mitigated"
                     other.resolution = f"causato dal deploy annullato con il rollback ({inc.resolution})"
+            # record the post-rollback reality so the site page does not show the pre-rollback checks as current
+            self.s.add(SiteCheck(run_id=self.run.id, site_id=site.id, check="deploy", status="ok",
+                                 summary=f"dopo il rollback in produzione «{target.commit_message or target.id}»",
+                                 details={"deployment_id": target.id, "rollback": True}))
+            self.s.add(SiteCheck(run_id=self.run.id, site_id=site.id, check="uptime", status="ok",
+                                 summary=f"dopo il rollback: online ({check.status}, {check.latency_ms} ms)",
+                                 details={"status": check.status, "rollback": True}))
             self._action(site, inc, "rollback", "verified",
                          f"Ho riportato il sito alla versione «{target.commit_message or target.id}»: ora risponde "
                          f"({check.status}, {check.latency_ms} ms).", details)
@@ -729,11 +753,15 @@ class NightShift:
 
     async def _try_fixes(self, site: Site, obs: Observation, incidents: dict[str, Incident]) -> None:
         eligible = []
-        if (inc := incidents.get("site_down")) or (inc := incidents.get("page_broken")):
+        # the root cause gets the fix: a mitigated site_down (rolled back) still needs its code fixed, while errors
+        # that the rollback already explained ("causato dal deploy annullato") do not need a second proposal
+        if inc := incidents.get("site_down"):
+            eligible.append(inc)
+        elif (inc := incidents.get("page_broken")) and inc.status == "open":
             eligible.append(inc)
         if (inc := incidents.get("deploy_failed")) and not (inc.details or {}).get("transient"):
             eligible.append(inc)
-        if inc := incidents.get("runtime_errors"):
+        if (inc := incidents.get("runtime_errors")) and inc.status == "open":
             eligible.append(inc)
         # one proposal per site at a time: the incidents of a site usually share one root cause (a bad deploy
         # takes the site down AND fills the logs with errors) and the evidence of all of them goes into it

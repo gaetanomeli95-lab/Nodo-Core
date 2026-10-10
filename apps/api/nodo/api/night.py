@@ -87,7 +87,7 @@ def create_site(body: SiteIn, db: Session = Depends(get_db), org: str = Depends(
     d["key_pages"] = [p for p in d["key_pages"]]
     s = Site(organization_id=org, **d)
     db.add(s)
-    db.flush()
+    db.commit()
     return _site_out(db, s)
 
 
@@ -113,7 +113,7 @@ def update_site(site_id: str, body: SitePatch, db: Session = Depends(get_db)):
         raise HTTPException(404, "site not found")
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(s, k, v)
-    db.flush()
+    db.commit()
     return _site_out(db, s)
 
 
@@ -126,6 +126,7 @@ async def discover_sites(c: Container = Depends(container), db: Session = Depend
         created = await shift.discover()
     except Exception as e:
         raise HTTPException(502, f"Vercel: {e}")
+    db.commit()
     return {"created": [x.name for x in created], "total": db.scalar(select(func.count()).select_from(Site))}
 
 
@@ -257,7 +258,7 @@ def incident_decision(incident_id: str, decision: str, db: Session = Depends(get
         i.status = "ignored" if decision == "ignore" else "resolved"
         i.resolved_at = datetime.now(UTC)
         i.resolution = "segnato come risolto da te" if decision == "resolve" else "ignorato da te"
-    db.flush()
+    db.commit()
     return _row(i)
 
 
@@ -292,9 +293,11 @@ async def decide_fix(fix_id: str, decision: str, c: Container = Depends(containe
     if not f or not f.approval_id:
         raise HTTPException(404, "nessuna correzione in attesa con questo id")
     try:
-        return await approvals.resolve(db, c, f.approval_id, decision == "approve", via="api")
+        out = await approvals.resolve(db, c, f.approval_id, decision == "approve", via="api")
     except approvals.ApprovalError as e:
         raise HTTPException(409, str(e))
+    db.commit()  # visible to the UI's immediate refresh and to the post-merge watcher
+    return out
 
 
 @router.get("/night/pending")

@@ -37,7 +37,7 @@ export function SetupView() {
             </li>
           ))}
         </ul>
-        <p className="muted">Le chiavi vanno nel file <code>apps/api/.env</code> (vedi <code>docs/ACCESSI.md</code>), poi riavvia NODO. Nessuna chiave lascia il tuo computer.</p>
+        <p className="muted">Le chiavi vanno nel file <code>apps/api/.env</code> (vedi <code>docs/ACCESSI.md</code>), poi riavvia NODO. Le chiavi restano nel tuo computer: NODO le usa solo per parlare con quei servizi.</p>
       </section>
     </div>
   );
