@@ -156,6 +156,8 @@ All external systems have deterministic doubles: `FakeModelProvider`, `FakeGitHu
 - Voice (Phase 2 realtime): WebSocket `/voice/stream` with typed protocol, `VoiceRuntime` over the same
   Core — partial/final transcripts, token+sentence streaming, sentence-level TTS, real barge-in, bound
   voice approvals, per-turn latency metrics. Push-to-talk UX; browser (free/on-device) or OpenAI speech.
+  With a free Gemini key (`NODO_VOICE_ENGINE=auto`) the session upgrades to **Gemini Live**: real-time
+  speech-to-speech (~1 s replies, natural voice, native barge-in) on the same tools and guards.
 - Telemetry: `/telemetry/usage`, `/telemetry/trace/{request_id}`, `/timeline` (append-only event log).
 - Single-user token auth (`NODO_API_TOKEN`), CORS, migrations, CI.
 - Night shift: Vercel + GitHub (write) connectors, HTTP/browser probes, incidents, rollback/redeploy, fix agent

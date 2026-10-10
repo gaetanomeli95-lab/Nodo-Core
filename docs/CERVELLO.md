@@ -51,6 +51,22 @@ regole fisse (meno conversazione, stesse funzioni) o con un'altra AI se ne hai c
 **Velocità.** Ogni risposta richiede qualche secondo (Claude Code si avvia a ogni messaggio): in chat e su
 Telegram va benissimo; a voce senti prima una frase breve tipo «Un attimo, controllo» e poi la risposta.
 
+## Parlare con NODO come con una persona (voce dal vivo)
+
+Con la chiave gratuita di Gemini (`NODO_GEMINI_API_KEY`, su <https://aistudio.google.com/apikey>) la voce di
+NODO cambia motore: niente più registrazione → attesa → lettura, ma una **conversazione vera** — Gemini Live
+sente la tua voce direttamente, risponde in circa un secondo con una voce naturale e puoi **interromperlo
+mentre parla**, come con una persona.
+
+- Nel pannello il pulsante diventa «Parla con NODO»: un clic apre la conversazione, un altro la chiude.
+  Mentre lui parla, un clic lo ferma.
+- Quando serve uno strumento (controllare un sito, scrivere una bozza) usa gli **stessi strumenti e le
+  stesse guardie** della chat: le approvazioni compaiono come finestrella e un «sì» a voce vale solo per
+  quella appena mostrata.
+- Senza la chiave tutto resta come prima: clicchi, parli, riclicchi, e risponde la voce del browser.
+- Impostazioni: `NODO_VOICE_ENGINE` (auto | live | browser), `NODO_LIVE_VOICE` (Kore, Puck, Charon,
+  Fenrir, Aoede…). Dettagli tecnici in `docs/VOICE.md`.
+
 ## Secondo cervello: il tuo abbonamento ChatGPT (Plus)
 
 Se hai anche ChatGPT, NODO lo usa insieme a Claude tramite **Codex CLI**, il programma ufficiale di OpenAI che

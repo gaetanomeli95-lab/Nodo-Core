@@ -17,7 +17,10 @@ router = APIRouter(prefix="/api/v1/voice", dependencies=[Depends(auth)])
 @router.get("/config")
 def config(c: Container = Depends(container)):
     """Tells the client where speech is processed and which transports are available."""
-    return {"stt": {"name": c.stt.name, "location": c.stt.location,
+    from nodo.voice.live import missing_reason
+    why = missing_reason(c.settings, c)
+    return {"engine": "browser" if why else "live", "live_reason": why,
+            "stt": {"name": c.stt.name, "location": c.stt.location,
                     "streaming": bool(getattr(c.stt, "streaming", False))},
             "tts": {"name": c.tts.name, "location": c.tts.location, "voice": c.settings.tts_voice,
                     "streaming": bool(getattr(c.tts, "streaming", False))},

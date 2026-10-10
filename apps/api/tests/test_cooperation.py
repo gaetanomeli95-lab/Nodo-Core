@@ -127,6 +127,19 @@ async def test_router_pauses_a_model_that_hit_its_limit():
     assert "altro" not in cooldowns()
 
 
+async def test_router_rests_longer_on_dead_end_errors():
+    """A wrong key or a removed model will not heal in 30 minutes: the provider rests ~12x longer."""
+    import time
+
+    from nodo.providers.router import _cooldown
+    dead = Limited("morto", "404 model does not exist")
+    second = Limited("secondo", None)
+    router = ModelRouter([dead, second], cooldown_minutes=30)
+    await collect(router.stream([ChatMessage("user", "ciao")], RouteRequest()))
+    remaining = _cooldown["morto"] - time.monotonic()
+    assert remaining > 30 * 60 * 11     # much longer than the 30-minute limit pause
+
+
 # ------------------------------------------------------------------------------------------------ second opinion
 class Reviewer:
     """A second model that only reviews: answers [NODO_REVIEW_REQUEST] with a fixed verdict."""

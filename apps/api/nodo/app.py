@@ -40,6 +40,7 @@ class Container:
     night_verify_delay: float = 20.0
     night_retry_delay: float = 5.0
     night_poll_interval: float = 15.0
+    live_connect: object | None = None        # test hook: replaces the real Gemini Live connector
 
     def providers_by_name(self) -> dict[str, ModelProvider]:
         return {p.name: p for p in self.providers}

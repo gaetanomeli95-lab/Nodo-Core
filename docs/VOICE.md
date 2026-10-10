@@ -12,6 +12,32 @@ hold mic / Space ─► LISTENING ─► transcript.partial (browser STT or audi
         mic press or "fermati" while SPEAKING/THINKING ─► voice.interrupted ─► LISTENING
 ```
 
+## Live engine — Gemini Live (`nodo/voice/live.py`)
+When `NODO_VOICE_ENGINE=auto` (default) and a Gemini key is configured, the voice session upgrades to
+**speech-to-speech**: mic PCM (16 kHz) flows straight to Gemini Live, its PCM answer (24 kHz) streams back
+as `tts.chunk` events. No STT/LLM/TTS chain — reply latency is ~1 s and **barge-in is native** (you talk
+over NODO, Gemini stops itself).
+
+```
+click mic ─► session.start ─► LiveBridge.start (persona + Toolbox specs + history) ─► engine: "live"
+mic PCM (AudioWorklet, /pcm-worklet.js) ─► audio.chunk ─► send_realtime_input
+Gemini ─► audio (pcm) / input+output transcription / tool_call / interrupted / turn_complete
+```
+
+- **Tools**: Gemini's `function_calls` run through the *same* `Toolbox` as the text brain — guards,
+  approvals and `decide()` are unchanged. Approval answers and acks are injected back into the session
+  (`send_client_content`), so NODO *says* "Confermato" instead of the browser reading it.
+- **Model ladder**: `LIVE_MODELS` names are tried in order (idea borrowed from JARVIS Mark LV,
+  reimplemented); the first the key can open wins. `NODO_GEMINI_LIVE_MODEL` pins one.
+- **Fallbacks**: no key / no `google-genai` / connect failure (25 s timeout) / session lost after one
+  transparent reconnect → the session answers with `engine: "browser"` and the classic chain works
+  untouched. `GET /api/v1/voice/config` reports `engine` and `live_reason`.
+- Settings: `NODO_VOICE_ENGINE` (`auto|live|browser`), `NODO_LIVE_VOICE` (Kore, Puck, Charon, Fenrir,
+  Aoede…), `NODO_GEMINI_LIVE_MODEL`.
+- Typed text (`transcript.final`) works in live mode too — it is injected as a user turn.
+- Tests use a fake `container.live_connect` factory (`tests/test_voice_live.py`): the whole bridge,
+  tool calls, barge-in, ladder and approval ack are covered without a key.
+
 ## Transport — `WS /api/v1/voice/stream`
 Typed JSON frames (`nodo/voice/protocol.py`, pydantic-validated); binary frames count as `audio.chunk`.
 Auth mirrors REST: `NODO_API_TOKEN` via `?token=` or `Authorization` header.
@@ -76,6 +102,8 @@ Hold the mic button or Space. Web Speech API produces partials live; without it,
 `Ferma` button does the same. Approvals render as a banner bound to `approval_id`.
 
 ## Known limitations
+- Live mode needs a Gemini key and keeps the mic stream open while the conversation is on (explicit click,
+  visible state); Live sessions expire (~10 min) and reconnect once transparently.
 - Browser STT quality/availability varies (Chrome/Edge good, Firefox has no STT → falls back to audio upload).
 - Server-side streaming STT is a seam: only fakes implement `begin/feed/end` today; real audio upload path
   transcribes on `speech.end` (not yet word-by-word).

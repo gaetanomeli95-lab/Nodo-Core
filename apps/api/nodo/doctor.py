@@ -82,6 +82,15 @@ async def run_checks(c) -> list[Check]:
         out.append(Check("Cervello di riserva (abbonamento ChatGPT)", "optional",
                          "non collegato: quando Claude arriva al limite NODO passa alle risposte fisse (o a Gemini).",
                          "Se hai ChatGPT Plus: installa Codex CLI e fai l'accesso (docs/CERVELLO.md)."))
+    # --- live voice (Gemini Live): talk to NODO like to a person ---
+    from nodo.voice.live import missing_reason
+    why = missing_reason(s, c)
+    out.append(Check("Voce dal vivo (Gemini Live)", "ok" if why is None else "optional",
+                     "parli con NODO in tempo reale, voce naturale, ~1 secondo di attesa."
+                     if why is None else f"non attiva: {why}. La voce normale del browser funziona comunque.",
+                     "" if why is None else
+                     "Chiave gratuita: aistudio.google.com → Get API key → copiala in NODO_GEMINI_API_KEY "
+                     "nel file apps/api/.env, poi riavvia NODO."))
     paused = cooldowns()
     if paused:
         out.append(Check("Modelli in pausa", "warning",

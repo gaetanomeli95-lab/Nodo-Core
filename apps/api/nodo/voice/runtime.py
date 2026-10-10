@@ -24,6 +24,7 @@ from typing import Any
 from nodo.app import Container, ensure_workspace
 from nodo.core.events import EventBus
 from nodo.db.models import Approval, VoiceTurnMetric
+from nodo.voice import live as live_engine
 from nodo.voice import protocol
 from nodo.voice.base import (
     SpeechEvent,
@@ -71,6 +72,12 @@ class VoiceRuntime:
         self._request_id: str | None = None
         self._stt_iter: AsyncIterator[SpeechEvent] | None = None
         self._stt_task: asyncio.Task | None = None
+        # --- Gemini Live engine (voice_engine=auto + key configured): real speech-to-speech ---
+        self._live: live_engine.LiveBridge | None = None
+        self._live_reconnects = 0         # transparent reconnects attempted (never loop forever)
+        self._live_muted = False          # "Ferma" pressed: drop outgoing audio until the turn ends
+        self._in_text = ""                # accumulated input transcription of the current turn
+        self._out_text: list[str] = []    # accumulated output transcription (what NODO is saying)
 
     # ------------------------------------------------------------- inbound dispatch
     async def handle(self, msg) -> None:
@@ -116,12 +123,31 @@ class VoiceRuntime:
         self._audio_mime = msg.audio_mime
         if vs.state == VoiceState.CONNECTING:
             await self._set_state(VoiceState.IDLE)
-        self._log("voice.session.started", {"language": vs.language})
+        if self._want_live():
+            try:
+                await asyncio.wait_for(self._start_live(), timeout=25)
+            except Exception as e:
+                log.exception("live voice engine failed to start")
+                self._live = None
+                await self._send("error", where="live",
+                                 message=f"voce dal vivo non partita ({str(e)[:160]}): uso la voce del browser")
+        engine = "live" if self._live is not None else "browser"
+        self._log("voice.session.started", {"language": vs.language, "engine": engine})
         await self._send("voice.session.started", state=str(vs.state), conversation_id=vs.conversation_id,
-                         stt=self.c.stt.name, tts=self.c.tts.name)
+                         stt=self.c.stt.name, tts=self.c.tts.name, engine=engine)
+
+    def _want_live(self) -> bool:
+        return live_engine.missing_reason(self.c.settings, self.c) is None
 
     async def _on_audio(self, msg: protocol.AudioChunk) -> None:
         vs = self.vs
+        if self._live is not None:
+            if vs.state == VoiceState.IDLE:
+                await self._set_state(VoiceState.LISTENING)
+            self._live_muted = False
+            vs.mark("speech_started")
+            await self._live.send_audio(protocol.decode_audio(msg.data))   # Gemini hears you directly
+            return
         if vs.state == VoiceState.IDLE:
             await self._set_state(VoiceState.LISTENING)
         if vs.state != VoiceState.LISTENING:
@@ -139,6 +165,8 @@ class VoiceRuntime:
     async def _on_speech_end(self) -> None:
         vs = self.vs
         vs.mark("speech_end")
+        if self._live is not None:
+            return   # Gemini's own VAD decides when your turn is over
         stt = self.c.stt
         if self._stt_task is not None and hasattr(stt, "end"):
             await self._set_state(VoiceState.TRANSCRIBING)
@@ -179,6 +207,8 @@ class VoiceRuntime:
                 await self._send("error", where="stt", message=f"{type(e).__name__}: {e}")
 
     async def _on_partial(self, text: str) -> None:
+        if self._live is not None:
+            return   # in live mode transcripts come from Gemini's own input transcription
         vs = self.vs
         if vs.state == VoiceState.IDLE:
             await self._set_state(VoiceState.LISTENING)
@@ -190,6 +220,14 @@ class VoiceRuntime:
 
     async def _on_final(self, text: str) -> None:
         self.vs.mark("speech_end")
+        if self._live is not None:      # typed text also works in a live session: Gemini answers it
+            if not self.vs.turn_active:
+                self.vs.begin_turn()
+                self.vs.turn_active = True
+            self._in_text = text
+            await self._send("transcript.final", text=text, provider="client")
+            await self._live.inject(text, respond=True)
+            return
         await self._send("transcript.final", text=text, provider="client")
         await self._begin_turn(text)
 
@@ -303,12 +341,167 @@ class VoiceRuntime:
                 elif t in _FORWARD:
                     await self._send(t, **{k: v for k, v in e.items() if k not in ("type", "request_id", "at")})
 
+    # ------------------------------------------------------------- Gemini Live engine
+    async def _start_live(self) -> None:
+        """Opens the real-time session: persona + tools identical to the text brain, but audio in/out."""
+        from nodo.brain.loop import Brain
+        from nodo.brain.persona import PERSONA
+        from nodo.brain.tools import Toolbox, recent_history
+
+        rid = f"voice-live-{self.vs.id[:8]}"
+        with self._db() as sdb:
+            core = self.c.core(sdb)
+            conv = core._conversation(self.vs.conversation_id, "voice")
+            self.vs.conversation_id = conv.id
+            system = PERSONA.format(context=Brain(core, conv, rid, "voice").snapshot())
+            hist = recent_history(sdb, conv.id, 8)
+            if hist:
+                system += ("\n\nConversazione recente (contesto, non rispondere a queste righe):\n"
+                           + "\n".join(f"{m['role']}: {m['content'][:300]}" for m in hist))
+            decls = [{"name": s.name, "description": s.description, "parameters": s.parameters}
+                     for s in Toolbox(core, conv, rid, "", "voice").specs()]
+        self._live = live_engine.LiveBridge(self.c.settings, self._on_live_event,
+                                            getattr(self.c, "live_connect", None))
+        await self._live.start(system, decls, self.vs.language)
+
+    async def _live_go(self, *path: VoiceState) -> None:
+        """Walk the state machine step by step: skips transitions that are not allowed."""
+        for to in path:
+            await self._set_state(to)
+
+    async def _on_live_event(self, ev: dict) -> None:
+        """Normalized Live event -> protocol events for the panel (+ tool execution on this side)."""
+        vs, kind = self.vs, ev["kind"]
+        if kind == "audio":
+            if self._live_muted:
+                return
+            if not vs.turn_active:
+                vs.begin_turn()
+                vs.turn_active = True
+            vs.mark("tts_started")
+            vs.mark("tts_first_audio")
+            if vs.state != VoiceState.SPEAKING:
+                await self._live_go(VoiceState.UNDERSTANDING, VoiceState.THINKING, VoiceState.SPEAKING)
+            await self._send("tts.chunk", audio=protocol.encode_audio(ev["data"]),
+                             mime=live_engine.OUT_MIME)
+        elif kind == "input":                                # Gemini transcribing what you are saying
+            if not vs.turn_active:
+                vs.begin_turn()
+                vs.turn_active = True
+                vs.mark("speech_started")
+                self._in_text = ""
+            self._live_muted = False
+            self._in_text += ev["text"]
+            vs.mark("transcript_partial_first")
+            await self._send("transcript.partial", text=self._in_text)
+            if vs.state != VoiceState.UNDERSTANDING:
+                await self._live_go(VoiceState.LISTENING, VoiceState.UNDERSTANDING)
+        elif kind == "output":                               # Gemini transcribing its own answer
+            self._out_text.append(ev["text"])
+            vs.mark("model_first_token")
+            if vs.state != VoiceState.SPEAKING:
+                await self._live_go(VoiceState.UNDERSTANDING, VoiceState.THINKING, VoiceState.SPEAKING)
+            await self._send("nodo.token", delta=ev["text"])
+        elif kind == "tool_call":                            # same toolbox and guards as the text brain
+            if vs.state != VoiceState.ACTING:
+                await self._live_go(VoiceState.IDLE, VoiceState.UNDERSTANDING,
+                                    VoiceState.THINKING, VoiceState.ACTING)
+            await self._live_tool_calls([ev])
+        elif kind == "interrupted":                          # you spoke over it: Gemini stopped itself
+            self._in_text = ""
+            self._out_text.clear()
+            if self.vs.state != VoiceState.CLOSED:
+                try:
+                    vs.interrupt()
+                except Exception:
+                    pass
+                self._gen += 1
+                await self._send("voice.interrupted", reason="barge_in", during="SPEAKING")
+                await self._set_state(VoiceState.LISTENING)
+        elif kind == "turn_complete":
+            await self._live_end_turn()
+        elif kind == "closed":
+            if self._live is not None and not self._dead:
+                live, self._live = self._live, None
+                await live.close()
+                if self._live_reconnects < 1:
+                    self._live_reconnects += 1
+                    try:
+                        await self._start_live()             # one transparent reconnect, then stop
+                        return
+                    except Exception as e:
+                        log.warning("live reconnect failed: %s", e)
+                await self._send("error", where="live",
+                                 message="la voce dal vivo si è fermata: "
+                                         "clicca il microfono per usare la voce del browser")
+                await self._send("voice.engine", engine="browser")   # client returns to push-to-talk
+
+    async def _live_tool_calls(self, calls: list[dict]) -> None:
+        """Execute a Live tool call through the SAME Toolbox as the text brain: guards unchanged."""
+        from nodo.brain.tools import Toolbox
+
+        rid = f"voice-live-{self.vs.id[:8]}-{self.vs.turn_number}"
+        responses: list[tuple[str, str, dict]] = []
+        bindings: list[dict] = []
+        for c in calls:
+            await self._send("nodo.step", step=f"tool:{c['name']}", status="running", arguments=c["args"])
+            try:
+                with self._db() as sdb:
+                    core = self.c.core(sdb)
+                    conv = core._conversation(self.vs.conversation_id, "voice")
+                    self.vs.conversation_id = conv.id
+                    box = Toolbox(core, conv, rid, self._in_text, "voice")
+                    result = await box.call(c["name"], c["args"])
+                    bindings += box.bindings
+            except Exception as e:
+                log.exception("live tool %s failed", c["name"])
+                result = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+            responses.append((c["id"], c["name"], result))
+            await self._send("nodo.step", step=f"tool:{c['name']}", status="done",
+                             ok="error" not in result)
+        if self._live is not None:
+            await self._live.tool_response(responses)
+        for b in bindings:
+            if b["approval_id"] != self.vs.pending_approval_id:
+                self.vs.pending_approval_id = b["approval_id"]
+                await self._set_state(VoiceState.WAITING_FOR_APPROVAL)
+                await self._send("approval.required", **{k: v for k, v in b.items()
+                                 if k in ("approval_id", "tool", "action", "level", "label", "params",
+                                          "site", "preview_url", "pr_url")})
+
+    async def _live_end_turn(self) -> None:
+        vs = self.vs
+        if self._in_text:
+            await self._send("transcript.final", text=self._in_text.strip(), provider="gemini-live")
+        vs.mark("model_done")
+        text = "".join(self._out_text).strip()
+        if text:
+            await self._send("nodo.response", text=text, conversation_id=vs.conversation_id,
+                             intent="conversation", provider="gemini-live",
+                             model=self._live.model if self._live else None, confidence="known",
+                             agents=["live"])
+        self._in_text = ""
+        self._out_text.clear()
+        self._live_muted = False
+        vs.mark("tts_done")
+        vs.mark("turn_done")
+        self._persist_metrics(vs.interrupted)
+        vs.turn_active = False
+        if vs.state == VoiceState.WAITING_FOR_APPROVAL:
+            pass                                    # a popup is open: stay there until it is answered
+        elif vs.state != VoiceState.CLOSED:
+            await self._live_go(VoiceState.LISTENING, VoiceState.IDLE, VoiceState.LISTENING)
+        if vs.state != VoiceState.CLOSED:
+            await self._send("voice.turn.done", state=str(vs.state), latency_ms=vs.latency_ms())
+
     # ------------------------------------------------------------- interrupt / approvals / close
     async def interrupt(self, reason: str = "user") -> None:
         """Real barge-in: cancels the outbound side of the active turn, drains TTS, then listens again."""
         vs = self.vs
         if vs.state == VoiceState.CLOSED:
             return
+        if self._live is not None:
+            self._live_muted = True   # Gemini keeps generating internally; we just stop relaying audio
         during = str(vs.state)
         try:
             vs.interrupt()
@@ -349,13 +542,20 @@ class VoiceRuntime:
         await self._send("approval.resolved", approval_id=approval_id, status=status, tool=tool, action=action)
         ack = out.get("message") or ("Confermato." if approve else "Va bene, non lo faccio.")
         await self._send("nodo.token", delta=ack)
-        await self._speak_text(ack)
+        if self._live is not None:
+            await self._live.inject(f"[ISTRUZIONE DI NODO, non dell'utente] {ack} "
+                                    "Dillo a voce in una frase breve.", respond=True)
+        else:
+            await self._speak_text(ack)
         if vs.state == VoiceState.WAITING_FOR_APPROVAL:
             await self._set_state(VoiceState.LISTENING)
 
     async def close(self) -> None:
         self._gen += 1
         self._dead = True
+        if self._live is not None:
+            live, self._live = self._live, None
+            await live.close()
         self._drain_speech_q()
         if self._turn_task and not self._turn_task.done():
             with suppress(asyncio.TimeoutError, asyncio.CancelledError):

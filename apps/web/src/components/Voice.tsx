@@ -60,10 +60,68 @@ class ChunkPlayer {
   }
 }
 
+/** Streaming PCM playback for Gemini Live audio (`audio/pcm;rate=24000`): chunks are scheduled
+ *  back-to-back on an AudioContext so speech starts with the first chunk and has no gaps. */
+class PcmPlayer {
+  private ctx: AudioContext | null = null;
+  private next = 0;
+  private sources = new Set<AudioBufferSourceNode>();
+
+  push(b64: string, mime: string) {
+    const m = /rate=(\d+)/.exec(mime || "");
+    const rate = m ? parseInt(m[1], 10) : 24000;
+    const bin = atob(b64);
+    const raw = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) raw[i] = bin.charCodeAt(i);
+    const i16 = new Int16Array(raw.buffer, 0, Math.floor(raw.length / 2));
+    const f32 = new Float32Array(i16.length);
+    for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 0x8000;
+    if (!f32.length) return;
+    if (!this.ctx) this.ctx = new AudioContext();
+    if (this.ctx.state === "suspended") void this.ctx.resume();
+    const buf = this.ctx.createBuffer(1, f32.length, rate);
+    buf.copyToChannel(f32, 0);
+    const s = this.ctx.createBufferSource();
+    s.buffer = buf;
+    s.connect(this.ctx.destination);
+    const t = Math.max(this.ctx.currentTime + 0.02, this.next);
+    s.start(t);
+    this.next = t + buf.duration;
+    this.sources.add(s);
+    s.onended = () => this.sources.delete(s);
+  }
+
+  stop() {
+    for (const s of this.sources) { try { s.stop(); } catch { /* already ended */ } }
+    this.sources.clear();
+    this.next = this.ctx ? this.ctx.currentTime : 0;
+  }
+}
+
+/** Float32 mic samples -> 16-bit PCM at outRate (nearest-sample downsample: enough for speech). */
+function toPcm16(input: Float32Array, inRate: number, outRate: number): Uint8Array {
+  const ratio = inRate / outRate;
+  const n = Math.floor(input.length / ratio);
+  const out = new Int16Array(n);
+  for (let i = 0; i < n; i++) {
+    const s = Math.max(-1, Math.min(1, input[Math.floor(i * ratio)]));
+    out[i] = s * 0x7fff;
+  }
+  return new Uint8Array(out.buffer);
+}
+
+function toB64(bytes: Uint8Array): string {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
 export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) {
   const [state, setState] = useState<VoiceState>("CONNECTING");
   const [connected, setConnected] = useState(false);
   const [partial, setPartial] = useState("");
+  const [engine, setEngine] = useState<"live" | "browser">("browser");   // live = Gemini Live (real-time voice)
+  const [liveOn, setLiveOn] = useState(false);                            // live mode: conversation mic open
   const sock = useRef<VoiceSocket | null>(null);
   const rec = useRef<Recognition | null>(null);
   const player = useRef(new ChunkPlayer());
@@ -76,6 +134,8 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const finalBuf = useRef("");
   const streamingStarted = useRef(false);
   const media = useRef<{ rec: MediaRecorder; stream: MediaStream } | null>(null);
+  const pcm = useRef(new PcmPlayer());
+  const liveMic = useRef<{ ctx: AudioContext; stream: MediaStream } | null>(null);
   const cbRef = useRef(cb);
   cbRef.current = cb;
 
@@ -131,6 +191,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
                 window.speechSynthesis.getVoices();   // Chrome loads voices lazily: warm them up
                 window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
               }
+              setEngine(e.engine === "live" ? "live" : "browser");
               setConnected(true);
               setState(((e.state as VoiceState) || "IDLE"));   // ready: the button works from here
               break;
@@ -153,8 +214,13 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
               speechQueue.current.push(e.text as string);
               if (!speaking.current) browserTtsNext();
               break;
+            case "voice.engine":       // live session died mid-conversation: back to push-to-talk
+              setEngine(e.engine === "live" ? "live" : "browser");
+              if (e.engine !== "live") { stopLiveMic(); setLiveOn(false); }
+              break;
             case "tts.chunk":
-              player.current.push(e.audio as string, e.mime as string);
+              if ((e.mime as string || "").startsWith("audio/pcm")) pcm.current.push(e.audio as string, e.mime as string);
+              else player.current.push(e.audio as string, e.mime as string);
               break;
             case "voice.interrupted":
               setPartial("");
@@ -188,7 +254,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
       sock.current = s;
     };
     connect();
-    return () => { closed = true; if (retry) clearTimeout(retry); sock.current?.close(); stopLocalAudio(); };
+    return () => { closed = true; if (retry) clearTimeout(retry); sock.current?.close(); stopLocalAudio(); stopLiveMic(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -197,10 +263,59 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     speaking.current = false;
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
     player.current.stop();
+    pcm.current.stop();
+  };
+
+  // ---------------------------------------------------------- Gemini Live: mic streaming
+  const startLiveMic = async (): Promise<boolean> => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+      const ctx = new AudioContext();
+      await ctx.audioWorklet.addModule("/pcm-worklet.js");
+      const src = ctx.createMediaStreamSource(stream);
+      const node = new AudioWorkletNode(ctx, "pcm-worklet");
+      const srcRate = ctx.sampleRate;
+      node.port.onmessage = (ev: MessageEvent) => {
+        const pcm16 = toPcm16(ev.data as Float32Array, srcRate, 16000);
+        if (pcm16.length) sock.current?.send({ type: "audio.chunk", data: toB64(pcm16), mime: "audio/pcm;rate=16000" });
+      };
+      src.connect(node);
+      node.connect(ctx.destination);
+      liveMic.current = { ctx, stream };
+      return true;
+    } catch {
+      cbRef.current.onError("microfono non disponibile: consenti l'accesso dal lucchetto vicino all'indirizzo e riprova");
+      return false;
+    }
+  };
+
+  const stopLiveMic = () => {
+    if (!liveMic.current) return;
+    liveMic.current.stream.getTracks().forEach((t) => t.stop());
+    void liveMic.current.ctx.close();
+    liveMic.current = null;
+  };
+
+  /** Live mode: one click opens the conversation (the mic streams, Gemini hears pauses and
+   *  interruptions by itself); while NODO speaks a click interrupts it; another click hangs up. */
+  const liveButton = async () => {
+    if (!connected) return;
+    if (liveOn && (state === "SPEAKING" || state === "THINKING" || state === "ACTING")) { interrupt(); return; }
+    if (liveOn) {
+      stopLiveMic();
+      setLiveOn(false);
+      sock.current?.send({ type: "speech.end" });
+      setState("IDLE");
+      return;
+    }
+    if (await startLiveMic()) { setLiveOn(true); setState("LISTENING"); }
   };
 
   const pressStart = () => {
     if (!connected) return;
+    if (engine === "live") { void liveButton(); return; }
     if (toggled.current) { toggled.current = false; finishListening(); return; }  // second click: send
     if (state === "SPEAKING" || state === "THINKING" || state === "ACTING") interrupt(); // barge-in
     if (state !== "IDLE" && state !== "LISTENING" && state !== "INTERRUPTED" && state !== "CONNECTING"
@@ -292,6 +407,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   };
 
   const pressStop = () => {
+    if (engine === "live") return;   // live conversation toggles on click, not on press-and-hold
     if (!held.current || toggled.current) return;
     if (Date.now() - pressedAt.current < 400) { toggled.current = true; return; }  // a click: keep listening
     finishListening();
@@ -319,15 +435,18 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
   });
 
-  return { state, connected, partial, pressStart, pressStop, interrupt, answer };
+  return { state, connected, partial, engine, liveOn, pressStart, pressStop, interrupt, answer };
 }
 
 export function VoiceDock({ voice, onInterrupt }: {
   voice: ReturnType<typeof useVoiceSession>;
   onInterrupt?: () => void;
 }) {
-  const { state, connected, partial, pressStart, pressStop } = voice;
+  const { state, connected, partial, engine, liveOn, pressStart, pressStop } = voice;
   const label = !connected ? "voce offline"
+    : engine === "live" && !liveOn ? "Parla con NODO"
+    : engine === "live" && state === "SPEAKING" ? "NODO parla · tocca per interrompere"
+    : engine === "live" ? "Ti ascolto · clicca per chiudere"
     : state === "LISTENING" ? "Ti ascolto · clicca per inviare"
     : state === "TRANSCRIBING" ? "Trascrivo"
     : state === "UNDERSTANDING" ? "Capisco"

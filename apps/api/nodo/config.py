@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     stt_provider: str = "browser"   # browser | openai | fake
     tts_provider: str = "browser"   # browser | openai | fake
     tts_voice: str = "alloy"
+    # Real-time voice (Gemini Live API): talk to NODO like to a person — natural voice, ~1s, barge-in.
+    # Needs the FREE Gemini key (aistudio.google.com). Without it NODO keeps the browser voice chain.
+    voice_engine: str = "auto"        # auto (live when configured) | live (require it) | browser
+    gemini_live_model: str = ""       # empty = try the built-in ladder of Live models
+    live_voice: str = "Kore"          # Gemini voice: Puck | Charon | Kore | Fenrir | Aoede | ...
 
     # --- Tools ---
     github_token: str | None = None

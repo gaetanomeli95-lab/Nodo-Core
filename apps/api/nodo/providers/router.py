@@ -71,6 +71,10 @@ class NoEligibleModel(RuntimeError):
 # so NODO does not waste seconds on every message retrying a provider that cannot answer. Process-wide.
 _LIMIT_RE = re.compile(r"limit|quota|rate.?limit|\b429\b|too many requests|usage|resets? (at|on|in)|esaurit",
                        re.I)
+# dead-end errors (wrong key, model removed, no permission): they will not heal in half an hour, so the
+# provider rests much longer instead of wasting a timeout on every message
+_DEAD_RE = re.compile(r"not.?found|does not exist|no such model|invalid api key|unauthoriz|forbidden|"
+                      r"permission denied|\b401\b|\b403\b|\b404\b", re.I)
 _cooldown: dict[str, float] = {}
 
 
@@ -154,8 +158,12 @@ class ModelRouter:
         return until is not None and until > time.monotonic()
 
     def _maybe_pause(self, provider: str, error: str) -> None:
-        if self.cooldown_seconds > 0 and provider != "deterministic" and _LIMIT_RE.search(error):
+        if self.cooldown_seconds <= 0 or provider == "deterministic":
+            return
+        if _LIMIT_RE.search(error):
             _cooldown[provider] = time.monotonic() + self.cooldown_seconds
+        elif _DEAD_RE.search(error):
+            _cooldown[provider] = time.monotonic() + self.cooldown_seconds * 12  # 6h with the default
 
     # ------------------------------------------------------------------ execution with fallback
     async def stream(self, messages: list[ChatMessage], req: RouteRequest, *, request_id: str | None = None,

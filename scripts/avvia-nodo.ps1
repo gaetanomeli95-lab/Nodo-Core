@@ -51,7 +51,7 @@ if (-not (Test-Path $stamp) -or ((Get-Item $pyproject).LastWriteTime -gt (Get-It
   Say "Installo le dipendenze di NODO (qualche minuto la prima volta)..."
   & $Py -m pip install --upgrade pip --quiet
   Push-Location $Api
-  & $Py -m pip install -e ".[browser]" --quiet
+  & $Py -m pip install -e ".[browser,live]" --quiet
   if ($LASTEXITCODE -ne 0) { Warn "Installo senza i controlli via browser..."; & $Py -m pip install -e . --quiet }
   Pop-Location
   # 3. Chromium for the browser checks (optional, ~150 MB)
