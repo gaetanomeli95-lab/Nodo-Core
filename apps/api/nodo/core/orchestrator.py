@@ -45,6 +45,10 @@ PLANS: dict[str, list[str]] = {
     "tech_status": ["resolve_entity", "retrieve_repositories", "agent:dev", "synthesize"],
     "compare": ["resolve_entities", "retrieve_projects", "retrieve_tasks", "agent:pm", "rank_comparison", "synthesize"],
     "general": ["synthesize"],
+    "night_report": ["retrieve_night_runs", "compose_briefing", "synthesize"],
+    "pending_approvals": ["retrieve_approvals", "bind_approval", "synthesize"],
+    "run_checks": ["night:light_run", "synthesize"],
+    "sites_status": ["retrieve_sites", "synthesize"],
     "stop": ["acknowledge"],
     "approve": ["acknowledge"],
     "reject": ["acknowledge"],
@@ -67,8 +71,10 @@ class RequestOutcome:
 
 class NodoCore:
     def __init__(self, session: Session, settings: Settings, organization_id: str, providers: list[ModelProvider],
-                 github: GitHubConnector, policy: PermissionPolicy | None = None, user_id: str | None = None):
+                 github: GitHubConnector, policy: PermissionPolicy | None = None, user_id: str | None = None,
+                 container=None):
         self.s, self.settings, self.org, self.user_id = session, settings, organization_id, user_id
+        self.container = container  # gives access to the night shift (sites, briefing, checks)
         self.events = EventBus(session)
         self.telemetry = Telemetry(session)
         self.router = ModelRouter(providers, settings.mode, settings.allow_paid_in_free_mode,
@@ -131,7 +137,18 @@ class NodoCore:
                             yield e.to_dict()
                         cursor = len(self.events.history)
                         yield _ev("step", request_id, step=step, status="done")
-                grounded = self._grounded_summary(intent, pkg, outcome.reports)
+                night_lines: list[str] = []
+                if intent.name in ("night_report", "pending_approvals", "run_checks", "sites_status", "today"):
+                    night_step = plan[0] if intent.name != "today" else "night_summary"
+                    yield _ev("step", request_id, step=night_step, status="running")
+                    night_lines, bind = await self._night_step(intent, request_id)
+                    if bind:  # lets a spoken "sì" resolve this exact approval (voice binding, ADR-005/006)
+                        self.events.emit("approval.requested", bind, request_id=request_id, organization_id=self.org)
+                        for e in self.events.history[cursor:]:
+                            yield e.to_dict()
+                        cursor = len(self.events.history)
+                    yield _ev("step", request_id, step=night_step, status="done")
+                grounded = self._grounded_summary(intent, pkg, outcome.reports, night_lines)
                 yield _ev("step", request_id, step="synthesize", status="running")
                 pending = ""
                 async for piece in self._synthesize(request_id, pkg, intent, grounded, lang):
@@ -210,8 +227,11 @@ class NodoCore:
         ctx = AgentContext(request_id, pkg, self.s, self.tools, self.router, self.events, budget, language=lang)
         return await self.runner.run(self.agents[name], ctx)
 
-    def _grounded_summary(self, intent: Intent, pkg: ContextPackage, reports: list[AgentReport]) -> str:
+    def _grounded_summary(self, intent: Intent, pkg: ContextPackage, reports: list[AgentReport],
+                          night_lines: list[str] | None = None) -> str:
         lines: list[str] = []
+        if intent.name in ("night_report", "pending_approvals", "run_checks", "sites_status"):
+            return "\n".join(night_lines or ["Non ho informazioni sul turno di notte."])
         if intent.name == "list_projects":
             if not pkg.projects:
                 lines.append("Non hai ancora progetti registrati.")
@@ -220,6 +240,7 @@ class NodoCore:
                 lines += [f"- {p['name']} ({p['kind']}, priorità {p['priority']}, stato {p['status']})" for p in pkg.projects]
         if intent.name == "today":
             lines += self._rank_today(pkg)
+            lines += night_lines or []
         if intent.name == "compare":
             lines += self._compare(pkg, reports)
         for r in reports:
@@ -231,8 +252,15 @@ class NodoCore:
             lines += r.freshness_notes
         if intent.name == "general":
             lines.append("Posso aiutarti con: elenco progetti, punto su un progetto, priorità di oggi, "
-                         "contenuti per un cliente, stato tecnico di un repository.")
+                         "contenuti per un cliente, stato tecnico di un repository, stato dei siti, "
+                         "cosa ho fatto stanotte, cosa c'è da approvare.")
         return "\n".join(lines) if lines else "Non ho abbastanza informazioni per rispondere."
+
+    async def _night_step(self, intent: Intent, request_id: str) -> tuple[list[str], dict | None]:
+        """Grounded lines from the night shift + (optionally) an approval to bind for a spoken 'sì'."""
+        from nodo.night import briefing as B
+        from nodo.night.assistant import night_lines
+        return await night_lines(self, intent, request_id, B)
 
     def _rank_today(self, pkg: ContextPackage) -> list[str]:
         today = datetime.now(UTC).date().isoformat()

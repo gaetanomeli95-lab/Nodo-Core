@@ -19,6 +19,17 @@ INTENT_PATTERNS: list[tuple[str, list[str], bool]] = [
     # bare confirmations/denials — become approvals ONLY when bound to a pending action (security)
     ("approve", [r"^\s*(sì|si|yes|ok|okay|va bene|d'accordo|confermo?|conferma|procedi|vai pure|approvo)[\.\!\s]*$"], False),
     ("reject", [r"^\s*(no|nope|non procedere|non confermo|rifiuto|lascia stare|non farlo)[\.\!\s]*$"], False),
+    # night shift (docs/NIGHT_SHIFT.md)
+    ("night_report", [r"\bstanotte\b", r"\bdurante la notte\b", r"\bturno di notte\b", r"\bcosa hai fatto\b",
+                      r"\b(briefing|resoconto)\b", r"\bovernight\b", r"\blast night\b", r"\bwhat did you do\b"], False),
+    ("pending_approvals", [r"\b(cosa|che cosa|cos'è che) (devo|c'è da|resta da) (approvare|decidere|confermare)\b",
+                           r"\bapprovazion", r"\bda approvare\b", r"\bcorrezion\w* (pront|in attesa|da pubblicare)",
+                           r"\bpending approvals?\b"], False),
+    ("run_checks", [r"\b(controlla|verifica|ricontrolla|monitora|testa)\b.*\bsit[io]\b", r"\bgiro di controllo\b",
+                    r"\bcheck (the |my |all )?(web)?sites\b"], False),
+    ("sites_status", [r"\bsit[io]\b.*\b(stat[oi]|come (va|vanno|stanno|sta)|online|funzion|giù|down|ok|problem)",
+                      r"\b(stato|come (va|vanno|stanno|sta))\b.*\bsit[io]\b", r"\bi (miei |nostri )?siti\b",
+                      r"\b(my|our) (web)?sites\b"], False),
     ("list_projects", [r"\b(mostrami|elenca|quali sono|lista|show|list)\b.*\bprogett", r"\bmy projects\b",
                        r"^\s*progetti\s*\??$"], False),
     ("tech_status", [r"\bstato tecnic", r"\btechnical (status|state)", r"\b(repo|repository|github|ci|build|deploy)\b",

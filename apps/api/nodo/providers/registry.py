@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from nodo.config import Settings
+from nodo.providers.anthropic import AnthropicProvider
 from nodo.providers.base import ModelProvider
 from nodo.providers.deterministic import DeterministicProvider
 from nodo.providers.ollama import OllamaProvider
@@ -24,6 +25,8 @@ def build_providers(s: Settings) -> list[ModelProvider]:
         providers.append(OpenAICompatProvider("openrouter", "https://openrouter.ai/api/v1", s.openrouter_api_key,
                                               openrouter_descriptors(s.openrouter_model),
                                               extra_headers={"X-Title": "NODO CORE"}))
+    if s.anthropic_api_key:
+        providers.append(AnthropicProvider(s.anthropic_api_key, s.anthropic_model, s.anthropic_base_url))
     if s.openai_api_key:
         providers.append(OpenAICompatProvider("openai", s.openai_base_url, s.openai_api_key,
                                               openai_descriptors(s.openai_model)))

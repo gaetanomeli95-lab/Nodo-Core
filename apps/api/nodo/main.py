@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from nodo.api import command, entities, voice, voice_ws
+from nodo.api import command, entities, night, voice, voice_ws
 from nodo.app import build_container
 from nodo.config import Settings, get_settings
 from nodo.db.session import get_engine, session_scope
@@ -27,9 +29,20 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
             from nodo.seed import seed_demo
             with session_scope() as db:
                 seed_demo(db)
-        log.info("NODO CORE started env=%s mode=%s providers=%s", settings.env, settings.mode,
-                 [p.name for p in app.state.container.providers])
+        c = app.state.container
+        if settings.env == "DEMO":
+            from nodo.night.demo import bootstrap_demo
+            await bootstrap_demo(c)
+        if settings.night_enabled and settings.env != "TEST":
+            from nodo.night.scheduler import NightScheduler
+            c.scheduler = NightScheduler(c)
+            c.scheduler.start()
+        log.info("NODO CORE started env=%s mode=%s providers=%s vercel=%s github=%s night=%s", settings.env,
+                 settings.mode, [p.name for p in c.providers], type(c.vercel).__name__ if c.vercel else None,
+                 type(c.repo).__name__ if c.repo else None, "on" if c.scheduler else "off")
         yield
+        if c.scheduler is not None:
+            await c.scheduler.stop()
 
     app = FastAPI(title="NODO CORE", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
@@ -39,10 +52,17 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
     app.include_router(command.router)
     app.include_router(voice.router)
     app.include_router(voice_ws.router)
+    app.include_router(night.router)
 
     @app.get("/health")
     def health():
         return {"status": "ok", "mode": settings.mode, "env": settings.env}
+
+    # one process, one URL: serve the built web app (apps/web/dist) when present
+    dist = Path(os.environ.get("NODO_WEB_DIST") or Path(__file__).resolve().parents[2] / "web" / "dist")
+    if (dist / "index.html").exists():
+        from fastapi.staticfiles import StaticFiles
+        app.mount("/", StaticFiles(directory=dist, html=True), name="web")
 
     return app
 

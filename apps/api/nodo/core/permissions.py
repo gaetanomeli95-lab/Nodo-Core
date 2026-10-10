@@ -28,6 +28,8 @@ class PermissionVerdict:
 @dataclass
 class PermissionPolicy:
     auto_approve_reversible: bool = False
+    # explicit allow-list of "tool.action" auto-approved at level 3 (e.g. the night shift's rollback)
+    auto_approve_actions: set[str] = field(default_factory=set)
     # explicit allow-list of "tool.action" the user deliberately configured as auto-approved at level 4
     auto_approve_sensitive: set[str] = field(default_factory=set)
     denied_actions: set[str] = field(default_factory=set)
@@ -41,6 +43,8 @@ class PermissionPolicy:
         if level == ActionLevel.EXECUTE_REVERSIBLE:
             if self.auto_approve_reversible:
                 return PermissionVerdict(True, False, "reversible actions auto-approved by policy")
+            if key in self.auto_approve_actions:
+                return PermissionVerdict(True, False, f"{key} auto-approved by user configuration (reversible)")
             return PermissionVerdict(True, True, "reversible external action requires approval")
         if key in self.auto_approve_sensitive:
             return PermissionVerdict(True, False, f"{key} explicitly auto-approved by user configuration")

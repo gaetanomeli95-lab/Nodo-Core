@@ -9,6 +9,7 @@ import httpx
 
 from nodo.core.permissions import ActionLevel
 from nodo.tools.base import ToolAction, ToolSpec
+from nodo.tools.github_repo import GitHubRepoClient
 
 
 @dataclass
@@ -93,16 +94,49 @@ class FakeGitHubConnector:
             active_branches=[default_branch, "feature/demo"], freshness="live")
 
 
-def github_tool(connector: GitHubConnector) -> ToolSpec:
+def github_tool(connector: GitHubConnector, repo: GitHubRepoClient | None = None) -> ToolSpec:
     async def snapshot(owner: str, name: str, default_branch: str = "main") -> dict:
         return asdict(await connector.snapshot(owner, name, default_branch))
 
     async def create_issue(owner: str, name: str, title: str, body: str = "") -> dict:  # placeholder to prove L3 policy
-        raise NotImplementedError("issue creation lands with the approval flow in Phase 4")
+        raise NotImplementedError("issue creation is not used yet")
 
-    return ToolSpec("github", "GitHub repositories, commits, PRs, issues, CI", auth="token", actions={
+    actions = {
         "snapshot": ToolAction("snapshot", ActionLevel.READ, "Normalized repository state", snapshot,
                                {"owner": "str", "name": "str", "default_branch": "str"}),
         "create_issue": ToolAction("create_issue", ActionLevel.EXECUTE_REVERSIBLE, "Open an issue", create_issue,
                                    {"owner": "str", "name": "str", "title": "str", "body": "str"}),
-    })
+    }
+    if repo is not None:
+        async def open_fix_pr(owner: str, name: str, base_branch: str, branch: str, files: dict, message: str,
+                              title: str, body: str) -> dict:
+            commit = await repo.commit_files(owner, name, base_branch, branch, files, message)
+            pr = await repo.open_pr(owner, name, branch, base_branch, title, body)
+            return commit | {"pr_number": pr["number"], "pr_url": pr.get("url")}
+
+        async def merge_pr(owner: str, name: str, number: int, method: str = "squash") -> dict:
+            return await repo.merge_pr(owner, name, number, method)
+
+        async def close_pr(owner: str, name: str, number: int, branch: str | None = None,
+                           comment: str | None = None) -> dict:
+            out = await repo.close_pr(owner, name, number, comment)
+            if branch:
+                out |= await repo.delete_branch(owner, name, branch)
+            return out
+
+        async def dependency_alerts(owner: str, name: str) -> dict:
+            alerts = await repo.dependency_alerts(owner, name)
+            return {"available": alerts is not None, "alerts": alerts or []}
+
+        actions |= {
+            # a new branch + PR never touches production: reversible (close PR, delete branch)
+            "open_fix_pr": ToolAction("open_fix_pr", ActionLevel.EXECUTE_REVERSIBLE,
+                                      "Commit a fix on a new branch and open a pull request", open_fix_pr),
+            # merging ships to production through Vercel: ALWAYS requires explicit approval
+            "merge_pr": ToolAction("merge_pr", ActionLevel.EXECUTE_SENSITIVE, "Merge a pull request", merge_pr),
+            "close_pr": ToolAction("close_pr", ActionLevel.EXECUTE_REVERSIBLE, "Close a PR and delete its branch",
+                                   close_pr),
+            "dependency_alerts": ToolAction("dependency_alerts", ActionLevel.READ, "Open Dependabot alerts",
+                                            dependency_alerts),
+        }
+    return ToolSpec("github", "GitHub repositories, commits, PRs, issues, CI", auth="token", actions=actions)

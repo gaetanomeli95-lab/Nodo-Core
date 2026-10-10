@@ -18,12 +18,12 @@ import logging
 import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from nodo.app import Container, ensure_workspace
 from nodo.core.events import EventBus
-from nodo.db.models import Approval, EventLog, VoiceTurnMetric
+from nodo.db.models import Approval, VoiceTurnMetric
 from nodo.voice import protocol
 from nodo.voice.base import (
     SpeechEvent,
@@ -330,6 +330,7 @@ class VoiceRuntime:
         await self._resolve_pending(approve=decision == "approve", source="protocol")
 
     async def _resolve_pending(self, approve: bool, source: str) -> None:
+        from nodo.night import approvals as A
         vs = self.vs
         approval_id = vs.pending_approval_id
         vs.pending_approval_id = None
@@ -338,15 +339,15 @@ class VoiceRuntime:
             if not a or a.status != "pending":
                 await self._send("approval.ignored", reason="approval not pending")
                 return
-            a.status = "approved" if approve else "rejected"
-            a.resolved_at = datetime.now(UTC)
-            sdb.add(EventLog(event_type=f"approval.{a.status}", request_id=a.request_id,
-                             organization_id=a.organization_id,
-                             payload={"approval_id": a.id, "tool": a.tool_name, "action": a.action,
-                                      "via": "voice"}))
-        await self._send("approval.resolved", approval_id=approval_id, status=a.status, tool=a.tool_name,
-                         action=a.action)
-        ack = "Confermato." if approve else "Va bene, non lo faccio."
+            tool, action = a.tool_name, a.action
+            try:  # executes the stored action on approve (Phase 4), cleans up on reject
+                out = await A.resolve(sdb, self.c, approval_id, approve, via="voice")
+            except A.ApprovalError:
+                await self._send("approval.ignored", reason="approval not pending")
+                return
+            status = out["status"]
+        await self._send("approval.resolved", approval_id=approval_id, status=status, tool=tool, action=action)
+        ack = out.get("message") or ("Confermato." if approve else "Va bene, non lo faccio.")
         await self._send("nodo.token", delta=ack)
         await self._speak_text(ack)
         if vs.state == VoiceState.WAITING_FOR_APPROVAL:

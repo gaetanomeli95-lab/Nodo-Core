@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -13,7 +12,7 @@ from nodo.api import schemas as S
 from nodo.api.deps import auth, container, org_id
 from nodo.app import Container
 from nodo.core.telemetry import Telemetry
-from nodo.db.models import Approval, Conversation, EventLog, Message
+from nodo.db.models import Approval, Conversation, EventLog, Message  # noqa: F401
 from nodo.db.session import get_db, session_scope
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(auth)])
@@ -60,18 +59,19 @@ def approvals(status: str | None = "pending", db: Session = Depends(get_db), org
     return db.scalars(q.order_by(Approval.created_at.desc())).all()
 
 
-@router.post("/approvals/{approval_id}/{decision}", response_model=S.ApprovalOut)
-def resolve_approval(approval_id: str, decision: str, db: Session = Depends(get_db), c: Container = Depends(container)):
+@router.post("/approvals/{approval_id}/{decision}")
+async def resolve_approval(approval_id: str, decision: str, db: Session = Depends(get_db),
+                           c: Container = Depends(container)):
+    """Records your decision and, on approve, EXECUTES the stored action (Phase 4). Rejections clean up."""
+    from nodo.night import approvals as A
     if decision not in ("approve", "reject"):
         raise HTTPException(400, "decision must be approve|reject")
-    a = db.get(Approval, approval_id)
-    if not a or a.status != "pending":
+    try:
+        out = await A.resolve(db, c, approval_id, decision == "approve", via="api")
+    except A.ApprovalError:
         raise HTTPException(404, "pending approval not found")
-    a.status, a.resolved_at = ("approved" if decision == "approve" else "rejected"), datetime.now(UTC)
-    db.add(EventLog(event_type=f"approval.{a.status}", request_id=a.request_id, organization_id=a.organization_id,
-                    payload={"approval_id": a.id, "tool": a.tool_name, "action": a.action}))
-    # NOTE: V0.1 records the decision; execution of approved actions lands with the first write connector (Phase 4).
-    return a
+    a = db.get(Approval, approval_id)
+    return S.ApprovalOut.model_validate(a).model_dump() | {"result": out}
 
 
 @router.get("/telemetry/usage")

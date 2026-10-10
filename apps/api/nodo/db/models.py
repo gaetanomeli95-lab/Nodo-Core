@@ -322,3 +322,121 @@ class VoiceTurnMetric(Base):
     turn_done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     latency_ms: Mapped[dict] = mapped_column(JSON, default=dict)  # stt | context | model_ttft | model_total | tts_tfa | tts_total | total
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ---------------------------------------------------------------- night shift (docs/NIGHT_SHIFT.md)
+
+class Site(Base, TimestampMixin):
+    """A website NODO watches: a Vercel project, its production URL and (optionally) its GitHub repository."""
+    __tablename__ = "sites"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200), index=True)
+    url: Mapped[str] = mapped_column(String(500))
+    vercel_project_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    vercel_project_name: Mapped[str | None] = mapped_column(String(200))
+    repo_owner: Mapped[str | None] = mapped_column(String(200))
+    repo_name: Mapped[str | None] = mapped_column(String(200))
+    default_branch: Mapped[str] = mapped_column(String(100), default="main")
+    key_pages: Mapped[list] = mapped_column(JSON, default=list)      # [{"path": "/contatti", "expect": "Contattaci"}]
+    policy: Mapped[dict] = mapped_column(JSON, default=dict)         # per-site overrides: rollback/redeploy/fix_prs
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sensitivity: Mapped[str] = mapped_column(String(32), default=Sensitivity.INTERNAL)
+    aliases: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(20), default="unknown")  # ok | warning | critical | unknown
+    status_note: Mapped[str | None] = mapped_column(Text)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_good_deployment_id: Mapped[str | None] = mapped_column(String(100))  # verified healthy in production
+    last_good_commit_sha: Mapped[str | None] = mapped_column(String(64))
+    current_deployment_id: Mapped[str | None] = mapped_column(String(100))
+
+
+class NightRun(Base):
+    """One pass of the night shift (full night run, light periodic check, manual run, or morning briefing)."""
+    __tablename__ = "night_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    request_id: Mapped[str] = mapped_column(String(36), index=True)  # telemetry correlation (tools/inference)
+    kind: Mapped[str] = mapped_column(String(20), default="manual")   # night | light | manual | briefing
+    status: Mapped[str] = mapped_column(String(20), default="running")  # running | done | failed
+    trigger: Mapped[str] = mapped_column(String(20), default="manual")  # schedule | manual | api | voice
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    briefing: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SiteCheck(Base):
+    __tablename__ = "site_checks"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    run_id: Mapped[str] = mapped_column(ForeignKey("night_runs.id"), index=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.id"), index=True)
+    check: Mapped[str] = mapped_column(String(30))     # deploy | uptime | pages | runtime | ssl | security | repo
+    status: Mapped[str] = mapped_column(String(20))    # ok | warning | critical | error | skipped
+    summary: Mapped[str] = mapped_column(Text, default="")
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class Incident(Base):
+    """A problem NODO noticed. Deduplicated by fingerprint; closes itself when the check is healthy again."""
+    __tablename__ = "incidents"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.id"), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(200), index=True)
+    kind: Mapped[str] = mapped_column(String(30))       # site_down | page_broken | deploy_failed | runtime_errors | ...
+    severity: Mapped[str] = mapped_column(String(20))   # critical | warning | info
+    title: Mapped[str] = mapped_column(String(300))
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="open")  # open | mitigated | resolved | ignored
+    resolution: Mapped[str | None] = mapped_column(Text)
+    occurrences: Mapped[int] = mapped_column(Integer, default=1)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class NightAction(Base):
+    """What NODO did (or tried, or proposed) about an incident: the 'I did this for you' record."""
+    __tablename__ = "night_actions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    run_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    site_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    incident_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    action: Mapped[str] = mapped_column(String(30))   # rollback | redeploy | fix_pr | merge | close_pr | draft | notify
+    status: Mapped[str] = mapped_column(String(20))   # done | failed | pending_approval | skipped | verified
+    summary: Mapped[str] = mapped_column(Text, default="")
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    approval_id: Mapped[str | None] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class FixProposal(Base, TimestampMixin):
+    """A code fix NODO prepared on a branch + PR. Reaches production only after your approval (merge)."""
+    __tablename__ = "fix_proposals"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.id"), index=True)
+    incident_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    run_id: Mapped[str | None] = mapped_column(String(36))
+    title: Mapped[str] = mapped_column(String(300))
+    diagnosis: Mapped[str] = mapped_column(Text, default="")
+    confidence: Mapped[str] = mapped_column(String(20), default="medium")  # low | medium | high
+    files: Mapped[list] = mapped_column(JSON, default=list)   # [{"path", "added", "removed"}]
+    diff: Mapped[str] = mapped_column(Text, default="")       # unified diff for review in the UI
+    branch: Mapped[str | None] = mapped_column(String(200))
+    commit_sha: Mapped[str | None] = mapped_column(String(64))
+    pr_number: Mapped[int | None] = mapped_column(Integer)
+    pr_url: Mapped[str | None] = mapped_column(String(500))
+    preview_url: Mapped[str | None] = mapped_column(String(500))
+    preview_status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | ok | failed | protected | unknown
+    preview_note: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str | None] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(20), default="proposed")  # proposed | merged | rejected | failed
+    approval_id: Mapped[str | None] = mapped_column(String(36))

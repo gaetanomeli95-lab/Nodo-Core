@@ -66,8 +66,9 @@ def openai_descriptors(model: str) -> list[ModelDescriptor]:
 
 def openrouter_descriptors(model: str) -> list[ModelDescriptor]:
     free = model.endswith(":free")
-    return [ModelDescriptor(provider="openrouter", model=model, reasoning=3, coding=3, tool_calling=True,
-                            context_window=32_000, tier="free" if free else "paid",
+    # paid OpenRouter models are typically frontier models (e.g. anthropic/..., openai/...): good enough for code fixes
+    return [ModelDescriptor(provider="openrouter", model=model, reasoning=3 if free else 4, coding=3 if free else 4,
+                            tool_calling=True, context_window=32_000 if free else 128_000, tier="free" if free else "paid",
                             cost_in_per_1k=0 if free else 0.0005, cost_out_per_1k=0 if free else 0.0015,
                             max_sensitivity=Sensitivity.INTERNAL)]
 

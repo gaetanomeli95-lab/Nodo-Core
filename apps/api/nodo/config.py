@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
     groq_api_key: str | None = None
     groq_model: str = "llama-3.3-70b-versatile"
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-sonnet-4-5"
+    anthropic_base_url: str = "https://api.anthropic.com/v1"
     allow_paid_in_free_mode: bool = False  # explicit override; default is NEVER charge in FREE
 
     # --- Voice ---
@@ -60,6 +63,39 @@ class Settings(BaseSettings):
     agent_max_tool_calls: int = 8
     agent_max_seconds: int = 60
     agent_max_depth: int = 2
+
+    # --- Vercel ---
+    vercel_token: str | None = None
+    vercel_team_id: str | None = None           # team_xxx; empty = personal account
+    vercel_connector: str = "auto"              # auto (http, fake in TEST/DEMO) | http | fake
+    vercel_protection_bypass: str | None = None  # "Protection Bypass for Automation" secret to test protected previews
+
+    # --- Night shift (docs/NIGHT_SHIFT.md) ---
+    night_enabled: bool = True                  # background scheduler inside the API process
+    timezone: str = "Europe/Rome"
+    night_start: str = "01:00"                  # full night run (all checks + fixes + drafts)
+    night_end: str = "07:00"
+    night_interval_minutes: int = 60            # light re-checks inside the night window
+    day_interval_minutes: int = 0               # light checks during the day (0 = off)
+    briefing_time: str = "07:30"                # morning briefing composed (and sent, if a notifier is set)
+    night_auto_rollback: bool = True            # production down after a deploy -> instant rollback (reversible)
+    night_auto_redeploy: bool = True            # failed build with a transient error -> one redeploy
+    night_fix_prs: bool = True                  # prepare fix pull requests (merge ALWAYS needs your approval)
+    night_fix_allow_paid: bool = True           # fixes may use a paid model even in FREE mode (capped below)
+    night_max_cost_usd: float = 1.0             # hard cap on model spend per night
+    night_max_fixes: int = 3                    # max fix proposals per night
+    night_drafts: bool = True                   # prepare content drafts for planned ideas (needs a language model)
+    night_max_drafts: int = 3
+    night_preview_wait_seconds: int = 360       # how long to wait for a Vercel preview before deferring the check
+    night_browser_checks: bool = True           # use Playwright (if installed) to catch JS errors on key pages
+    night_slow_ms: int = 3000                   # a page slower than this is reported as slow
+    night_auto_discover: bool = True            # import Vercel projects as monitored sites automatically
+    keep_awake: bool = True                     # Windows: keep the PC from sleeping during the night window
+
+    # --- Notifications ---
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    notify_critical: bool = True                # send an alert immediately for critical incidents (if a notifier is set)
 
 
 @lru_cache
