@@ -307,3 +307,11 @@ async def test_ask_nodo_about_the_night(db, seeded, nc, world):
 def test_briefing_when_nothing_ran(db, seeded):
     b = compose_briefing(db, seeded, datetime.now(UTC) - timedelta(hours=10))
     assert "non ho fatto controlli" in b.text and b.runs == 0
+
+
+def test_bypass_secret_per_project():
+    from nodo.night.shift import bypass_secret
+    s = Site(name="pbcare-platform", url="https://x", vercel_project_name="pbcare-platform", vercel_project_id="prj_1")
+    assert bypass_secret("ONE", s) == "ONE"
+    assert bypass_secret("altro=A, pbcare-platform=B", s) == "B"
+    assert bypass_secret("altro=A", s) is None and bypass_secret(None, s) is None

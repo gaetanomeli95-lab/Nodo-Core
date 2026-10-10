@@ -14,7 +14,19 @@ NODO is **not** a chatbot and **not** an AI wrapper:
 | "3 agents are thinking…" animation | Every agent run, tool call and inference is a persisted, inspectable record |
 | Silent API spend | `NODO_MODE=FREE` never incurs paid usage; every inference is metered |
 
-Status: **V0.1 — foundation + first vertical slice** (see [Current capabilities](#current-capabilities)).
+Status: **V0.2 — foundation + night shift** (see [Current capabilities](#current-capabilities)).
+
+> **Per iniziare su Windows:** [COME-INIZIARE.md](COME-INIZIARE.md) — `demo-nodo.bat` per la demo,
+> `avvia-nodo.bat` per l'uso reale, accessi in [docs/ACCESSI.md](docs/ACCESSI.md).
+
+## Night shift (turno di notte)
+
+While you sleep NODO watches every Vercel site (deploys, pages with a real browser, runtime errors, certificate,
+Dependabot, CI), rolls back a deploy that took production down, rebuilds builds that failed on transient errors,
+prepares a fix as a branch + PR with a tested Vercel preview, writes drafts of planned content, and in the
+morning tells you what happened ("cosa hai fatto stanotte?"), in the dashboard, by voice or on Telegram.
+Publishing a fix always waits for your approval. Details: [docs/NIGHT_SHIFT.md](docs/NIGHT_SHIFT.md) ·
+decision record: [ADR-009](docs/adr/ADR-009-night-shift.md).
 
 ## Architecture in one picture
 
@@ -66,7 +78,7 @@ Requirements: Python ≥ 3.12, Node ≥ 20. No API keys needed (FREE mode, deter
 cd apps/api
 pip install -e ".[dev]"
 cp ../../.env.example .env            # optional; defaults work
-alembic upgrade head                  # creates ./nodo.db
+python -m nodo.db.migrate             # creates/upgrades ./nodo.db (safe with create_all-made databases)
 python -m nodo.seed                   # optional: fictional demo workspace
 uvicorn nodo.main:app --reload        # http://127.0.0.1:8000  (docs at /docs)
 
@@ -110,7 +122,7 @@ Modes: `FREE` (default; never pays), `BALANCED`, `PERFORMANCE`, `PRIVATE` (local
 
 ```bash
 cd apps/api
-pytest -q                 # 40 tests: router, permissions, memory, orchestrator, agents, API, voice
+pytest -q                 # 85 tests: router, permissions, memory, orchestrator, agents, API, voice, night shift
 pytest -q evals           # AI behaviour scenarios (evals/scenarios/v01.json), deterministic & free
 ruff check nodo tests evals
 cd ../web && npm run build
@@ -134,12 +146,14 @@ All external systems have deterministic doubles: `FakeModelProvider`, `FakeGitHu
   voice approvals, per-turn latency metrics. Push-to-talk UX; browser (free/on-device) or OpenAI speech.
 - Telemetry: `/telemetry/usage`, `/telemetry/trace/{request_id}`, `/timeline` (append-only event log).
 - Single-user token auth (`NODO_API_TOKEN`), CORS, migrations, CI.
+- Night shift: Vercel + GitHub (write) connectors, HTTP/browser probes, incidents, rollback/redeploy, fix agent
+  with PR + preview check, executed approvals, morning briefing (dashboard, voice, Telegram), in-process
+  scheduler, Anthropic provider, DEMO world, Windows launcher and doctor (`python -m nodo.doctor`).
 
 ## Known limitations (V0.1)
 
 - Natural phrasing requires a configured LLM; the deterministic provider returns structured summaries.
 - Intent classification is rule-based; a model-backed classifier plugs into `IntentEngine.classify`.
-- Approvals are recorded and resolvable but no write connector executes approved actions yet.
 - Voice realtime transport is in place but real streaming STT/TTS providers are still fakes/browser-only;
   no wake word, no VAD-based hands-free turn detection (Phase 5 local Node).
 - GitHub connector is read-only and un-cached beyond the stored `tech_state` snapshot.

@@ -914,8 +914,8 @@ class NightShift:
             prop.preview_status = "failed"
             prop.preview_note = "la build dell'anteprima è fallita"
             return prop.preview_status
-        headers = {"x-vercel-protection-bypass": self.settings.vercel_protection_bypass} \
-            if self.settings.vercel_protection_bypass else None
+        secret = bypass_secret(self.settings.vercel_protection_bypass, site)
+        headers = {"x-vercel-protection-bypass": secret} if secret else None
         paths = [p for p in (prop.preview_note or "/").split(",") if p.startswith("/")] or ["/"]
         results = [await self.deps.prober.probe(_join_url(dep.url, p), headers=headers) for p in paths[:4]]
         if any(r.protected for r in results):
@@ -977,6 +977,20 @@ class NightShift:
         if await n.send("\n".join(lines)):
             for inc in fresh:
                 inc.notified_at = datetime.now(UTC)
+
+
+def bypass_secret(raw: str | None, site: Site) -> str | None:
+    """NODO_VERCEL_PROTECTION_BYPASS is either one secret for every project, or a per-project list:
+    `progetto-a=SECRET1,progetto-b=SECRET2` (Vercel generates a different secret for each project)."""
+    if not raw:
+        return None
+    if "=" not in raw:
+        return raw.strip()
+    for part in raw.split(","):
+        name, _, secret = part.partition("=")
+        if name.strip() in (site.vercel_project_name, site.vercel_project_id, site.name):
+            return secret.strip()
+    return None
 
 
 def _short_path(url: str) -> str:

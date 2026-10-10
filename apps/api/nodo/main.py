@@ -44,7 +44,7 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
         if c.scheduler is not None:
             await c.scheduler.stop()
 
-    app = FastAPI(title="NODO CORE", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="NODO CORE", version="0.2.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.container = container or build_container(settings)
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])

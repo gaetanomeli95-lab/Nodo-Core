@@ -311,3 +311,29 @@ async def setup_check(c: Container = Depends(container)):
     from nodo.doctor import as_dicts, run_checks
     checks = await run_checks(c)
     return {"checks": as_dicts(checks), "ready": not any(x.status in ("missing", "error") for x in checks)}
+
+
+@router.get("/setup/telegram")
+async def telegram_chats(c: Container = Depends(container)):
+    """Helps find NODO_TELEGRAM_CHAT_ID: write any message to your bot, then open this page."""
+    import httpx
+    token = c.settings.telegram_bot_token
+    if not token:
+        raise HTTPException(400, "Prima imposta NODO_TELEGRAM_BOT_TOKEN nel file .env e riavvia NODO.")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"https://api.telegram.org/bot{token}/getUpdates")
+        data = r.json()
+    except Exception as e:
+        raise HTTPException(502, f"Telegram non raggiungibile: {e}")
+    if not data.get("ok"):
+        raise HTTPException(400, "Il token del bot non è valido.")
+    chats = {}
+    for u in data.get("result", []):
+        chat = (u.get("message") or u.get("channel_post") or {}).get("chat") or {}
+        if chat.get("id"):
+            chats[chat["id"]] = chat.get("username") or chat.get("title") or chat.get("first_name")
+    if not chats:
+        return {"chats": [], "hint": "Scrivi un messaggio qualsiasi al tuo bot su Telegram, poi ricarica questa pagina."}
+    return {"chats": [{"chat_id": k, "name": v} for k, v in chats.items()],
+            "hint": "Copia il chat_id in NODO_TELEGRAM_CHAT_ID nel file .env e riavvia NODO."}

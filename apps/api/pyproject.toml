@@ -1,6 +1,6 @@
 [project]
 name = "nodo-core-api"
-version = "0.1.0"
+version = "0.2.0"
 description = "NODO CORE - intelligent personal & business operating layer (API + Core)"
 requires-python = ">=3.12"
 dependencies = [
@@ -14,11 +14,13 @@ dependencies = [
     "python-multipart>=0.0.9",
     "sse-starlette>=2.1",
     "rapidfuzz>=3.9",
+    "tzdata>=2024.1; sys_platform == 'win32'",  # time zones on Windows (night shift schedule)
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5"]
 postgres = ["psycopg[binary]>=3.1"]
+browser = ["playwright>=1.45"]   # night shift: real-browser checks (JavaScript errors). Then: python -m playwright install chromium
 
 [build-system]
 requires = ["setuptools>=68"]

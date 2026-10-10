@@ -243,3 +243,16 @@ def test_generic_approval_endpoint_executes(engine, settings):
         with session_scope() as s:
             act = s.scalars(select(NightAction).where(NightAction.approval_id == rb["id"])).one()
             assert act.status == "done"
+
+
+async def test_vercel_uses_default_team_when_not_configured():
+    def h(req):
+        if req.url.path == "/v2/user":
+            assert "teamId" not in req.url.params
+            return httpx.Response(200, json={"user": {"username": "g", "defaultTeamId": "team_def"}})
+        assert req.url.params.get("teamId") == "team_def"
+        return httpx.Response(200, json={"projects": []})
+    t, calls = mock(h)
+    v = HttpVercelConnector("tok", transport=t)
+    assert await v.list_projects() == [] and await v.list_projects() == []
+    assert [c.url.path for c in calls].count("/v2/user") == 1

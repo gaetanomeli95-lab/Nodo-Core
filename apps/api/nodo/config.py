@@ -24,7 +24,8 @@ class Environment(StrEnum):
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_prefix="NODO_", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8-sig", env_prefix="NODO_",
+                                      extra="ignore")
 
     env: Environment = Environment.DEV
     mode: NodoMode = NodoMode.FREE

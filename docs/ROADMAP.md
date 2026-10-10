@@ -25,7 +25,9 @@ Seams: `Agent`, `AgentContext`, `Budget`, `AgentRunner`, `AgentReport`.
 Next: RESEARCH, MEMORY, OPS, GUARD agents; dynamic sub-agents (child budget already modelled);
 agent memory (`MemoryFact.layer = "agent"`).
 
-## Phase 4 — Connectors (GitHub read ✅ → writes + more)
+## Phase 4 — Connectors (GitHub read ✅ → GitHub/Vercel writes ✅ → more)
+Done: approved actions are executed (REST + voice), GitHub branch/commit/PR/merge/close/issues, Vercel
+deploys/logs/rollback/promote/redeploy (night shift, ADR-009).
 Seams: `ToolSpec`/`ToolAction` with levels, `ToolExecutor` with approvals, `Approval` records + API.
 Next: execute approved actions (resume `ToolExecution` on `approval.approved`); GitHub issues/PR comments;
 Google Drive/Calendar/Gmail; documents ingestion → `Document` + facts; coding-agent execution provider.
@@ -37,7 +39,8 @@ Seams: provider `is_local`, `max_sensitivity`, `PRIVATE` mode, `WakeWordEngine` 
 ## Phase 6 — Proactive NODO
 Seams: append-only `event_log`, `EventBus.subscribe`, Pulse panel computed from real tasks.
 Next: job runner (in-process first), Pulse Engine scoring (importance/urgency/relevance/confidence),
-automations (trigger → conditions → actions), daily briefing.
+automations (trigger → conditions → actions). Done: in-process job runner + morning briefing (night shift).
+Next: Log Drains for full runtime analytics, uptime history charts, more remediation playbooks.
 
 ## Phase 7 — Distributed NODO
 Node registry, capability advertisement, workload placement (privacy/latency/cost), mobile client over the

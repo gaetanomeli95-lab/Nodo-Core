@@ -3,7 +3,7 @@ Vercel API directly. Read actions are level 0; rollback/redeploy are level 3 (re
 stays available and can be promoted back at any time).
 
 API references (REST, https://api.vercel.com): /v9/projects, /v6/deployments, /v13/deployments/{id},
-/v3/deployments/{id}/events, /v1/projects/{id}/deployments/{id}/runtime-logs, /v9/projects/{id}/rollback/{dep},
+/v3/deployments/{id}/events, /v1/projects/{id}/deployments/{id}/runtime-logs, /v1/projects/{id}/rollback/{dep},
 /v10/projects/{id}/promote/{dep}, POST /v13/deployments (redeploy), /v2/user.
 """
 from __future__ import annotations
@@ -109,6 +109,7 @@ class HttpVercelConnector:
         if token:
             self.headers["Authorization"] = f"Bearer {token}"
         self.token = token
+        self._team_checked = team_id is not None
 
     def _client(self, timeout: float | None = None) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=self.base, headers=self.headers, timeout=timeout or self.timeout,
@@ -120,9 +121,25 @@ class HttpVercelConnector:
             p["teamId"] = self.team_id
         return p
 
+    async def _resolve_team(self) -> None:
+        """Hobby accounts are teams too ("<name>-projects"): with no NODO_VERCEL_TEAM_ID we use the account's
+        default team, otherwise the API may answer 403 'Trying to access resource under scope ...'."""
+        if self.team_id or self._team_checked:
+            return
+        self._team_checked = True
+        try:
+            async with self._client() as c:
+                r = await c.get("/v2/user")
+            if r.status_code < 400:
+                self.team_id = ((r.json() or {}).get("user") or {}).get("defaultTeamId") or None
+        except httpx.HTTPError:
+            pass
+
     async def _req(self, method: str, path: str, params: dict | None = None, body: dict | None = None) -> Any:
         if not self.token:
             raise VercelError("NODO_VERCEL_TOKEN non configurato")
+        if path != "/v2/user":
+            await self._resolve_team()
         async with self._client() as c:
             r = await c.request(method, path, params=self._params(params), json=body)
         if r.status_code >= 400:
@@ -204,6 +221,7 @@ class HttpVercelConnector:
         """Best effort: the runtime-logs endpoint streams recent lines (NDJSON). We read for a few seconds."""
         if not self.token:
             return RuntimeLogs(False, note="token mancante")
+        await self._resolve_team()
         res = RuntimeLogs(True)
         deadline = time.monotonic() + seconds
         try:
@@ -233,15 +251,18 @@ class HttpVercelConnector:
         return res
 
     async def rollback(self, project_id: str, deployment_id: str) -> dict:
-        try:
-            await self._req("POST", f"/v9/projects/{project_id}/rollback/{deployment_id}")
-            return {"ok": True, "method": "rollback", "deployment_id": deployment_id}
-        except VercelError as first:
-            try:  # promote is the general "point production at this deployment" operation
-                await self._req("POST", f"/v10/projects/{project_id}/promote/{deployment_id}")
-                return {"ok": True, "method": "promote", "deployment_id": deployment_id}
-            except VercelError as second:
-                raise VercelError(f"rollback fallito ({first}); promote fallito ({second})")
+        """Instant Rollback (POST /v1/projects/{id}/rollback/{dep}); falls back to promote, which points the
+        production domains at the given deployment too."""
+        errors = []
+        for path, params in ((f"/v1/projects/{project_id}/rollback/{deployment_id}", {"description": "NODO night shift"}),
+                             (f"/v10/projects/{project_id}/promote/{deployment_id}", None)):
+            try:
+                await self._req("POST", path, params)
+                return {"ok": True, "method": "rollback" if "rollback" in path else "promote",
+                        "deployment_id": deployment_id}
+            except VercelError as e:
+                errors.append(str(e))
+        raise VercelError("rollback non riuscito: " + " | ".join(errors))
 
     async def promote(self, project_id: str, deployment_id: str) -> dict:
         """Serve this (newer) deployment on the production domains. Needed after an Instant Rollback, because Vercel
