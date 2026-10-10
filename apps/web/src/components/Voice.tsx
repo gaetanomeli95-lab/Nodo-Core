@@ -32,6 +32,8 @@ class ChunkPlayer {
   private queue: string[] = [];
   private playing = false;
   private current: HTMLAudioElement | null = null;
+  private finishCurrent: (() => void) | null = null;
+  private generation = 0;
 
   push(b64: string, mime: string) {
     const bin = atob(b64);
@@ -40,23 +42,48 @@ class ChunkPlayer {
     this.queue.push(URL.createObjectURL(new Blob([bytes], { type: mime })));
     void this.pump();
   }
+
   private async pump() {
     if (this.playing) return;
     this.playing = true;
-    for (const url = this.queue.shift(); url;) {
-      this.current = new Audio(url);
-      try { await this.current.play(); await new Promise((r) => { this.current!.onended = r; this.current!.onerror = r; }); }
-      catch { /* audio playback may be blocked until a user gesture */ }
-      URL.revokeObjectURL(url);
+    const generation = this.generation;
+    try {
+      // Each URL is played exactly once; an interrupt invalidates this generation.
+      while (this.queue.length && generation === this.generation) {
+        const url = this.queue.shift()!;
+        const audio = new Audio(url);
+        this.current = audio;
+        try {
+          await audio.play();
+          if (generation !== this.generation) continue;
+          await new Promise<void>((resolve) => {
+            this.finishCurrent = resolve;
+            audio.onended = resolve;
+            audio.onerror = resolve;
+          });
+        } catch {
+          // Autoplay can be blocked before the first user gesture.
+        } finally {
+          audio.pause();
+          audio.onended = null;
+          audio.onerror = null;
+          if (this.current === audio) this.current = null;
+          this.finishCurrent = null;
+          URL.revokeObjectURL(url);
+        }
+      }
+    } finally {
+      this.playing = false;
+      if (this.queue.length) void this.pump();
     }
-    this.playing = false;
-    this.current = null;
   }
+
   stop() {
+    this.generation += 1;
+    for (const url of this.queue) URL.revokeObjectURL(url);
     this.queue = [];
     this.current?.pause();
-    this.current = null;
-    this.playing = false;
+    this.finishCurrent?.(); // release a pending onended promise on barge-in
   }
 }
 
@@ -281,8 +308,13 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
         const pcm16 = toPcm16(ev.data as Float32Array, srcRate, 16000);
         if (pcm16.length) sock.current?.send({ type: "audio.chunk", data: toB64(pcm16), mime: "audio/pcm;rate=16000" });
       };
+      // The worklet must stay running without monitoring the microphone on the speakers.
+      // A zero-gain destination keeps the graph alive and avoids acoustic feedback.
+      const silent = ctx.createGain();
+      silent.gain.value = 0;
       src.connect(node);
-      node.connect(ctx.destination);
+      node.connect(silent);
+      silent.connect(ctx.destination);
       liveMic.current = { ctx, stream };
       return true;
     } catch {
