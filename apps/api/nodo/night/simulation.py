@@ -286,6 +286,11 @@ class FakeGitHubRepo:
         self._repo(owner, name)["branches"].pop(branch, None)
         return {"deleted": branch}
 
+    async def create_issue(self, owner: str, name: str, title: str, body: str = "") -> dict:
+        self._repo(owner, name)
+        self.calls.append(f"issue:{title}")
+        return {"number": 1, "url": f"https://github.com/{owner}/{name}/issues/1"}
+
     async def dependency_alerts(self, owner: str, name: str) -> list[dict] | None:
         self._repo(owner, name)
         return self.alerts.get(f"{owner}/{name}", [])

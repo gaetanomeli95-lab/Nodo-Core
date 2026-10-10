@@ -172,7 +172,7 @@ class HttpVercelConnector:
             id=d.get("uid") or d.get("id"), project_id=d.get("projectId") or project_id or "",
             url=_url(d.get("url")), state=(d.get("readyState") or d.get("state") or "UNKNOWN").upper(),
             target=d.get("target"), created_at=_iso(d.get("createdAt") or d.get("created")),
-            commit_sha=meta.get("githubCommitSha"), commit_message=(meta.get("githubCommitMessage") or "").splitlines()[0][:200] or None,
+            commit_sha=meta.get("githubCommitSha"), commit_message=((meta.get("githubCommitMessage") or "").strip().splitlines() or [""])[0][:200] or None,
             commit_ref=meta.get("githubCommitRef"), error_message=d.get("errorMessage"))
 
     async def list_deployments(self, project_id: str, *, target: str | None = "production", limit: int = 10,

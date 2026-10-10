@@ -1,6 +1,11 @@
-import type { NodoEvent, Project, SystemInfo, Task } from "../api";
+import { timeAgo, type NodoEvent, type Project, type Site, type SystemInfo, type Task } from "../api";
 
-export function StatePanel({ system, projects, tasks, activeContext }: { system: SystemInfo | null; projects: Project[]; tasks: Task[]; activeContext: string | null }) {
+export function StatePanel({ system, projects, tasks, activeContext, sites = [], pending = 0, onOpen }: {
+  system: SystemInfo | null; projects: Project[]; tasks: Task[]; activeContext: string | null;
+  sites?: Site[]; pending?: number; onOpen?: (tab: string) => void;
+}) {
+  const bad = sites.filter((s) => s.status === "critical" || s.status === "warning");
+  const lastCheck = sites.map((s) => s.last_checked_at).filter(Boolean).sort().pop() ?? null;
   const today = new Date().toISOString().slice(0, 10);
   const overdue = tasks.filter((t) => t.due_date && t.due_date < today && t.status !== "DONE");
   const blocked = tasks.filter((t) => t.status === "BLOCKED");
@@ -23,6 +28,17 @@ export function StatePanel({ system, projects, tasks, activeContext }: { system:
           {[...blocked, ...overdue].slice(0, 4).map((t) => <li key={t.id}><span>{names[t.project_id || ""] || "—"}</span>{t.title}</li>)}
         </ul>
       )}
+      <h2>Siti</h2>
+      <ul className="pulse">
+        <li className="clickable" onClick={() => onOpen?.("sites")}><b>{sites.filter((s) => s.status === "ok").length}</b> regolari su {sites.length}</li>
+        <li className="clickable" onClick={() => onOpen?.("night")}><b className={pending ? "warn" : ""}>{pending}</b> decisioni da prendere</li>
+      </ul>
+      {bad.length > 0 && (
+        <ul className="alerts">
+          {bad.slice(0, 4).map((s) => <li key={s.id} className={s.status} onClick={() => onOpen?.("sites")}><span>{s.name}</span>{s.status_note || "da controllare"}</li>)}
+        </ul>
+      )}
+      {sites.length > 0 && <p className="muted small">Ultimo controllo: {timeAgo(lastCheck)}</p>}
       <h2>Progetti</h2>
       <ul className="projects">
         {projects.map((p) => <li key={p.id}><span className={`prio p${p.priority}`}>{p.priority}</span>{p.name}<small>{p.kind}</small></li>)}
@@ -80,6 +96,8 @@ function describe(e: NodoEvent): string {
     case "step": return `${e.step} ${e.status}`;
     case "agent.started": case "agent.finished": return `${e.agent}${e.status ? " " + e.status : ""}`;
     case "tool.started": case "tool.finished": return `${e.tool}.${e.action}${e.ok === false ? " ✗" : ""}`;
+    case "approval.requested": return `${e.label ?? `${e.tool}.${e.action}`} — in attesa del tuo ok`;
+    case "night.action": return `${e.site ?? ""} ${e.action}: ${e.status}`;
     case "done": return `${e.provider}/${e.model} · ${e.confidence}`;
     case "error": return String(e.message);
     default: return "";

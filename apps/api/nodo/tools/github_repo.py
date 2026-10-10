@@ -50,6 +50,8 @@ class GitHubRepoClient(Protocol):
 
     async def dependency_alerts(self, owner: str, name: str) -> list[dict] | None: ...
 
+    async def create_issue(self, owner: str, name: str, title: str, body: str = "") -> dict: ...
+
 
 class HttpGitHubRepoClient:
     def __init__(self, token: str | None, base_url: str = "https://api.github.com", timeout: float = 20.0,
@@ -136,6 +138,10 @@ class HttpGitHubRepoClient:
     async def delete_branch(self, owner: str, name: str, branch: str) -> dict:
         await self._req("DELETE", f"/repos/{owner}/{name}/git/refs/heads/{branch}", ok404=True)
         return {"deleted": branch}
+
+    async def create_issue(self, owner: str, name: str, title: str, body: str = "") -> dict:
+        d = await self._req("POST", f"/repos/{owner}/{name}/issues", body={"title": title, "body": body})
+        return {"number": d.get("number"), "url": d.get("html_url")}
 
     async def dependency_alerts(self, owner: str, name: str) -> list[dict] | None:
         """Open Dependabot alerts, or None when the token lacks the permission / alerts are disabled."""

@@ -98,8 +98,10 @@ def github_tool(connector: GitHubConnector, repo: GitHubRepoClient | None = None
     async def snapshot(owner: str, name: str, default_branch: str = "main") -> dict:
         return asdict(await connector.snapshot(owner, name, default_branch))
 
-    async def create_issue(owner: str, name: str, title: str, body: str = "") -> dict:  # placeholder to prove L3 policy
-        raise NotImplementedError("issue creation is not used yet")
+    async def create_issue(owner: str, name: str, title: str, body: str = "") -> dict:
+        if repo is None:
+            raise RuntimeError("serve NODO_GITHUB_TOKEN per aprire issue")
+        return await repo.create_issue(owner, name, title, body)
 
     actions = {
         "snapshot": ToolAction("snapshot", ActionLevel.READ, "Normalized repository state", snapshot,
