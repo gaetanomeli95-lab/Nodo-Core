@@ -79,13 +79,31 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const cbRef = useRef(cb);
   cbRef.current = cb;
 
+  const ttsWarned = useRef(false);
+  const ttsFail = (msg: string) => {
+    if (ttsWarned.current) return;              // one clear notice, not one per sentence
+    ttsWarned.current = true;
+    cbRef.current.onError(msg);
+  };
   const browserTtsNext = () => {
     const text = speechQueue.current.shift();
-    if (!text || !("speechSynthesis" in window)) { speaking.current = false; return; }
+    if (!text) { speaking.current = false; return; }
+    if (!("speechSynthesis" in window)) {
+      speaking.current = false;
+      ttsFail("questo browser non può leggere le risposte ad alta voce: usa Chrome o Edge");
+      return;
+    }
     speaking.current = true;
     const u = new SpeechSynthesisUtterance(text);
     u.lang = config?.language === "it" ? "it-IT" : config?.language || "it-IT";
-    u.onend = browserTtsNext; u.onerror = browserTtsNext;
+    u.onend = browserTtsNext;
+    u.onerror = (ev) => {
+      const code = (ev as SpeechSynthesisErrorEvent).error;
+      if (code && code !== "interrupted" && code !== "canceled")
+        ttsFail(`non riesco a leggere la risposta ad alta voce (${code}): controlla la voce italiana in
+          Impostazioni di Windows → Ora e lingua → Voce`);
+      browserTtsNext();
+    };
     window.speechSynthesis.speak(u);
   };
 
@@ -104,6 +122,10 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
               break;
             case "voice.session.started":
               attempt = 0;
+              if ("speechSynthesis" in window) {
+                window.speechSynthesis.getVoices();   // Chrome loads voices lazily: warm them up
+                window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+              }
               setConnected(true);
               setState(((e.state as VoiceState) || "IDLE"));   // ready: the button works from here
               break;
