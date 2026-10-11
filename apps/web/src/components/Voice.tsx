@@ -5,6 +5,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { VoiceSocket, type VoiceConfig, type VoiceEvent } from "../api";
+import { silenceDelay, speechSnapshot } from "./browserSpeech";
 
 export type VoiceState =
   | "IDLE" | "CONNECTING" | "LISTENING" | "TRANSCRIBING" | "UNDERSTANDING" | "THINKING"
@@ -446,26 +447,20 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     r.onresult = (e) => {
       // Chrome repeats previously finalized results on later events. Reconstruct each
       // snapshot rather than appending the same transcript multiple times.
-      const finalParts: string[] = [], interimParts: string[] = [];
-      for (const result of Array.from(e.results)) {
-        const value = result[0]?.transcript?.trim();
-        if (!value) continue;
-        if (result.isFinal) finalParts.push(value);
-        else interimParts.push(value);
-      }
-      finalBuf.current = finalParts.join(" ");
-      lastInterim.current = interimParts.join(" ");
-      const partial = [finalBuf.current, lastInterim.current].filter(Boolean).join(" ").trim();
-      if (partial) sock.current?.send({ type: "transcript.partial", text: partial });
-      if (automatic && partial) {
+      const snapshot = speechSnapshot(e.results);
+      finalBuf.current = snapshot.final;
+      lastInterim.current = snapshot.tentative;
+      if (snapshot.partial) sock.current?.send({ type: "transcript.partial", text: snapshot.partial });
+      if (automatic) {
         clearSilence();
-        // A short pause after final speech closes the turn, but a still-unfinalized
-        // phrase gets longer to avoid cutting off the user mid-sentence.
-        silenceTimer.current = setTimeout(() => {
-          if (rec.current === r && listening.current) {
-            try { r.stop(); } catch { /* already closing */ }
-          }
-        }, interimParts.length ? 1700 : 1100);
+        const delay = silenceDelay(snapshot);
+        if (delay !== null) {
+          silenceTimer.current = setTimeout(() => {
+            if (rec.current === r && listening.current) {
+              try { r.stop(); } catch { /* already closing */ }
+            }
+          }, delay);
+        }
       }
     };
     r.onerror = (ev: unknown) => {
