@@ -243,7 +243,11 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
               break;
             case "voice.engine":       // live session died mid-conversation: back to push-to-talk
               setEngine(e.engine === "live" ? "live" : "browser");
-              if (e.engine !== "live") { stopLiveMic(); setLiveOn(false); }
+              if (e.engine !== "live") {
+                stopLiveMic();
+                stopLocalAudio();  // never play buffered Live speech after the provider has fallen back
+                setLiveOn(false);
+              }
               break;
             case "tts.chunk":
               if ((e.mime as string || "").startsWith("audio/pcm")) pcm.current.push(e.audio as string, e.mime as string);
