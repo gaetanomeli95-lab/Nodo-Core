@@ -110,7 +110,8 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const send = async (requested?: string) => {
     const text = (requested ?? input).trim();
     if (!text || busy) return;
-    setInput(""); setBusy(true); setActivity(null);
+    if (requested === undefined) setInput(""); // Investigating Pulse must not erase a drafted message.
+    setBusy(true); setActivity(null);
     setTurns((ts) => [...ts, { who: "user", text }, { who: "nodo", text: "" }]);
     try {
       await streamCommand({ text, conversation_id: conversationId.current }, (ev) => {
