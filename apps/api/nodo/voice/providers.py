@@ -188,7 +188,10 @@ def build_voice(s: Settings) -> tuple[SpeechToTextProvider, TextToSpeechProvider
         stt = FakeSTT()
     else:
         stt = BrowserSTT()
-    if s.tts_provider == "openai" and s.openai_api_key and paid_ok:
+    if s.tts_provider == "local":
+        from nodo.voice.local import LocalPiper
+        tts = LocalPiper(s.local_voice_dir, s.piper_voice)
+    elif s.tts_provider == "openai" and s.openai_api_key and paid_ok:
         tts = OpenAISpeech(s.openai_api_key, s.openai_base_url, default_voice=s.tts_voice)
     elif s.tts_provider == "fake":
         tts = FakeTTS()
