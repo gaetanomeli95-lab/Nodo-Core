@@ -251,6 +251,7 @@ def test_approval_answer_speaks_through_live(client, db, container):
 def test_live_turn_is_saved_to_the_shared_diary(client, db, container):
     """Speech-to-speech must persist transcribed user and NODO messages for later text turns."""
     from sqlalchemy import select
+
     from nodo.db.models import Message
 
     holder = []
@@ -276,9 +277,10 @@ def test_live_turn_is_saved_to_the_shared_diary(client, db, container):
 
 def test_text_conversation_can_be_selected_before_speaking(client, db, container):
     """Changing the active text thread synchronizes Live context without a second voice session."""
+    from sqlalchemy import select
+
     from nodo.app import ensure_workspace
     from nodo.db.models import Conversation, Message
-    from sqlalchemy import select
 
     org, _ = ensure_workspace(db)
     conv = Conversation(organization_id=org.id, channel="text")
