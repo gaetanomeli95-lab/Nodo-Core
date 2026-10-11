@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Any
@@ -38,6 +39,29 @@ LIVE_MODELS = ("gemini-3.8-live", "gemini-3.1-flash-live-preview", "gemini-2.5-f
 ConnectFactory = Callable[[str, str, dict], Any]
 OnEvent = Callable[[dict], Awaitable[None]]
 
+# Free-tier Live quota is per API key. When it runs out every model answers 1011;
+# hammering the whole ladder on each click just wastes ~25s, so the key rests here.
+_QUOTA_COOLDOWN_S = 3600
+_quota = {"key": None, "until": 0.0}
+
+
+def _is_quota_error(e: Exception) -> bool:
+    s = str(e).lower()
+    return "quota" in s or "resource_exhausted" in s or "1011" in s or "429" in s
+
+
+def quota_note(settings) -> str | None:
+    """A plain-Italian reason while the current key's Live quota is cooling down."""
+    if settings.gemini_api_key and _quota["key"] == settings.gemini_api_key \
+            and time.monotonic() < _quota["until"]:
+        return ("quota gratuita di Gemini Live finita per ora — riprovo da solo più tardi "
+                "(o incolla la chiave di un altro progetto in Accessi)")
+    return None
+
+
+def _mark_quota(settings) -> None:
+    _quota["key"], _quota["until"] = settings.gemini_api_key, time.monotonic() + _QUOTA_COOLDOWN_S
+
 
 class LiveDropped(Exception):
     """The live socket is gone (closed mid-send): the runtime treats it like a 'closed' event."""
@@ -53,6 +77,8 @@ def missing_reason(settings, container=None) -> str | None:
         return "disattivata in test/demo"
     if not settings.gemini_api_key:
         return "manca NODO_GEMINI_API_KEY (chiave gratuita su aistudio.google.com)"
+    if note := quota_note(settings):
+        return note
     if importlib.util.find_spec("google.genai") is None:
         return "manca la libreria google-genai (la installa avvia-nodo)"
     return None
@@ -119,6 +145,9 @@ class LiveBridge:
                 last = e
                 log.info("live model %s refused the connection: %s", model, str(e)[:160])
                 self._cm = self._session = None
+                if _is_quota_error(e):
+                    _mark_quota(settings=self.settings)
+                    break                           # quota is per key, not per model: no rung will help
         if self._session is None:
             raise RuntimeError(f"nessun modello Live disponibile ({last})")
         self._pump_task = asyncio.create_task(self._pump())

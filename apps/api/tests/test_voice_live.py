@@ -314,3 +314,36 @@ def test_conversation_set_is_a_typed_protocol_event():
     parsed = parse_inbound({"type": "conversation.set", "conversation_id": None})
     assert isinstance(parsed, ConversationSet)
     assert parsed.conversation_id is None
+
+
+def test_quota_error_rests_the_key_instead_of_retrying_the_ladder(container):
+    """A 1011 quota refusal marks the key: the ladder stops and missing_reason explains why."""
+    import pytest
+
+    from nodo.voice import live as live_engine
+
+    calls = []
+
+    def quota_connect(api_key, model, config):
+        calls.append(model)
+        raise RuntimeError("1011 None. You exceeded your current quota, please check your plan")
+
+    try:
+        live_engine._quota["key"] = None
+        live_engine._quota["until"] = 0.0
+        container.settings.env = "LOCAL"
+        container.settings.gemini_api_key = "test-key"
+        container.live_connect = None
+        bridge = live_engine.LiveBridge(container.settings, lambda e: None, connect=quota_connect)
+        with pytest.raises(RuntimeError):
+            asyncio.run(bridge.start("sys", [], "it"))
+        assert len(calls) == 1                       # quota is per key: no point trying the other models
+        assert live_engine.quota_note(container.settings) is not None
+        assert live_engine.missing_reason(container.settings) == live_engine.quota_note(container.settings)
+        container.settings.gemini_api_key = "another-key"
+        assert live_engine.quota_note(container.settings) is None   # a fresh key gets a fresh quota
+    finally:
+        container.settings.env = "TEST"
+        container.settings.gemini_api_key = None
+        live_engine._quota["key"] = None
+        live_engine._quota["until"] = 0.0
