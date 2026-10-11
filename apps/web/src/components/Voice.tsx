@@ -149,8 +149,20 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const [partial, setPartial] = useState("");
   const [engine, setEngine] = useState<"live" | "browser">("browser");   // live = Gemini Live (real-time voice)
   const [liveOn, setLiveOn] = useState(false);                            // live mode: conversation mic open
+  const [handsFree, setHandsFree] = useState(false);                      // explicit opt-in; browser half-duplex
   const sock = useRef<VoiceSocket | null>(null);
   const rec = useRef<Recognition | null>(null);
+  const handsFreeRef = useRef(false);
+  const connectedRef = useRef(false);
+  const engineRef = useRef<"live" | "browser">("browser");
+  const awaitingTurn = useRef(false);
+  const silenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastInterim = useRef("");
+  const handsFreeSupported = typeof window !== "undefined" &&
+    !!((window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown })
+      .SpeechRecognition || (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition)
+    && (config?.tts.location === "browser" || config === null);
   const player = useRef(new ChunkPlayer());
   const held = useRef(false);
   const toggled = useRef(false);
@@ -174,10 +186,11 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   };
   const browserTtsNext = () => {
     const text = speechQueue.current.shift();
-    if (!text) { speaking.current = false; return; }
+    if (!text) { speaking.current = false; maybeResumeHandsFree(); return; }
     if (!("speechSynthesis" in window)) {
       speaking.current = false;
       ttsFail("questo browser non può leggere le risposte ad alta voce: usa Chrome o Edge");
+      stopHandsFree();
       return;
     }
     speaking.current = true;
@@ -218,7 +231,9 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
                 window.speechSynthesis.getVoices();   // Chrome loads voices lazily: warm them up
                 window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
               }
-              setEngine(e.engine === "live" ? "live" : "browser");
+              engineRef.current = e.engine === "live" ? "live" : "browser";
+              connectedRef.current = true;
+              setEngine(engineRef.current);
               setConnected(true);
               setState(((e.state as VoiceState) || "IDLE"));   // ready: the button works from here
               break;
@@ -241,8 +256,10 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
               speechQueue.current.push(e.text as string);
               if (!speaking.current) browserTtsNext();
               break;
-            case "voice.engine":       // live session died mid-conversation: back to push-to-talk
-              setEngine(e.engine === "live" ? "live" : "browser");
+            case "voice.engine":       // live session died mid-conversation: browser fallback is opt-in
+              engineRef.current = e.engine === "live" ? "live" : "browser";
+              setEngine(engineRef.current);
+              if (e.engine === "live") stopHandsFree();
               if (e.engine !== "live") {
                 stopLiveMic();
                 stopLocalAudio();  // never play buffered Live speech after the provider has fallen back
@@ -256,6 +273,8 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
             case "voice.interrupted":
               setPartial("");
               stopLocalAudio();
+              awaitingTurn.current = false;
+              maybeResumeHandsFree();
               break;
             case "nodo.response":
               streamingStarted.current = false;
@@ -263,6 +282,8 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
               break;
             case "voice.turn.done":
               streamingStarted.current = false;
+              awaitingTurn.current = false;
+              maybeResumeHandsFree(); // wait for the actual speechSynthesis queue, not just server completion
               break;
             case "error":
               c.onError(e.message as string);
@@ -271,6 +292,8 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
         },
         () => {
           // NODO restarted or the network dropped: try again (2s, 4s, ... up to 15s)
+          connectedRef.current = false;
+          stopHandsFree(); // a reconnect must never silently re-enable microphone capture
           setConnected(false);
           setState("CONNECTING");
           if (closed) return;
@@ -285,7 +308,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
       sock.current = s;
     };
     connect();
-    return () => { closed = true; if (retry) clearTimeout(retry); sock.current?.close(); stopLocalAudio(); stopLiveMic(); };
+    return () => { closed = true; if (retry) clearTimeout(retry); stopHandsFree(); sock.current?.close(); stopLocalAudio(); stopLiveMic(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -349,57 +372,165 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     if (await startLiveMic()) { setLiveOn(true); setState("LISTENING"); }
   };
 
+  // ---------------------------------------------------------- Browser conversation (explicit half-duplex)
+  const clearSilence = () => {
+    if (silenceTimer.current) clearTimeout(silenceTimer.current);
+    silenceTimer.current = null;
+  };
+  const clearResume = () => {
+    if (resumeTimer.current) clearTimeout(resumeTimer.current);
+    resumeTimer.current = null;
+  };
+
+  const stopHandsFree = () => {
+    handsFreeRef.current = false;
+    setHandsFree(false);
+    awaitingTurn.current = false;
+    clearSilence();
+    clearResume();
+    if (rec.current) {
+      const active = rec.current;
+      rec.current = null; // ignore delayed onend after explicit microphone shutdown
+      active.onend = null;
+      active.onresult = null;
+      active.onerror = null;
+      try { active.stop(); } catch { /* already stopped */ }
+    }
+    listening.current = false;
+    held.current = toggled.current = false;
+    finalBuf.current = lastInterim.current = "";
+    setPartial("");
+  };
+
+  const maybeResumeHandsFree = () => {
+    if (!handsFreeRef.current || !connectedRef.current || engineRef.current !== "browser" ||
+        awaitingTurn.current || speaking.current || speechQueue.current.length ||
+        listening.current || rec.current || resumeTimer.current) return;
+    // Browsers can end a recognition session on long silence. Retry is allowed only while
+    // the user has explicitly kept hands-free enabled. No microphone stays open on disconnect.
+    resumeTimer.current = setTimeout(() => {
+      resumeTimer.current = null;
+      if (handsFreeRef.current && connectedRef.current && !awaitingTurn.current &&
+          !speaking.current && !rec.current) startBrowserRecognition(true);
+    }, 350);
+  };
+
+  const startBrowserRecognition = (automatic: boolean) => {
+    const SR = window as unknown as {
+      SpeechRecognition?: new () => Recognition;
+      webkitSpeechRecognition?: new () => Recognition;
+    };
+    const Ctor = SR.SpeechRecognition || SR.webkitSpeechRecognition;
+    if (!Ctor) {
+      if (automatic) stopHandsFree();
+      cbRef.current.onError("Ascolto libero richiede il riconoscimento vocale di Chrome o Edge.");
+      return;
+    }
+    clearSilence();
+    clearResume();
+    finalBuf.current = "";
+    lastInterim.current = "";
+    const r = new Ctor();
+    r.lang = config?.language === "it" ? "it-IT" : config?.language || "it-IT";
+    r.interimResults = true;
+    r.continuous = true;
+    r.onresult = (e) => {
+      // Chrome repeats previously finalized results on later events. Reconstruct each
+      // snapshot rather than appending the same transcript multiple times.
+      const finalParts: string[] = [], interimParts: string[] = [];
+      for (const result of Array.from(e.results)) {
+        const value = result[0]?.transcript?.trim();
+        if (!value) continue;
+        if (result.isFinal) finalParts.push(value);
+        else interimParts.push(value);
+      }
+      finalBuf.current = finalParts.join(" ");
+      lastInterim.current = interimParts.join(" ");
+      const partial = [finalBuf.current, lastInterim.current].filter(Boolean).join(" ").trim();
+      if (partial) sock.current?.send({ type: "transcript.partial", text: partial });
+      if (automatic && partial) {
+        clearSilence();
+        // A short pause after final speech closes the turn, but a still-unfinalized
+        // phrase gets longer to avoid cutting off the user mid-sentence.
+        silenceTimer.current = setTimeout(() => {
+          if (rec.current === r && listening.current) {
+            try { r.stop(); } catch { /* already closing */ }
+          }
+        }, interimParts.length ? 1700 : 1100);
+      }
+    };
+    r.onerror = (ev: unknown) => {
+      if (rec.current !== r) return;
+      const why = (ev as { error?: string } | null)?.error;
+      if (why === "no-speech" || why === "aborted") return;
+      listening.current = false;
+      clearSilence();
+      if (automatic) stopHandsFree();
+      else { held.current = false; toggled.current = false; }
+      setState("IDLE");
+      cbRef.current.onError(why === "not-allowed" || why === "service-not-allowed"
+        ? "Microfono non autorizzato: consenti l'accesso nel browser."
+        : why === "network" ? "Riconoscimento vocale del browser non raggiungibile: prova Chrome o Edge con internet."
+        : why === "audio-capture" ? "Nessun microfono disponibile in Windows."
+        : `Riconoscimento vocale interrotto (${why ?? "errore sconosciuto"}).`);
+    };
+    r.onend = () => {
+      if (rec.current !== r) return;
+      rec.current = null;
+      listening.current = false;
+      clearSilence();
+      const text = (finalBuf.current || (automatic ? lastInterim.current : "")).trim();
+      if (automatic) {
+        if (!handsFreeRef.current) return;
+        if (!text) { maybeResumeHandsFree(); return; }
+        awaitingTurn.current = true;
+        setState("UNDERSTANDING");
+        sock.current?.send({ type: "transcript.final", text });
+      } else {
+        commit();
+      }
+    };
+    rec.current = r;
+    listening.current = true;
+    setState("LISTENING");
+    try { r.start(); } catch {
+      if (rec.current === r) rec.current = null;
+      listening.current = false;
+      setState("IDLE");
+      if (automatic) stopHandsFree();
+      cbRef.current.onError("Riconoscimento vocale non disponibile: riattiva il microfono dal browser.");
+    }
+  };
+
+  const toggleHandsFree = () => {
+    if (handsFreeRef.current) {
+      stopHandsFree();
+      setState("IDLE");
+      return;
+    }
+    if (!connectedRef.current || engineRef.current !== "browser" || !handsFreeSupported) return;
+    if (speaking.current || awaitingTurn.current || listening.current) {
+      cbRef.current.onError("Termina la risposta o la registrazione prima di attivare l'ascolto libero.");
+      return;
+    }
+    handsFreeRef.current = true;
+    setHandsFree(true);
+    startBrowserRecognition(true);
+  };
+
   const pressStart = () => {
-    if (!connected) return;
-    if (engine === "live") { void liveButton(); return; }
-    if (toggled.current) { toggled.current = false; finishListening(); return; }  // second click: send
-    if (state === "SPEAKING" || state === "THINKING" || state === "ACTING") interrupt(); // barge-in
+    if (!connectedRef.current) return;
+    if (engineRef.current === "live") { void liveButton(); return; }
+    if (handsFreeRef.current) { toggleHandsFree(); return; }
+    if (toggled.current) { toggled.current = false; finishListening(); return; }
+    if (state === "SPEAKING" || state === "THINKING" || state === "ACTING") interrupt();
     if (state !== "IDLE" && state !== "LISTENING" && state !== "INTERRUPTED" && state !== "CONNECTING"
         && state !== "ERROR") return;
     held.current = true;
     pressedAt.current = Date.now();
-    setState("LISTENING");
-    finalBuf.current = "";
-    const SR = (window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition });
-    const Ctor = SR.SpeechRecognition || SR.webkitSpeechRecognition;
-    if (Ctor) {
-      const r = new Ctor();
-      r.lang = config?.language === "it" ? "it-IT" : config?.language || "it-IT";
-      r.interimResults = true;
-      r.continuous = true;
-      r.onresult = (e) => {
-        let interim = "", fin = "";
-        for (const res of Array.from(e.results)) {
-          if (res.isFinal) fin += res[0].transcript;
-          else interim += res[0].transcript;
-        }
-        finalBuf.current += fin;
-        const live = (finalBuf.current + " " + interim).trim();
-        if (live) sock.current?.send({ type: "transcript.partial", text: live });
-      };
-      r.onerror = (ev: unknown) => {
-        const why = (ev as { error?: string } | null)?.error;
-        if (why === "no-speech" || why === "aborted") return;
-        held.current = false; toggled.current = false; listening.current = false;
-        setState("IDLE");
-        cbRef.current.onError(why === "not-allowed" || why === "service-not-allowed"
-          ? "il browser non mi lascia usare il microfono: clicca il lucchetto vicino all'indirizzo e consenti il microfono, poi ricarica la pagina"
-          : why === "network" ? "il riconoscimento vocale del browser non è raggiungibile (serve internet): prova con Chrome o Edge aggiornati"
-          : why === "audio-capture" ? "nessun microfono trovato: controlla che sia collegato e attivo in Windows"
-          : `riconoscimento vocale non riuscito (${why ?? "errore sconosciuto"})`);
-      };
-      // ends when you release/click again, or by itself after a long silence: either way send what was heard
-      r.onend = () => { if (listening.current) { listening.current = false; commit(); } };
-      rec.current = r;
-      listening.current = true;
-      try { r.start(); } catch {
-        listening.current = false; held.current = false; toggled.current = false; setState("IDLE");
-        cbRef.current.onError("il riconoscimento vocale non è partito: riprova tra un attimo");
-      }
-    } else {
-      // no browser STT: capture audio and let the server transcribe on release
-      void startAudioCapture();
-    }
+    const SR = window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown };
+    if (SR.SpeechRecognition || SR.webkitSpeechRecognition) startBrowserRecognition(false);
+    else { setState("LISTENING"); void startAudioCapture(); }
   };
 
   const startAudioCapture = async () => {
@@ -452,6 +583,8 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const interrupt = (reason = "user") => {
     stopLocalAudio();
     sock.current?.send({ type: "interrupt", reason });
+    awaitingTurn.current = false;
+    maybeResumeHandsFree();
   };
 
   const answer = (approvalId: string, decision: "approve" | "reject") =>
@@ -476,18 +609,21 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     sock.current?.send({ type: "conversation.set", conversation_id: conversationId });
   };
 
-  return { state, connected, partial, engine, liveOn, pressStart, pressStop, interrupt, answer, setConversation };
+  return { state, connected, partial, engine, liveOn, handsFree, handsFreeSupported, toggleHandsFree,
+    pressStart, pressStop, interrupt, answer, setConversation };
 }
 
 export function VoiceDock({ voice, onInterrupt }: {
   voice: ReturnType<typeof useVoiceSession>;
   onInterrupt?: () => void;
 }) {
-  const { state, connected, partial, engine, liveOn, pressStart, pressStop } = voice;
+  const { state, connected, partial, engine, liveOn, handsFree, handsFreeSupported, toggleHandsFree,
+    pressStart, pressStop } = voice;
   const label = !connected ? "voce offline"
     : engine === "live" && !liveOn ? "Parla con NODO"
     : engine === "live" && state === "SPEAKING" ? "NODO parla · tocca per interrompere"
     : engine === "live" ? "Ti ascolto · clicca per chiudere"
+    : handsFree ? "Ascolto libero attivo · clicca per chiudere"
     : state === "LISTENING" ? "Ti ascolto · clicca per inviare"
     : state === "TRANSCRIBING" ? "Trascrivo"
     : state === "UNDERSTANDING" ? "Capisco"
@@ -511,6 +647,13 @@ export function VoiceDock({ voice, onInterrupt }: {
       >
         <span className="mic-dot" />{label}
       </button>
+      {connected && engine === "browser" && handsFreeSupported && (
+        <button type="button" className={handsFree ? "handsfree handsfree--active" : "handsfree"}
+                aria-pressed={handsFree} onClick={toggleHandsFree}
+                title="Una scelta esplicita: chiudo il turno dopo una pausa e riapro il microfono dopo la risposta. Non ascolto mentre NODO parla.">
+          {handsFree ? "Chiudi ascolto libero" : "Ascolto libero"}
+        </button>
+      )}
       {(state === "SPEAKING" || state === "THINKING" || state === "ACTING") && (
         <button type="button" className="ghost" onClick={() => { voice.interrupt(); onInterrupt?.(); }}>Ferma</button>
       )}
