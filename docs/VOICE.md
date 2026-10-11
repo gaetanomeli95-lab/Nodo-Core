@@ -1,3 +1,32 @@
+## Gemini Live quota: interpretazione e fallback (V04)
+
+Google Gemini API impone limiti **per progetto** (non per singola chiave).
+I limiti dipendono anche dal modello e dal tipo di utilizzo; le richieste
+giornaliere si azzerano a mezzanotte Pacifico, ma non tutti gli errori di
+limite sono necessariamente giornalieri. Consulta i limiti reali su
+https://ai.google.dev/gemini-api/docs/rate-limits e in Google AI Studio.
+
+Un WebSocket `1011` da solo **non** dimostra che sia stata esaurita la quota:
+serve un messaggio di limite esplicito (`quota`, `RESOURCE_EXHAUSTED`, `429`).
+Alla rilevazione NODO interrompe i tentativi Live ripetitivi e passa alla voce
+del browser mantenendo il thread. Il cooldown locale di 60 minuti è una scelta
+di backoff, **non** il momento di reset della quota; un nuovo tentativo richiede
+una nuova sessione (per esempio ricaricare il pannello) dopo il cooldown.
+Nessun retry autonomo in background è implementato.
+
+Non proporre chiavi multiple dello stesso progetto come modo per ripristinare
+l'uso: condividono la quota del progetto. L'eventuale nuova chiave è soltanto
+un'identità di accesso diversa, non una garanzia di quota aggiuntiva.
+
+Il banner di fallback è visibile anche con il diario chiuso. Il client ferma
+la riproduzione Live residua, mentre il server scarta i PCM ancora in transito
+senza passarli erroneamente come `audio/webm` allo STT browser.
+
+Verifiche manuali Windows: quota esaurita durante una risposta, audio che si
+ferma, ritorno a push-to-talk, risposta testuale e voce browser coerenti,
+nessuna connessione ripetuta a cinque modelli. Verificare separatamente che
+un `1011` privo di messaggio quota abbia comportamento di riconnessione standard.
+
 # Voice
 
 Voice is a first-class interface over the same Core (ADR-005). Phase 2 landed the realtime channel:
