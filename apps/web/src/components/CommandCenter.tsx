@@ -51,9 +51,10 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const voice = useVoiceSession(voiceConfig, {
     onEvent: (e) => {
       onTrace([e as unknown as NodoEvent]);
-      if (e.type === "nodo.response" && typeof e.conversation_id === "string") {
-        conversationId.current = e.conversation_id;
-        saveConv(e.conversation_id); // Voice-first conversations must continue in text.
+      if ((e.type === "nodo.response" || e.type === "voice.conversation")
+          && (typeof e.conversation_id === "string" || e.conversation_id === null)) {
+        conversationId.current = e.conversation_id as string | null;
+        saveConv(conversationId.current); // Voice-first conversations continue in text.
       }
       if (e.type === "nodo.step" && typeof e.step === "string" && e.step.startsWith("tool:")) {
         setActivity(e.status === "running" ? DOING[e.step.slice(5)] ?? "Sto usando uno strumento…" : null);
@@ -110,6 +111,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
           setActivity(null);
           conversationId.current = ev.conversation_id as string;
           saveConv(conversationId.current);
+          voice.setConversation(conversationId.current); // Text-first conversations continue in Live.
         }
         if (ev.type === "done" || ev.type === "response") {
           setTurns((ts) => {
@@ -140,6 +142,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const newConversation = () => {
     conversationId.current = null;
     saveConv(null);
+    voice.setConversation(null);
     setTurns([]);
     setActivity(null);
     setJournalOpen(false);
