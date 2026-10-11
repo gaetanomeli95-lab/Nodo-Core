@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { get, streamCommand, type NodoEvent, type VoiceConfig } from "../api";
 import { VoiceDock, useVoiceSession } from "./Voice";
 import { Presence } from "./Presence";
+import { Pulse } from "./Pulse";
 
 type Turn = { who: "user" | "nodo"; text: string; meta?: string; doing?: string };
 
@@ -29,6 +30,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [journalOpen, setJournalOpen] = useState(false);
+  const [pulseRevision, setPulseRevision] = useState(0);
   const [activity, setActivity] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [voicePending, setVoicePending] = useState<PendingVoice | null>(null);
@@ -67,7 +69,10 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       if (e.type === "voice.turn.done" || e.type === "voice.interrupted") setActivity(null);
       if (e.type === "nodo.intent" && e.entity_name) onActiveContext(e.entity_name as string);
       if (e.type === "nodo.plan") pendingApproval.current = !!e.needs_approval;
-      if (e.type === "nodo.turn.done" || e.type === "voice.turn.done") onRequestDone();
+      if (e.type === "nodo.turn.done" || e.type === "voice.turn.done") {
+        onRequestDone();
+        setPulseRevision((n) => n + 1);
+      }
       if (e.type === "approval.required") {
         pendingApproval.current = true;
         setVoicePending({ approvalId: e.approval_id as string, tool: e.tool as string, action: e.action as string, params: e.params });
@@ -102,8 +107,8 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     setVoicePending(null);
   };
 
-  const send = async () => {
-    const text = input.trim();
+  const send = async (requested?: string) => {
+    const text = (requested ?? input).trim();
     if (!text || busy) return;
     setInput(""); setBusy(true); setActivity(null);
     setTurns((ts) => [...ts, { who: "user", text }, { who: "nodo", text: "" }]);
@@ -140,6 +145,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         if (ev.type === "plan" || ev.type === "approval") pendingApproval.current = !!(ev.needs_approval ?? true);
       });
       onRequestDone();
+      setPulseRevision((n) => n + 1);
     } catch (e) {
       setTurns((ts) => [...ts, { who: "nodo", text: `Errore: ${(e as Error).message}`, meta: "error" }]);
     } finally {
@@ -176,6 +182,8 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
           <button type="button" onClick={() => setNotice(null)} aria-label="Chiudi avviso">×</button>
         </div>
       )}
+      <Pulse revision={pulseRevision} disabled={busy || voice.state === "WAITING_FOR_APPROVAL"}
+             onInvestigate={(prompt) => { void send(prompt); }} />
       <div className="conversation-toolbar">
         <span>Conversazione continua · la trascrizione è facoltativa</span>
         <button
