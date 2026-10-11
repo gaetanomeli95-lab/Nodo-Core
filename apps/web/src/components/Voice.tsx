@@ -467,7 +467,12 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
   });
 
-  return { state, connected, partial, engine, liveOn, pressStart, pressStop, interrupt, answer };
+  // Text and voice share the same conversation ID without reconnecting the socket.
+  const setConversation = (conversationId: string | null) => {
+    sock.current?.send({ type: "conversation.set", conversation_id: conversationId });
+  };
+
+  return { state, connected, partial, engine, liveOn, pressStart, pressStop, interrupt, answer, setConversation };
 }
 
 export function VoiceDock({ voice, onInterrupt }: {
