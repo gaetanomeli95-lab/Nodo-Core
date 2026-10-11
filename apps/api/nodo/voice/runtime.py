@@ -136,8 +136,10 @@ class VoiceRuntime:
         # the live session opens lazily on the first real input: no idle sessions dying every 20s
         engine = "live" if self._live_wanted else "browser"
         self._log("voice.session.started", {"language": vs.language, "engine": engine})
+        quota_active = engine == "browser" and live_engine.quota_seconds_remaining(self.c.settings) > 0
         await self._send("voice.session.started", state=str(vs.state), conversation_id=vs.conversation_id,
-                         stt=self.c.stt.name, tts=self.c.tts.name, engine=engine)
+                         stt=self.c.stt.name, tts=self.c.tts.name, engine=engine,
+                         reason="quota" if quota_active else None)
 
     async def _set_conversation(self, conversation_id: str | None) -> None:
         """Sync text and voice to the same thread; never switch during an active turn or approval."""
