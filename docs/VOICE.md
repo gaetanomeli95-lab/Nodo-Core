@@ -38,6 +38,32 @@ Gemini ─► audio (pcm) / input+output transcription / tool_call / interrupted
 - Tests use a fake `container.live_connect` factory (`tests/test_voice_live.py`): the whole bridge,
   tool calls, barge-in, ladder and approval ack are covered without a key.
 
+## V03 — Presence and durable conversation
+
+The command screen is now **voice-first**: a central presence reacts to real WebSocket states
+(`LISTENING`, `THINKING`, `ACTING`, `SPEAKING`, `WAITING_FOR_APPROVAL`, etc.).
+Tool activity is shown only when a `nodo.step` event indicates actual execution. The
+transcription stays available through the **Apri diario** control, but is no longer the main
+surface; approvals stay visible even with the diary closed. Animations honor
+`prefers-reduced-motion`.
+
+Live input and output transcriptions are persisted as `Message(user)` and `Message(nodo)`
+at `turn_complete` (never raw microphone audio). The Live conversation is committed
+before its ID is sent to the client. Both speech and text refer to the same
+`conversation_id`; `conversation.set` switches the active thread on an existing
+WebSocket while no turn or approval is active. When switching away from a Live thread,
+the old Live bridge is closed so the next utterance loads the new conversation context.
+`voice.conversation` acknowledges the shared ID. A failed DB write emits a visible error.
+
+The browser audio chunk player consumes each queued URL once, revokes URLs after use
+or interruption and wakes the pending completion promise on barge-in. The Live
+interrupt flag is never cleared merely because the microphone still sends PCM packets.
+New speech transcriptions or turn completion restore normal output.
+
+Manual Windows acceptance: verify browser microphone permission, voice-first and
+text-first follow-ups, long pauses, `Ferma` during playback, repeated start/stop,
+reconnect and approval confirmations. CI cannot validate actual audio device behavior.
+
 ## Transport — `WS /api/v1/voice/stream`
 Typed JSON frames (`nodo/voice/protocol.py`, pydantic-validated); binary frames count as `audio.chunk`.
 Auth mirrors REST: `NODO_API_TOKEN` via `?token=` or `Authorization` header.
