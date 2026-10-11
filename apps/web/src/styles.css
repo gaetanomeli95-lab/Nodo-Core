@@ -169,3 +169,115 @@ p.small { font-size: 11px; margin: 6px 0 0; }
 @media (max-width: 900px) { .tabs, .view { padding-inline: 16px; } .two { grid-template-columns: 1fr; } .decision { flex-direction: column; } .decision .choose { flex-direction: row; } }
 .tab-body > .command { flex: 1; min-height: 0; height: auto; }
 .doing { color: var(--muted, #8a93a6); font-style: italic; }
+
+
+/* ---------------------------------------------------------------- NODO Presence V03
+   Voice-first: presence reflects actual transport/brain states, not simulated thinking.
+   The journal is available on demand and never gates approvals. */
+.command { min-height: 0; }
+.presence {
+  --presence-tone: #8fb3a9;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 24px 28px 18px;
+  isolation: isolate;
+  background: radial-gradient(ellipse 52% 52% at 50% 44%, rgba(48, 69, 69, .16), transparent 76%);
+}
+.presence-heading {
+  position: absolute;
+  z-index: 1;
+  top: 22px; left: 5%; right: 5%;
+  display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  font-size: 10px; letter-spacing: .17em; text-transform: uppercase; color: var(--muted);
+}
+.presence-brand { color: var(--text); font-weight: 650; letter-spacing: .22em; }
+.presence-brand span { color: var(--accent); font-weight: 400; }
+.presence-channel { display: inline-flex; align-items: center; gap: 8px; letter-spacing: .06em; }
+.presence-channel i { width: 6px; height: 6px; background: var(--presence-tone); border-radius: 50%; }
+.presence-art {
+  width: clamp(190px, 28vh, 320px);
+  aspect-ratio: 1;
+  flex: 0 0 auto;
+  position: relative;
+  margin: 30px 0 6px;
+  display: grid; place-items: center;
+}
+.presence-halo { position: absolute; inset: 13%; border-radius: 50%; filter: blur(35px); background: radial-gradient(circle, rgba(143,179,169,.12), transparent 70%); }
+.presence-ring { position: absolute; border-radius: 50%; border: 1px solid rgba(143,179,169,.14); transition: border-color .35s, transform .35s; }
+.presence-ring--outer { inset: 0; border-top-color: var(--presence-tone); border-bottom-color: rgba(143,179,169,.035); animation: presence-spin 24s linear infinite; }
+.presence-ring--mid { inset: 12%; border-left-color: var(--presence-tone); border-right-color: rgba(143,179,169,.04); animation: presence-spin-reverse 18s linear infinite; }
+.presence-ring--inner { inset: 27%; border-color: rgba(143,179,169,.28); }
+.presence-core {
+  width: 27%; aspect-ratio: 1;
+  display: grid; place-items: center;
+  border-radius: 50%; border: 1px solid rgba(143,179,169,.42);
+  background: radial-gradient(circle at 30% 25%, #273a3c, #141d21 74%);
+  box-shadow: 0 0 55px rgba(143,179,169,.09), inset 0 0 20px rgba(143,179,169,.07);
+}
+.presence-core-letter { font-size: clamp(24px, 4vw, 34px); line-height: 1; font-weight: 300; letter-spacing: -.05em; color: #d8e9e5; }
+.presence-caption { position: relative; z-index: 1; width: min(620px, 100%); text-align: center; }
+.presence-kicker { margin: 0 0 10px; color: var(--presence-tone); font-size: 10px; letter-spacing: .23em; }
+.presence-caption h2 { margin: 0 0 10px; text-transform: none; font-size: clamp(25px, 3vw, 36px); font-weight: 400; line-height: 1.1; letter-spacing: -.03em; color: var(--text); }
+.presence-description { margin: 0 auto; max-width: 490px; font-size: 13px; line-height: 1.65; color: var(--muted); }
+.presence-heard, .presence-last {
+  margin: 20px auto 0; max-width: 550px; color: var(--text);
+  font-size: 14px; line-height: 1.55; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+}
+.presence-heard { color: var(--presence-tone); font-style: italic; }
+.presence-last { opacity: .78; }
+.presence--listening { --presence-tone: #dd927f; }
+.presence--transcribing, .presence--understanding, .presence--thinking,
+.presence--acting, .presence--working { --presence-tone: #dfbb86; }
+.presence--error, .presence--interrupted { --presence-tone: #d2766b; }
+.presence--waiting-for-approval { --presence-tone: #dfbb86; }
+.presence--listening .presence-ring--inner { animation: presence-breathe 2.1s ease-in-out infinite; }
+.presence--speaking .presence-ring--mid { animation: presence-breathe 1.4s ease-in-out infinite; }
+.presence--thinking .presence-ring--inner, .presence--working .presence-ring--inner, .presence--acting .presence-ring--inner { animation: presence-breathe 3.3s ease-in-out infinite; }
+.presence--error .presence-ring--outer { animation: none; }
+@keyframes presence-spin { to { transform: rotate(360deg); } }
+@keyframes presence-spin-reverse { to { transform: rotate(-360deg); } }
+@keyframes presence-breathe { 50% { transform: scale(1.08); opacity: .55; } }
+
+.conversation-toolbar {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; padding: 8px 5%;
+  border-top: 1px solid var(--line); background: #111519;
+  font-size: 11px; color: var(--muted);
+}
+.journal-toggle { border: 0; background: transparent; padding: 5px 0; color: var(--accent); font: inherit; cursor: pointer; white-space: nowrap; }
+.journal-toggle:hover, .journal-toggle:focus-visible { text-decoration: underline; }
+.turns.journal-closed { display: none; }
+.turns.journal-open { flex: 0 1 42%; min-height: 85px; max-height: 45%; padding: 16px 5%; border-top: 1px solid var(--line); }
+.journal-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 12px; }
+.command .composer { flex: 0 0 auto; padding: 12px 5%; }
+.command .approval-banner { flex: 0 0 auto; margin: 8px 5%; }
+@media (max-width: 900px) {
+  .presence { padding: 58px 16px 20px; }
+  .presence-heading { top: 16px; }
+  .presence-art { width: clamp(155px, 23vh, 240px); margin-top: 8px; }
+  .conversation-toolbar { padding-inline: 16px; }
+  .conversation-toolbar span { font-size: 10px; }
+  .command .composer { padding-inline: 12px; gap: 7px; flex-wrap: wrap; }
+  .command .approval-banner { margin-inline: 12px; flex-wrap: wrap; }
+  .turns.journal-open { padding-inline: 16px; }
+}
+@media (max-width: 560px) {
+  .presence-art { width: clamp(145px, 22vh, 210px); }
+  .presence-caption h2 { font-size: 26px; }
+  .presence-last { font-size: 12px; }
+  .conversation-toolbar span { max-width: 52%; }
+  .voice-dock { flex: 1 1 100%; }
+  .voice-dock .mic { flex: 1; justify-content: center; }
+  .command .composer textarea { min-width: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .presence-ring, .presence-ring--inner, .presence-ring--mid, .presence-ring--outer { animation: none !important; transition: none; }
+}
