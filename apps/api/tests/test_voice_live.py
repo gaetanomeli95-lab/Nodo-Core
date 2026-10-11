@@ -246,3 +246,69 @@ def test_approval_answer_speaks_through_live(client, db, container):
         time.sleep(0.5)   # let the server push the spoken ack into the live session before closing
     session = holder[0][2]
     assert session.contents and session.contents[-1]["turn_complete"] is True
+
+
+def test_live_turn_is_saved_to_the_shared_diary(client, db, container):
+    """Speech-to-speech must persist transcribed user and NODO messages for later text turns."""
+    from sqlalchemy import select
+    from nodo.db.models import Message
+
+    holder = []
+    container.live_connect = make_connect([
+        _sc(input_transcription=SimpleNamespace(text="Come va il progetto?")),
+        _sc(output_transcription=SimpleNamespace(text="Controllo gli aggiornamenti.")),
+        _sc(turn_complete=True),
+    ], holder)
+    with client.websocket_connect(WS) as ws:
+        _open_live(ws)
+        events, _ = _recv_until(ws, "voice.turn.done")
+        response = next(e for e in events if e["type"] == "nodo.response")
+        conv_id = response["conversation_id"]
+        assert conv_id
+    db.expire_all()
+    saved = db.scalars(select(Message).where(Message.conversation_id == conv_id)
+                       .order_by(Message.created_at.asc())).all()
+    assert [(m.role, m.content) for m in saved] == [
+        ("user", "Come va il progetto?"),
+        ("nodo", "Controllo gli aggiornamenti."),
+    ]
+
+
+def test_text_conversation_can_be_selected_before_speaking(client, db, container):
+    """Changing the active text thread synchronizes Live context without a second voice session."""
+    from nodo.app import ensure_workspace
+    from nodo.db.models import Conversation, Message
+    from sqlalchemy import select
+
+    org, _ = ensure_workspace(db)
+    conv = Conversation(organization_id=org.id, channel="text")
+    db.add(conv)
+    db.commit()
+    holder = []
+    container.live_connect = make_connect([
+        _sc(input_transcription=SimpleNamespace(text="E poi?")),
+        _sc(output_transcription=SimpleNamespace(text="Continuiamo da qui.")),
+        _sc(turn_complete=True),
+    ], holder)
+
+    with client.websocket_connect(WS) as ws:
+        ws.send_json({"type": "session.start", "language": "it"})
+        _recv_until(ws, "voice.session.started")
+        ws.send_json({"type": "conversation.set", "conversation_id": conv.id})
+        _, sync = _recv_until(ws, "voice.conversation")
+        assert sync["conversation_id"] == conv.id
+        ws.send_json({"type": "audio.chunk", "data": "AAECAwQ=", "mime": "audio/pcm;rate=16000"})
+        events, _ = _recv_until(ws, "voice.turn.done")
+        response = next(e for e in events if e["type"] == "nodo.response")
+        assert response["conversation_id"] == conv.id
+
+    db.expire_all()
+    messages = db.scalars(select(Message).where(Message.conversation_id == conv.id)).all()
+    assert [m.role for m in messages] == ["user", "nodo"]
+
+
+def test_conversation_set_is_a_typed_protocol_event():
+    from nodo.voice.protocol import ConversationSet, parse_inbound
+    parsed = parse_inbound({"type": "conversation.set", "conversation_id": None})
+    assert isinstance(parsed, ConversationSet)
+    assert parsed.conversation_id is None
