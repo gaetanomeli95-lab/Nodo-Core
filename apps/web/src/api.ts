@@ -7,6 +7,33 @@ export type Project = { id: string; name: string; kind: string; status: string; 
 export type Task = { id: string; title: string; status: string; priority: number; due_date: string | null; project_id: string | null };
 export type Usage = { local_requests: number; cloud_requests: number; premium_requests: number; agent_runs: number; tool_executions: number; tokens: number; estimated_cost: number };
 export type SystemInfo = { mode: string; env: string; models: { id: string; tier: string; is_local: boolean; available: boolean }[]; voice: { stt: { name: string; location: string }; tts: { name: string; location: string } }; github: string; usage: Usage };
+export type PulseItem = {
+  id: string;
+  kind: "task" | "incident" | "approval";
+  severity: "info" | "warning" | "critical";
+  title: string;
+  detail: string;
+  project: string | null;
+  source: string;
+  source_id: string;
+  observed_at: string | null;
+  prompt: string;
+  requires_approval: boolean;
+};
+export type PulseSnapshot = {
+  generated_at: string;
+  local_date: string;
+  timezone: string;
+  headline: string;
+  counts: {
+    open_tasks: number; overdue_tasks: number; due_today: number;
+    blocked_tasks: number; open_incidents: number; pending_approvals: number;
+    sites_configured: number; sites_checked_last_night: number;
+  };
+  items: PulseItem[];
+  night: { runs: number; sites_checked: number; summary: string };
+  read_only: boolean;
+};
 export type VoiceConfig = { engine?: "live" | "browser"; live_reason?: string | null; stt: { name: string; location: string }; tts: { name: string; location: string; voice: string }; language: string };
 
 const headers = (): Record<string, string> => {
