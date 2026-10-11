@@ -158,7 +158,9 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         {!surface.summary && !surface.rows.length && <p>Non ci sono elementi da mostrare.</p>}
       </section>}
       <div className="voice-controls">
-        <button className={`conversation-button ${voice.liveOn ? "active" : ""}`} disabled={!voice.connected || voice.recovering} onClick={voice.toggleMic}>
+        <button className={`conversation-button ${voice.liveOn ? "active" : ""}`}
+          disabled={!voice.connected || voice.recovering || voiceConfig?.stt.ready === false || voiceConfig?.tts.ready === false}
+          onClick={voice.toggleMic}>
           <svg width="18" height="20" viewBox="0 0 18 22" fill="none" aria-hidden="true"><rect x="6" y="1" width="6" height="12" rx="3" stroke="currentColor" strokeWidth="1.5" /><path d="M2 9v2a7 7 0 0 0 14 0V9M9 18v3M5 21h8" stroke="currentColor" strokeWidth="1.5" /></svg>
           {voice.liveOn ? "Microfono aperto" : voice.microphoneOn ? "Finito, invia" : "Parla con NODO"}</button>
         {(voice.audioPlaying || busy || activity) && <button className="quiet-button" onClick={() => voice.interrupt()}>Interrompi</button>}
