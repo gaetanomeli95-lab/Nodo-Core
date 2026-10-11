@@ -55,13 +55,16 @@ class ChunkPlayer {
         const audio = new Audio(url);
         this.current = audio;
         try {
-          await audio.play();
-          if (generation !== this.generation) continue;
-          await new Promise<void>((resolve) => {
+          // Bind the completion handlers BEFORE play(): extremely short chunks can
+          // finish before play() resolves, leaving a permanently blocked queue.
+          const finished = new Promise<void>((resolve) => {
             this.finishCurrent = resolve;
             audio.onended = () => resolve();
             audio.onerror = () => resolve();
           });
+          await audio.play();
+          if (generation !== this.generation) continue;
+          await finished;
         } catch {
           // Autoplay can be blocked before the first user gesture.
         } finally {
