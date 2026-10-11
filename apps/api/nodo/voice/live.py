@@ -15,6 +15,7 @@ tried in order, because model names change and a key may not have them all; the 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
 import logging
 import time
@@ -39,28 +40,42 @@ LIVE_MODELS = ("gemini-3.8-live", "gemini-3.1-flash-live-preview", "gemini-2.5-f
 ConnectFactory = Callable[[str, str, dict], Any]
 OnEvent = Callable[[dict], Awaitable[None]]
 
-# Free-tier Live quota is per API key. When it runs out every model answers 1011;
-# hammering the whole ladder on each click just wastes ~25s, so the key rests here.
+# Quotas are enforced by Google per *project*, not per API key.
+# This is a process-local safeguard against repeatedly retrying a known exhausted
+# credential. It is NOT a quota reset timer or a way to bypass project limits.
 _QUOTA_COOLDOWN_S = 3600
 _quota = {"key": None, "until": 0.0}
 
 
-def _is_quota_error(e: Exception) -> bool:
+class LiveQuotaExceeded(RuntimeError):
+    """Live service explicitly reported a quota or rate-limit failure."""
+
+
+def _key_fingerprint(key: str) -> str:
+    """Avoid keeping an extra copy of the raw API key in the cooldown cache."""
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+def _is_quota_error(e: Exception | str) -> bool:
     s = str(e).lower()
-    return "quota" in s or "resource_exhausted" in s or "1011" in s or "429" in s
+    # 1011 alone is a generic WebSocket internal-error status, NOT a quota verdict.
+    return any(marker in s for marker in ("quota", "resource_exhausted", "rate limit",
+                                          "rate_limit_exceeded", "too many requests", "429"))
 
 
 def quota_note(settings) -> str | None:
-    """A plain-Italian reason while the current key's Live quota is cooling down."""
-    if settings.gemini_api_key and _quota["key"] == settings.gemini_api_key \
-            and time.monotonic() < _quota["until"]:
-        return ("quota gratuita di Gemini Live finita per ora — riprovo da solo più tardi "
-                "(o incolla la chiave di un altro progetto in Accessi)")
+    """Temporary local backoff; not a guarantee about Google's reset schedule."""
+    key = settings.gemini_api_key
+    if key and _quota["key"] == _key_fingerprint(key) and time.monotonic() < _quota["until"]:
+        return ("Gemini Live ha segnalato un limite di quota. Voce browser attiva; "
+                "controlla le quote del progetto in Google AI Studio e riprova più tardi.")
     return None
 
 
 def _mark_quota(settings) -> None:
-    _quota["key"], _quota["until"] = settings.gemini_api_key, time.monotonic() + _QUOTA_COOLDOWN_S
+    key = settings.gemini_api_key
+    if key:
+        _quota["key"], _quota["until"] = _key_fingerprint(key), time.monotonic() + _QUOTA_COOLDOWN_S
 
 
 class LiveDropped(Exception):
@@ -147,7 +162,9 @@ class LiveBridge:
                 self._cm = self._session = None
                 if _is_quota_error(e):
                     _mark_quota(settings=self.settings)
-                    break                           # quota is per key, not per model: no rung will help
+                    raise LiveQuotaExceeded(
+                        "Google AI Studio ha rifiutato Gemini Live per quota o limiti del progetto"
+                    ) from e  # stop here: trying the other models won't resolve project quota
         if self._session is None:
             raise RuntimeError(f"nessun modello Live disponibile ({last})")
         self._pump_task = asyncio.create_task(self._pump())
