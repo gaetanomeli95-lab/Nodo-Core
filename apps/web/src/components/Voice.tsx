@@ -175,6 +175,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const pressedAt = useRef(0);
   const speechQueue = useRef<string[]>([]);
   const speaking = useRef(false);
+  const ttsGeneration = useRef(0); // canceled utterances may still fire delayed onend/onerror
   const finalBuf = useRef("");
   const streamingStarted = useRef(false);
   const media = useRef<{ rec: MediaRecorder; stream: MediaStream } | null>(null);
@@ -190,6 +191,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     cbRef.current.onError(msg);
   };
   const browserTtsNext = () => {
+    const generation = ttsGeneration.current;
     const text = speechQueue.current.shift();
     if (!text) {
       speaking.current = false;
@@ -213,8 +215,11 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     const best = voices.find((v) => /natural|online|neural/i.test(v.name))
       || voices.find((v) => /google/i.test(v.name)) || voices[0];
     if (best) u.voice = best;
-    u.onend = browserTtsNext;
+    u.onend = () => {
+      if (generation === ttsGeneration.current) browserTtsNext();
+    };
     u.onerror = (ev) => {
+      if (generation !== ttsGeneration.current) return;
       const code = (ev as SpeechSynthesisErrorEvent).error;
       if (code && code !== "interrupted" && code !== "canceled")
         ttsFail(`non riesco a leggere la risposta ad alta voce (${code}): controlla la voce italiana in
@@ -326,6 +331,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   }, []);
 
   const stopLocalAudio = () => {
+    ttsGeneration.current += 1;
     speechQueue.current = [];
     speaking.current = false;
     setLocalSpeaking(false);
