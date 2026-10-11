@@ -317,7 +317,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
       sock.current = s;
     };
     connect();
-    return () => { closed = true; if (retry) clearTimeout(retry); stopHandsFree(); sock.current?.close(); stopLocalAudio(); stopLiveMic(); };
+    return () => { closed = true; if (retry) clearTimeout(retry); stopHandsFree(); cancelAudioCapture(); sock.current?.close(); stopLocalAudio(); stopLiveMic(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -537,29 +537,58 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     else { setState("LISTENING"); void startAudioCapture(); }
   };
 
+  // Server-side STT fallback: MediaRecorder emits its last dataavailable AFTER stop().
+  // Assemble once, then send speech.end so the backend never transcribes a truncated file.
   const startAudioCapture = async () => {
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
-      mr.ondataavailable = (e) => {
-        e.data.arrayBuffer().then((buf) => {
-          const bytes = new Uint8Array(buf);
-          let bin = "";
-          for (const b of bytes) bin += String.fromCharCode(b);
-          sock.current?.send({ type: "audio.chunk", data: btoa(bin), mime: "audio/webm" });
-        });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!connectedRef.current || (!held.current && !toggled.current)) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      const format = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]
+        .find((m) => MediaRecorder.isTypeSupported(m));
+      const mr = new MediaRecorder(stream, format ? { mimeType: format } : undefined);
+      const capturedStream = stream;
+      const chunks: Blob[] = [];
+      mr.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      mr.onstop = () => {
+        capturedStream.getTracks().forEach((t) => t.stop());
+        // Flush all recorded blobs in order, including the final chunk.
+        const audio = new Blob(chunks, { type: mr.mimeType || format || "audio/webm" });
+        void audio.arrayBuffer().then((buffer) => {
+          if (!connectedRef.current) return;
+          const bytes = new Uint8Array(buffer);
+          if (bytes.length) sock.current?.send({
+            type: "audio.chunk", data: toB64(bytes), mime: audio.type,
+          });
+          sock.current?.send({ type: "speech.end" });
+        }).catch(() => cbRef.current.onError("Non riesco a leggere l'audio registrato."));
       };
-      mr.start(250); // chunk every 250ms
+      mr.start(250);
       media.current = { rec: mr, stream };
-    } catch { cbRef.current.onError("microfono non disponibile"); }
+    } catch {
+      stream?.getTracks().forEach((t) => t.stop());
+      cbRef.current.onError("Microfono o formato audio non disponibile: prova Chrome o Edge.");
+    }
   };
 
   const stopAudioCapture = () => {
-    if (!media.current) return;
-    media.current.rec.stop();
-    media.current.stream.getTracks().forEach((t) => t.stop());
+    const active = media.current;
+    if (!active) return;
     media.current = null;
-    sock.current?.send({ type: "speech.end" });
+    if (active.rec.state !== "inactive") active.rec.stop();
+  };
+
+  const cancelAudioCapture = () => {
+    const active = media.current;
+    if (!active) return;
+    media.current = null;
+    active.rec.onstop = null; // cancellation must never transmit accidental final audio
+    active.rec.ondataavailable = null;
+    if (active.rec.state !== "inactive") active.rec.stop();
+    active.stream.getTracks().forEach((t) => t.stop());
   };
 
   const commit = () => {
