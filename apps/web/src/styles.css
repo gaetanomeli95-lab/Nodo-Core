@@ -293,3 +293,38 @@ p.small { font-size: 11px; margin: 6px 0 0; }
   color: inherit; font-size: 19px; line-height: 1; padding: 4px 8px;
 }
 @media (max-width: 900px) { .voice-notice { padding-inline: 16px; } }
+
+/* NODO Pulse — compact, database-grounded radar below the living presence, not a dashboard. */
+.pulse {
+  flex: 0 1 auto; max-height: min(35vh, 280px); overflow-y: auto; overflow-x: hidden;
+  padding: 14px 5% 12px; border-top: 1px solid var(--line);
+  background: linear-gradient(125deg, #101719, #101417 65%, #141719);
+}
+.pulse-header { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+.pulse-eyebrow, .pulse-source { display: block; font-size: 9px; letter-spacing: .15em; color: var(--accent); }
+.pulse-headline { margin: 4px 0 10px; font-size: 13px; color: var(--text); }
+.pulse-refresh { background: transparent; color: var(--muted); border: 1px solid var(--line);
+  border-radius: 50%; width: 28px; height: 28px; cursor: pointer; font-size: 18px; }
+.pulse-refresh:hover, .pulse-refresh:focus-visible { color: var(--text); border-color: var(--accent); }
+.pulse-stats { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--muted); font-size: 10px; margin-bottom: 8px; }
+.pulse-items { display: grid; gap: 5px; }
+.pulse-item { display: flex; align-items: center; gap: 14px; justify-content: space-between;
+  border: 1px solid rgba(143,179,169,.12); border-left: 2px solid #738e87;
+  border-radius: 7px; padding: 8px 11px; background: rgba(255,255,255,.015); }
+.pulse-item--warning { border-left-color: #c99f64; }
+.pulse-item--critical { border-left-color: #d97777; }
+.pulse-item-copy { min-width: 0; }
+.pulse-item-copy strong { display: block; margin: 3px 0 2px; font-size: 12px; font-weight: 550; overflow-wrap: anywhere; }
+.pulse-item-copy p { margin: 0; font-size: 10px; color: var(--muted); line-height: 1.45; }
+.pulse-action { flex: 0 0 auto; border: 1px solid var(--line); background: transparent;
+  color: var(--accent); padding: 7px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; }
+.pulse-action:hover, .pulse-action:focus-visible { border-color: var(--accent); }
+.pulse-action:disabled { opacity: .35; cursor: default; }
+.pulse-footnote, .pulse-error { color: var(--muted); font-size: 10px; margin: 8px 0 0; }
+.pulse-error { color: #d9ad82; }
+@media (max-width: 900px) { .pulse { padding-inline: 16px; } }
+@media (max-width: 560px) {
+  .pulse { max-height: min(32vh, 230px); }
+  .pulse-stats { gap: 4px 10px; }
+  .pulse-item-copy p { font-size: 10px; }
+}
