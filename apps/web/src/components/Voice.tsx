@@ -303,6 +303,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
           // NODO restarted or the network dropped: try again (2s, 4s, ... up to 15s)
           connectedRef.current = false;
           stopHandsFree(); // a reconnect must never silently re-enable microphone capture
+          cancelAudioCapture();
           setConnected(false);
           setState("CONNECTING");
           if (closed) return;
@@ -545,6 +546,8 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (!connectedRef.current || (!held.current && !toggled.current)) {
         stream.getTracks().forEach((t) => t.stop());
+        if (connectedRef.current) sock.current?.send({ type: "speech.end" });
+        setState("IDLE");
         return;
       }
       const format = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]
@@ -614,6 +617,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   };
 
   const interrupt = (reason = "user") => {
+    cancelAudioCapture();
     stopLocalAudio();
     // Wait for the server's voice.interrupted ACK before opening the mic again;
     // otherwise a fast follow-up can race the still-running backend turn.
