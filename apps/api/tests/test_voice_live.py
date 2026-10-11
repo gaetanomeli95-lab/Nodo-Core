@@ -347,3 +347,54 @@ def test_quota_error_rests_the_key_instead_of_retrying_the_ladder(container):
         container.settings.gemini_api_key = None
         live_engine._quota["key"] = None
         live_engine._quota["until"] = 0.0
+
+
+def test_generic_1011_is_not_mistaken_for_exhausted_quota():
+    """WebSocket 1011 by itself is an internal server error, not Google's quota response."""
+    from nodo.voice import live as live_engine
+
+    assert not live_engine._is_quota_error(RuntimeError("1011 internal error: backend restart"))
+    assert live_engine._is_quota_error(RuntimeError("1011 None. You exceeded your current quota"))
+    assert live_engine._is_quota_error(RuntimeError("429 RESOURCE_EXHAUSTED"))
+
+
+def test_quota_guard_keeps_only_key_fingerprint(container):
+    """Quota backoff must not create an additional raw API key copy in process globals."""
+    from nodo.voice import live as live_engine
+
+    old = dict(live_engine._quota)
+    try:
+        container.settings.gemini_api_key = "example-secret"
+        live_engine._mark_quota(container.settings)
+        assert live_engine._quota["key"] != "example-secret"
+        assert live_engine.quota_note(container.settings)
+        assert "progetto" in live_engine.quota_note(container.settings)
+    finally:
+        container.settings.gemini_api_key = None
+        live_engine._quota.update(old)
+
+
+def test_live_quota_during_session_skips_reconnect_and_falls_back(client, container):
+    """A quota error after Live started must stop retries and return the user to browser STT."""
+    class QuotaDying(FakeLiveSession):
+        async def receive(self):
+            yield _sc(input_transcription=SimpleNamespace(text="Ciao NODO"))
+            yield _sc(output_transcription=SimpleNamespace(text="Eccomi."))
+            yield _sc(turn_complete=True)
+            raise RuntimeError("1011 None. You exceeded your current quota")
+
+    holder = []
+
+    def connect(api_key, model, config):
+        holder.append(model)
+        return _CM(QuotaDying([]))
+
+    container.live_connect = connect
+    # A test hook supplies a fake transport regardless of production availability.
+    with client.websocket_connect(WS) as ws:
+        _open_live(ws)
+        events, engine = _recv_until(ws, "voice.engine")
+        assert engine["engine"] == "browser"
+        assert engine["reason"] == "quota"
+        assert len(holder) == 1
+        assert any(e["type"] == "voice.turn.done" for e in events)
