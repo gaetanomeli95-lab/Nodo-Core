@@ -389,12 +389,18 @@ def test_live_quota_during_session_skips_reconnect_and_falls_back(client, contai
         holder.append(model)
         return _CM(QuotaDying([]))
 
+    from nodo.voice import live as live_engine
+
     container.live_connect = connect
-    # A test hook supplies a fake transport regardless of production availability.
-    with client.websocket_connect(WS) as ws:
-        _open_live(ws)
-        events, engine = _recv_until(ws, "voice.engine")
-        assert engine["engine"] == "browser"
-        assert engine["reason"] == "quota"
-        assert len(holder) == 1
-        assert any(e["type"] == "voice.turn.done" for e in events)
+    old = dict(live_engine._quota)
+    try:
+        # A test hook supplies a fake transport regardless of production availability.
+        with client.websocket_connect(WS) as ws:
+            _open_live(ws)
+            events, engine = _recv_until(ws, "voice.engine")
+            assert engine["engine"] == "browser"
+            assert engine["reason"] == "quota"
+            assert len(holder) == 1
+            assert any(e["type"] == "voice.turn.done" for e in events)
+    finally:
+        live_engine._quota.update(old)
