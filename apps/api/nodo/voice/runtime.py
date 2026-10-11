@@ -136,8 +136,10 @@ class VoiceRuntime:
         # the live session opens lazily on the first real input: no idle sessions dying every 20s
         engine = "live" if self._live_wanted else "browser"
         self._log("voice.session.started", {"language": vs.language, "engine": engine})
+        quota_active = engine == "browser" and live_engine.quota_note(self.c.settings) is not None
         await self._send("voice.session.started", state=str(vs.state), conversation_id=vs.conversation_id,
-                         stt=self.c.stt.name, tts=self.c.tts.name, engine=engine)
+                         stt=self.c.stt.name, tts=self.c.tts.name, engine=engine,
+                         reason="quota" if quota_active else None)
 
     async def _set_conversation(self, conversation_id: str | None) -> None:
         """Sync text and voice to the same thread; never switch during an active turn or approval."""
@@ -180,13 +182,23 @@ class VoiceRuntime:
             await asyncio.wait_for(self._start_live(), timeout=25)
             return True
         except Exception as e:
-            log.exception("live voice engine failed to start")
+            is_quota = isinstance(e, live_engine.LiveQuotaExceeded)
+            if is_quota:
+                log.warning("Gemini Live rate limit: switching to browser voice")
+            else:
+                log.exception("live voice engine failed to start")
             self._live = None
             self._live_wanted = False
             self._audio.clear()
-            await self._send("error", where="live",
-                             message=f"voce dal vivo non partita ({str(e)[:160]}): uso la voce del browser")
-            await self._send("voice.engine", engine="browser")
+            message = ("Gemini Live ha raggiunto un limite di utilizzo. "
+                       "Continua con la voce del browser; controlla le quote in Google AI Studio."
+                       if is_quota else
+                       f"voce dal vivo non partita ({str(e)[:160]}): uso la voce del browser")
+            await self._send("error", where="live", message=message)
+            await self._send("voice.engine", engine="browser",
+                             reason="quota" if is_quota else "connection")
+            if self.vs.state != VoiceState.CLOSED:
+                await self._set_state(VoiceState.IDLE)
             return False
 
     async def _on_audio(self, msg: protocol.AudioChunk) -> None:
@@ -502,25 +514,36 @@ class VoiceRuntime:
         if reason and "terminata" not in reason and live.model:
             self._live_failed_models.add(live.model)     # an error close: try the next model on the ladder
         await live.close()
+        quota_error = live_engine._is_quota_error(reason)
+        if quota_error:
+            live_engine._mark_quota(self.c.settings)
         reason = reason[:150]
         log.warning("live session closed on %s (%s); reconnects so far: %s",
                     live.model, reason or "nessun motivo", self._live_reconnects)
-        if self._live_used and self._live_reconnects < 3:
+        if not quota_error and self._live_used and self._live_reconnects < 3:
             self._live_reconnects += 1
             try:
-                await asyncio.sleep(1)                   # let the server breathe before retrying
+                await asyncio.sleep(1)                   # retry only transient failures
                 await self._start_live()
                 return
+            except live_engine.LiveQuotaExceeded:
+                quota_error = True
+                log.warning("Gemini Live rate-limited during reconnect")
             except Exception as e:
                 log.warning("live reconnect failed: %s", e)
-        if self._live_used:
+        if self._live_used or quota_error:
             self._live_wanted = False
             self._audio.clear()
-            why = f" ({reason})" if reason else ""
-            await self._send("error", where="live",
-                             message=f"la voce dal vivo si è fermata{why}: "
-                                     "clicca il microfono per usare la voce del browser")
-            await self._send("voice.engine", engine="browser")   # client returns to push-to-talk
+            message = ("Gemini Live ha raggiunto un limite di quota. "
+                       "Continua con la voce del browser; controlla Google AI Studio."
+                       if quota_error else
+                       f"la voce dal vivo si è fermata ({reason}): "
+                       "clicca il microfono per usare la voce del browser")
+            await self._send("error", where="live", message=message)
+            await self._send("voice.engine", engine="browser",
+                             reason="quota" if quota_error else "connection")
+            if self.vs.state not in (VoiceState.CLOSED, VoiceState.WAITING_FOR_APPROVAL):
+                await self._set_state(VoiceState.IDLE)
 
     async def _live_tool_calls(self, calls: list[dict]) -> None:
         """Execute a Live tool call through the SAME Toolbox as the text brain: guards unchanged."""
