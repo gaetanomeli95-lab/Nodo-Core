@@ -218,6 +218,10 @@ class VoiceRuntime:
             except live_engine.LiveDropped as e:
                 await self._live_dropped(str(e))
             return
+        # A few PCM frames may already be in-flight when the browser switches
+        # from Live to push-to-talk. Never reinterpret raw PCM as browser WebM STT.
+        if (msg.mime or "").startswith("audio/pcm"):
+            return
         if vs.state == VoiceState.IDLE:
             await self._set_state(VoiceState.LISTENING)
         if vs.state != VoiceState.LISTENING:
