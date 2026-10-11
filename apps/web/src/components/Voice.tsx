@@ -58,8 +58,8 @@ class ChunkPlayer {
           if (generation !== this.generation) continue;
           await new Promise<void>((resolve) => {
             this.finishCurrent = resolve;
-            audio.onended = resolve;
-            audio.onerror = resolve;
+            audio.onended = () => resolve();
+            audio.onerror = () => resolve();
           });
         } catch {
           // Autoplay can be blocked before the first user gesture.
