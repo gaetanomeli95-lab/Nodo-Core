@@ -423,6 +423,7 @@ class VoiceRuntime:
                            + "\n".join(f"{m['role']}: {m['content'][:300]}" for m in hist))
             decls = [{"name": s.name, "description": s.description, "parameters": s.parameters}
                      for s in Toolbox(core, conv, rid, "", "voice").specs()]
+            sdb.commit()  # Keep the conversation ID valid before advertising it to the browser.
         self._live = live_engine.LiveBridge(self.c.settings, self._on_live_event,
                                             getattr(self.c, "live_connect", None))
         try:
