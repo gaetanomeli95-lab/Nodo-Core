@@ -30,6 +30,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const [busy, setBusy] = useState(false);
   const [journalOpen, setJournalOpen] = useState(false);
   const [activity, setActivity] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [voicePending, setVoicePending] = useState<PendingVoice | null>(null);
   const pendingApproval = useRef(false);
   const conversationId = useRef<string | null>(loadConv());   // the brain remembers the conversation
@@ -51,6 +52,10 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const voice = useVoiceSession(voiceConfig, {
     onEvent: (e) => {
       onTrace([e as unknown as NodoEvent]);
+      if ((e.type === "voice.session.started" || e.type === "voice.engine") && e.reason === "quota") {
+        setNotice("Gemini Live ha raggiunto un limite di quota. Puoi continuare con la voce del browser; verifica le quote del progetto in Google AI Studio.");
+      }
+      if (e.type === "voice.engine" && e.engine === "live") setNotice(null);
       if ((e.type === "nodo.response" || e.type === "voice.conversation")
           && (typeof e.conversation_id === "string" || e.conversation_id === null)) {
         conversationId.current = e.conversation_id as string | null;
@@ -84,7 +89,11 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         return next;
       });
     },
-    onError: (msg) => { setActivity(null); setTurns((ts) => [...ts, { who: "nodo", text: `Errore voce: ${msg}`, meta: "error" }]); },
+    onError: (msg) => {
+      setActivity(null);
+      setNotice(msg);
+      setTurns((ts) => [...ts, { who: "nodo", text: `Errore voce: ${msg}`, meta: "error" }]);
+    },
   });
 
   const answer = (decision: "approve" | "reject") => {
@@ -161,6 +170,12 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         partial={voice.partial}
         latest={lastAnswer}
       />
+      {notice && (
+        <div className="voice-notice" role="status">
+          <span>{notice}</span>
+          <button type="button" onClick={() => setNotice(null)} aria-label="Chiudi avviso">×</button>
+        </div>
+      )}
       <div className="conversation-toolbar">
         <span>Conversazione continua · la trascrizione è facoltativa</span>
         <button
