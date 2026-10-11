@@ -7,7 +7,12 @@ export type Project = { id: string; name: string; kind: string; status: string; 
 export type Task = { id: string; title: string; status: string; priority: number; due_date: string | null; project_id: string | null };
 export type Usage = { local_requests: number; cloud_requests: number; premium_requests: number; agent_runs: number; tool_executions: number; tokens: number; estimated_cost: number };
 export type SystemInfo = { mode: string; env: string; models: { id: string; tier: string; is_local: boolean; available: boolean }[]; voice: { stt: { name: string; location: string }; tts: { name: string; location: string } }; github: string; usage: Usage };
-export type VoiceConfig = { engine?: "live" | "browser"; live_reason?: string | null; stt: { name: string; location: string }; tts: { name: string; location: string; voice: string }; language: string };
+export type VoiceConfig = {
+  engine?: "live" | "browser"; live_reason?: string | null;
+  stt: { name: string; location: string; ready?: boolean; reason?: string | null };
+  tts: { name: string; location: string; voice: string; ready?: boolean; reason?: string | null };
+  language: string;
+};
 
 const headers = (): Record<string, string> => {
   const t = localStorage.getItem("nodo_token");
