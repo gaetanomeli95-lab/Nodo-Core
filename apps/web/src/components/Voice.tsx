@@ -150,6 +150,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const [engine, setEngine] = useState<"live" | "browser">("browser");   // live = Gemini Live (real-time voice)
   const [liveOn, setLiveOn] = useState(false);                            // live mode: conversation mic open
   const [handsFree, setHandsFree] = useState(false);                      // explicit opt-in; browser half-duplex
+  const [localSpeaking, setLocalSpeaking] = useState(false);
   const sock = useRef<VoiceSocket | null>(null);
   const rec = useRef<Recognition | null>(null);
   const handsFreeRef = useRef(false);
@@ -162,7 +163,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const handsFreeSupported = typeof window !== "undefined" &&
     !!((window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown })
       .SpeechRecognition || (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition)
-    && (config?.tts.location === "browser" || config === null);
+    && config?.tts.location === "browser";
   const player = useRef(new ChunkPlayer());
   const held = useRef(false);
   const toggled = useRef(false);
@@ -186,14 +187,21 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   };
   const browserTtsNext = () => {
     const text = speechQueue.current.shift();
-    if (!text) { speaking.current = false; maybeResumeHandsFree(); return; }
+    if (!text) {
+      speaking.current = false;
+      setLocalSpeaking(false);
+      maybeResumeHandsFree();
+      return;
+    }
     if (!("speechSynthesis" in window)) {
       speaking.current = false;
+      setLocalSpeaking(false);
       ttsFail("questo browser non può leggere le risposte ad alta voce: usa Chrome o Edge");
       stopHandsFree();
       return;
     }
     speaking.current = true;
+    setLocalSpeaking(true);
     const u = new SpeechSynthesisUtterance(text);
     u.lang = config?.language === "it" ? "it-IT" : config?.language || "it-IT";
     const voices = window.speechSynthesis.getVoices().filter((v) => v.lang?.toLowerCase().startsWith("it"));
@@ -315,6 +323,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const stopLocalAudio = () => {
     speechQueue.current = [];
     speaking.current = false;
+    setLocalSpeaking(false);
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
     player.current.stop();
     pcm.current.stop();
@@ -609,7 +618,8 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     sock.current?.send({ type: "conversation.set", conversation_id: conversationId });
   };
 
-  return { state, connected, partial, engine, liveOn, handsFree, handsFreeSupported, toggleHandsFree,
+  return { state: localSpeaking && engine === "browser" ? "SPEAKING" as VoiceState : state,
+    connected, partial, engine, liveOn, handsFree, handsFreeSupported, toggleHandsFree,
     pressStart, pressStop, interrupt, answer, setConversation };
 }
 
