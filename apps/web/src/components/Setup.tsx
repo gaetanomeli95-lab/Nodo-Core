@@ -28,6 +28,7 @@ export function SetupView() {
     setSaving(true); setKeyMsg(null); setErr(null);
     try {
       await post("/api/v1/setup/key", { name: keyName, value: keyValue.trim() });
+      window.dispatchEvent(new Event("nodo:access-updated"));
       setKeyValue("");
       setKeyMsg("Chiave salvata e attiva. Ricontrollo gli accessi…");
       load();

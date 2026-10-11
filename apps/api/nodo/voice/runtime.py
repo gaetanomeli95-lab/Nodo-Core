@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
@@ -81,6 +82,14 @@ class VoiceRuntime:
         self._live_muted = False          # "Ferma" pressed: drop outgoing audio until the turn ends
         self._in_text = ""                # accumulated input transcription of the current turn
         self._out_text: list[str] = []    # accumulated output transcription (what NODO is saying)
+        self._live_connect_lock = asyncio.Lock()
+        self._live_recovery: asyncio.Task | None = None
+        self._live_pending_drop: str | None = None
+        self._live_rotation: asyncio.Task | None = None
+        self._live_tools: dict[str, asyncio.Task] = {}
+        self._live_tool_lock = asyncio.Lock()
+        self._live_results: dict[str, dict] = {}
+        self._live_user_emitted = False
 
     # ------------------------------------------------------------- inbound dispatch
     async def handle(self, msg) -> None:
@@ -144,6 +153,9 @@ class VoiceRuntime:
     async def _set_conversation(self, conversation_id: str | None) -> None:
         """Sync text and voice to the same thread; never switch during an active turn or approval."""
         vs = self.vs
+        if (self._live_recovery and not self._live_recovery.done()) or self._live_tools:
+            await self._send("error", where="conversation", message="Attendi che NODO finisca il lavoro in corso")
+            return
         if vs.turn_active or vs.pending_approval_id or vs.state in (
             VoiceState.ACTING, VoiceState.SPEAKING, VoiceState.WAITING_FOR_APPROVAL
         ):
@@ -178,28 +190,34 @@ class VoiceRuntime:
             return True
         if not self._live_wanted:
             return False
+        if self._live_recovery and not self._live_recovery.done():
+            return False  # don't replay stale microphone audio into a new turn
         try:
-            await asyncio.wait_for(self._start_live(), timeout=25)
+            async with self._live_connect_lock:
+                if self._live is None:
+                    await asyncio.wait_for(self._start_live(), timeout=20)
             return True
         except Exception as e:
-            is_quota = isinstance(e, live_engine.LiveQuotaExceeded)
-            if is_quota:
-                log.warning("Gemini Live rate limit: switching to browser voice")
-            else:
-                log.exception("live voice engine failed to start")
+            log.warning("live voice engine failed to start: %s", live_engine.safe_error(e))
             self._live = None
-            self._live_wanted = False
-            self._audio.clear()
-            message = ("Gemini Live ha raggiunto un limite di utilizzo. "
-                       "Continua con la voce del browser; controlla le quote in Google AI Studio."
-                       if is_quota else
-                       f"voce dal vivo non partita ({str(e)[:160]}): uso la voce del browser")
-            await self._send("error", where="live", message=message)
-            await self._send("voice.engine", engine="browser",
-                             reason="quota" if is_quota else "connection")
-            if self.vs.state != VoiceState.CLOSED:
-                await self._set_state(VoiceState.IDLE)
+            await self._fallback_live(str(e))
             return False
+
+    async def _fallback_live(self, reason: str) -> None:
+        quota = live_engine._is_quota_error(reason)
+        if quota:
+            live_engine._mark_quota(self.c.settings)
+        self._live_wanted = False
+        self._audio.clear()
+        self.vs.turn_active = False
+        message = ("Gemini Live ha raggiunto un limite di quota. Continua con la voce del browser; "
+                   "controlla le quote del progetto in Google AI Studio." if quota else
+                   f"La voce dal vivo si è fermata ({live_engine.safe_error(reason)}). "
+                   "Clicca il microfono per continuare con la voce del browser.")
+        await self._send("error", where="live", message=message)
+        await self._send("voice.engine", engine="browser", reason="quota" if quota else "connection")
+        if self.vs.state not in (VoiceState.CLOSED, VoiceState.WAITING_FOR_APPROVAL):
+            await self._set_state(VoiceState.IDLE)
 
     async def _on_audio(self, msg: protocol.AudioChunk) -> None:
         vs = self.vs
@@ -208,9 +226,6 @@ class VoiceRuntime:
                 return                                   # the mic PCM cannot feed the browser chain anyway
             if vs.state == VoiceState.IDLE:
                 await self._set_state(VoiceState.LISTENING)
-            # Do not unmute on every PCM packet: "Ferma" must suppress the
-            # remainder of the current response even while the mic stays open.
-            # A new input transcription (or turn completion) unmutes instead.
             self._live_used = True
             vs.mark("speech_started")
             try:
@@ -218,8 +233,7 @@ class VoiceRuntime:
             except live_engine.LiveDropped as e:
                 await self._live_dropped(str(e))
             return
-        # A few PCM frames may already be in-flight when the browser switches
-        # from Live to push-to-talk. Never reinterpret raw PCM as browser WebM STT.
+        # Late Live frames cannot be decoded by the browser WebM STT chain.
         if (msg.mime or "").startswith("audio/pcm"):
             return
         if vs.state == VoiceState.IDLE:
@@ -240,7 +254,11 @@ class VoiceRuntime:
         vs = self.vs
         vs.mark("speech_end")
         if self._live is not None:
-            return   # Gemini's own VAD decides when your turn is over
+            try:
+                await self._live.end_audio()
+            except live_engine.LiveDropped as e:
+                await self._live_dropped(str(e))
+            return
         stt = self.c.stt
         if self._stt_task is not None and hasattr(stt, "end"):
             await self._set_state(VoiceState.TRANSCRIBING)
@@ -300,6 +318,7 @@ class VoiceRuntime:
                     self.vs.begin_turn()
                     self.vs.turn_active = True
                 self._in_text = text
+                self._live_user_emitted = True
                 self._live_used = True
                 await self._send("transcript.final", text=text, provider="client")
                 try:
@@ -421,10 +440,10 @@ class VoiceRuntime:
                     await self._send(t, **{k: v for k, v in e.items() if k not in ("type", "request_id", "at")})
 
     # ------------------------------------------------------------- Gemini Live engine
-    async def _start_live(self) -> None:
+    async def _start_live(self, resume_model: str | None = None, resume_handle: str | None = None) -> None:
         """Opens the real-time session: persona + tools identical to the text brain, but audio in/out."""
         from nodo.brain.loop import Brain
-        from nodo.brain.persona import PERSONA
+        from nodo.brain.persona import LIVE_STYLE, PERSONA
         from nodo.brain.tools import Toolbox, recent_history
 
         rid = f"voice-live-{self.vs.id[:8]}"
@@ -432,21 +451,25 @@ class VoiceRuntime:
             core = self.c.core(sdb)
             conv = core._conversation(self.vs.conversation_id, "voice")
             self.vs.conversation_id = conv.id
-            system = PERSONA.format(context=Brain(core, conv, rid, "voice").snapshot())
+            system = PERSONA.format(context=Brain(core, conv, rid, "voice").snapshot()[:6000]) + LIVE_STYLE
             hist = recent_history(sdb, conv.id, 8)
-            if hist:
+            if hist and not resume_handle:
                 system += ("\n\nConversazione recente (contesto, non rispondere a queste righe):\n"
                            + "\n".join(f"{m['role']}: {m['content'][:300]}" for m in hist))
             decls = [{"name": s.name, "description": s.description, "parameters": s.parameters}
                      for s in Toolbox(core, conv, rid, "", "voice").specs()]
-            sdb.commit()  # Keep the conversation ID valid before advertising it to the browser.
-        self._live = live_engine.LiveBridge(self.c.settings, self._on_live_event,
-                                            getattr(self.c, "live_connect", None))
+            sdb.commit()  # Advertise only a durable, valid conversation ID.
+        bridge = live_engine.LiveBridge(self.c.settings, self._on_live_event,
+                                       getattr(self.c, "live_connect", None))
         try:
-            await self._live.start(system, decls, self.vs.language, exclude=self._live_failed_models)
+            await bridge.start(system, decls, self.vs.language, exclude=self._live_failed_models,
+                               resume_model=resume_model, resume_handle=resume_handle)
+            self._live = bridge
             await self._send("voice.conversation", conversation_id=self.vs.conversation_id)
-        except Exception:
-            self._live = None                            # a half-open bridge would swallow the next audio
+            await self._send("voice.connection", status="connected", model=bridge.model,
+                             resumed=bool(bridge.resume_handle))
+        except BaseException:
+            await bridge.close()  # also close on cancellation/timeout
             raise
 
     async def _live_go(self, *path: VoiceState) -> None:
@@ -457,6 +480,8 @@ class VoiceRuntime:
     async def _on_live_event(self, ev: dict) -> None:
         """Normalized Live event -> protocol events for the panel (+ tool execution on this side)."""
         vs, kind = self.vs, ev["kind"]
+        if self._dead:
+            return
         if kind == "audio":
             if self._live_muted:
                 return
@@ -475,28 +500,35 @@ class VoiceRuntime:
                 vs.turn_active = True
                 vs.mark("speech_started")
                 self._in_text = ""
-            self._live_muted = False
             self._in_text += ev["text"]
             vs.mark("transcript_partial_first")
             await self._send("transcript.partial", text=self._in_text)
             if vs.state != VoiceState.UNDERSTANDING:
                 await self._live_go(VoiceState.LISTENING, VoiceState.UNDERSTANDING)
         elif kind == "output":                               # Gemini transcribing its own answer
+            await self._live_finalize_input()
             if self._live_muted:
-                return  # a spoken stop also suppresses stale text from the interrupted response
+                return
             self._out_text.append(ev["text"])
             vs.mark("model_first_token")
             if vs.state != VoiceState.SPEAKING:
                 await self._live_go(VoiceState.UNDERSTANDING, VoiceState.THINKING, VoiceState.SPEAKING)
             await self._send("nodo.token", delta=ev["text"])
         elif kind == "tool_call":                            # same toolbox and guards as the text brain
+            await self._live_finalize_input()
+            ev = {**ev, "user_text": self._in_text}
             if vs.state != VoiceState.ACTING:
                 await self._live_go(VoiceState.IDLE, VoiceState.UNDERSTANDING,
                                     VoiceState.THINKING, VoiceState.ACTING)
-            await self._live_tool_calls([ev])
+            # Keep receiving interruptions, resumption tokens and GoAway during slow tools.
+            cid = ev["id"]
+            if cid not in self._live_tools or self._live_tools[cid].done():
+                self._live_tools[cid] = asyncio.create_task(self._run_live_tool(ev, self._live))
         elif kind == "interrupted":                          # you spoke over it: Gemini stopped itself
             self._in_text = ""
+            self._live_user_emitted = False
             self._out_text.clear()
+            self._live_muted = False
             if self.vs.state != VoiceState.CLOSED:
                 try:
                     vs.interrupt()
@@ -507,49 +539,99 @@ class VoiceRuntime:
                 await self._set_state(VoiceState.LISTENING)
         elif kind == "turn_complete":
             await self._live_end_turn()
+        elif kind == "go_away":
+            # Give an active reply time to finish, but renew before the advertised deadline.
+            if self._live_rotation and not self._live_rotation.done():
+                return
+            raw = str(ev.get("time_left", "5s"))
+            try:
+                seconds = float(raw.rstrip("s"))
+            except ValueError:
+                seconds = 5
+            async def rotate():
+                await asyncio.sleep(max(0, min(seconds - 1, 30)) if vs.turn_active else 0)
+                await self._live_dropped("rotazione programmata")
+            self._live_rotation = asyncio.create_task(rotate())
+        elif kind == "tool_cancelled":
+            for cid in ev["ids"]:
+                if task := self._live_tools.get(cid):
+                    task.cancel()
         elif kind == "closed":
             await self._live_dropped(str(ev.get("error") or ""))
 
+    async def _run_live_tool(self, call: dict, bridge) -> None:
+        try:
+            async with self._live_tool_lock:
+                if self._live is bridge and not self._dead:
+                    await self._live_tool_calls([call], bridge)
+        except asyncio.CancelledError:
+            raise
+        except live_engine.LiveDropped as e:
+            if self._live is bridge:
+                await self._live_dropped(str(e))
+        except Exception:
+            log.exception("live tool task failed")
+
     async def _live_dropped(self, reason: str) -> None:
-        """The live session ended: reconnect transparently only if it was actually in use."""
+        """Single recovery owner; receive callbacks must not reconnect inside their own pump."""
         if self._live is None or self._dead:
             return
+        if self._live_recovery and not self._live_recovery.done():
+            self._live_pending_drop = reason
+            return
+        async def recover():
+            try:
+                await self._recover_live(reason)
+            finally:
+                self._live_recovery = None
+                pending, self._live_pending_drop = self._live_pending_drop, None
+                if pending is not None and not self._dead and self._live is not None:
+                    await self._live_dropped(pending)
+        self._live_recovery = asyncio.create_task(recover())
+
+    async def _recover_live(self, reason: str) -> None:
+        if self._live is None:
+            return
         live, self._live = self._live, None
-        if reason and "terminata" not in reason and live.model:
-            self._live_failed_models.add(live.model)     # an error close: try the next model on the ladder
+        kind = live_engine.error_kind(reason)
+        model, handle = live.model, live.resume_handle
+        if kind == "configuration" and model:
+            self._live_failed_models.add(model)
+            handle = None
         await live.close()
-        quota_error = live_engine._is_quota_error(reason)
-        if quota_error:
-            live_engine._mark_quota(self.c.settings)
-        reason = reason[:150]
+        reason = live_engine.safe_error(reason)
         log.warning("live session closed on %s (%s); reconnects so far: %s",
                     live.model, reason or "nessun motivo", self._live_reconnects)
-        if not quota_error and self._live_used and self._live_reconnects < 3:
-            self._live_reconnects += 1
-            try:
-                await asyncio.sleep(1)                   # retry only transient failures
-                await self._start_live()
-                return
-            except live_engine.LiveQuotaExceeded:
-                quota_error = True
-                log.warning("Gemini Live rate-limited during reconnect")
-            except Exception as e:
-                log.warning("live reconnect failed: %s", e)
-        if self._live_used or quota_error:
-            self._live_wanted = False
-            self._audio.clear()
-            message = ("Gemini Live ha raggiunto un limite di quota. "
-                       "Continua con la voce del browser; controlla Google AI Studio."
-                       if quota_error else
-                       f"la voce dal vivo si è fermata ({reason}): "
-                       "clicca il microfono per usare la voce del browser")
-            await self._send("error", where="live", message=message)
-            await self._send("voice.engine", engine="browser",
-                             reason="quota" if quota_error else "connection")
-            if self.vs.state not in (VoiceState.CLOSED, VoiceState.WAITING_FOR_APPROVAL):
-                await self._set_state(VoiceState.IDLE)
+        await self._send("voice.interrupted", reason="reconnect", during=str(self.vs.state))
+        await self._send("voice.connection", status="reconnecting", reason=kind)
+        self._out_text.clear()
+        self._in_text = ""
+        self._live_user_emitted = False
+        self.vs.turn_active = False
+        if self._live_used and kind not in ("auth", "quota"):
+            while self._live_reconnects < 3:
+                if self._dead:
+                    return
+                attempt = self._live_reconnects
+                self._live_reconnects += 1
+                try:
+                    await asyncio.sleep(min(4, .5 * 2 ** attempt) + random.uniform(0, .2))
+                    if self._dead:
+                        return
+                    async with self._live_connect_lock:
+                        await asyncio.wait_for(self._start_live(model, handle), timeout=20)
+                    await self._live_go(VoiceState.IDLE, VoiceState.LISTENING)
+                    return
+                except Exception as e:
+                    log.warning("live reconnect failed: %s", live_engine.safe_error(e))
+                    if live_engine.error_kind(str(e)) in ("auth", "quota"):
+                        reason = str(e)
+                        break
+                    if handle:
+                        handle = None  # stale/non-resumable token: rebuild from persisted history
+        await self._fallback_live(reason)
 
-    async def _live_tool_calls(self, calls: list[dict]) -> None:
+    async def _live_tool_calls(self, calls: list[dict], bridge=None) -> None:
         """Execute a Live tool call through the SAME Toolbox as the text brain: guards unchanged."""
         from nodo.brain.tools import Toolbox
 
@@ -557,23 +639,53 @@ class VoiceRuntime:
         responses: list[tuple[str, str, dict]] = []
         bindings: list[dict] = []
         for c in calls:
+            if self._dead or (bridge is not None and self._live is not bridge):
+                return  # An old connection cannot start new actions after reconnect.
             await self._send("nodo.step", step=f"tool:{c['name']}", status="running", arguments=c["args"])
             try:
-                with self._db() as sdb:
-                    core = self.c.core(sdb)
-                    conv = core._conversation(self.vs.conversation_id, "voice")
-                    self.vs.conversation_id = conv.id
-                    box = Toolbox(core, conv, rid, self._in_text, "voice")
-                    result = await box.call(c["name"], c["args"])
-                    bindings += box.bindings
+                if c["id"] and c["id"] in self._live_results:
+                    result = self._live_results[c["id"]]
+                elif c["name"] == "decide" and c["args"].get("approval_id") != self.vs.pending_approval_id:
+                    result = {"error": "La decisione deve essere quella attualmente mostrata in questa sessione."}
+                elif c["name"] == "decide" and not (
+                    _APPROVE_RE.fullmatch(c.get("user_text", self._in_text).strip())
+                    if c["args"].get("approve") is True
+                    else _REJECT_RE.fullmatch(c.get("user_text", self._in_text).strip())
+                ):
+                    result = {"error": "Attendo un sì o un no chiaro per la proposta mostrata."}
+                else:
+                    with self._db() as sdb:
+                        core = self.c.core(sdb)
+                        conv = core._conversation(self.vs.conversation_id, "voice")
+                        self.vs.conversation_id = conv.id
+                        box = Toolbox(core, conv, rid, c.get("user_text", self._in_text), "voice")
+                        result = await box.call(c["name"], c["args"])
+                        bindings += box.bindings
+                    if c["id"]:
+                        self._live_results[c["id"]] = result
+                    if c["name"] == "decide" and result.get("done"):
+                        aid = self.vs.pending_approval_id
+                        self.vs.pending_approval_id = None
+                        await self._send("approval.resolved", approval_id=aid,
+                                         status=result.get("decision"))
             except Exception as e:
                 log.exception("live tool %s failed", c["name"])
                 result = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
             responses.append((c["id"], c["name"], result))
             await self._send("nodo.step", step=f"tool:{c['name']}", status="done",
                              ok="error" not in result)
-        if self._live is not None:
+            if "error" not in result and c["name"] in ("sites_status", "today_agenda", "projects", "night_report"):
+                rows = result.get("sites") if c["name"] == "sites_status" else (
+                    result.get("tasks") if c["name"] == "today_agenda" else result.get("projects"))
+                await self._send("ui.present", view=c["name"],
+                                 rows=[{k: v for k, v in row.items() if k in
+                                        ("name", "title", "status", "project", "last_checked", "due")}
+                                       for row in (rows or [])[:6] if isinstance(row, dict)],
+                                 summary=str(result.get("briefing") or result.get("description") or "")[:1200])
+        if self._live is not None and (bridge is None or self._live is bridge):
             await self._live.tool_response(responses)
+        if bridge is not None and self._live is not bridge:
+            return
         for b in bindings:
             if b["approval_id"] != self.vs.pending_approval_id:
                 self.vs.pending_approval_id = b["approval_id"]
@@ -582,34 +694,34 @@ class VoiceRuntime:
                                  if k in ("approval_id", "tool", "action", "level", "label", "params",
                                           "site", "preview_url", "pr_url")})
 
+    async def _live_finalize_input(self) -> None:
+        if self._in_text.strip() and not self._live_user_emitted:
+            self._live_user_emitted = True
+            await self._send("transcript.final", text=self._in_text.strip(), provider="gemini-live")
+
     async def _live_end_turn(self) -> None:
         vs = self.vs
-        input_text = self._in_text.strip()
+        await self._live_finalize_input()
+        vs.mark("model_done")
         text = "".join(self._out_text).strip()
-        if input_text or text:
+        if vs.conversation_id and (self._in_text.strip() or text):
             try:
                 with self._db() as sdb:
-                    core = self.c.core(sdb)
-                    conv = core._conversation(vs.conversation_id, "voice")
-                    vs.conversation_id = conv.id
-                    if input_text:
-                        sdb.add(Message(conversation_id=conv.id, role="user", content=input_text))
-                    if text:
-                        sdb.add(Message(conversation_id=conv.id, role="nodo", content=text))
-                    sdb.commit()  # Live now has the same durable history as a text command.
+                    for role, content in (("user", self._in_text.strip()), ("nodo", text)):
+                        if content:
+                            sdb.add(Message(conversation_id=vs.conversation_id, role=role, content=content,
+                                            request_id=f"live-{vs.id[:8]}-{vs.turn_number}"))
+                    sdb.commit()
             except Exception:
                 log.exception("could not persist Live conversation turn")
-                await self._send("error", where="live-memory",
-                                 message="Non sono riuscito a salvare questo turno nel diario")
-        if input_text:
-            await self._send("transcript.final", text=input_text, provider="gemini-live")
-        vs.mark("model_done")
+                await self._send("error", where="live-memory", message="Non sono riuscito a salvare questo turno nel diario")
         if text:
             await self._send("nodo.response", text=text, conversation_id=vs.conversation_id,
                              intent="conversation", provider="gemini-live",
-                             model=self._live.model if self._live else None, confidence="known",
+                             model=self._live.model if self._live else None, confidence="unknown",
                              agents=["live"])
         self._in_text = ""
+        self._live_user_emitted = False
         self._out_text.clear()
         self._live_muted = False
         self._live_reconnects = 0        # a healthy turn: the next drop deserves a fresh reconnect
@@ -630,7 +742,9 @@ class VoiceRuntime:
         vs = self.vs
         if vs.state == VoiceState.CLOSED:
             return
-        if self._live is not None:
+        if self._live is not None and (vs.turn_active or vs.state in (
+            VoiceState.THINKING, VoiceState.ACTING, VoiceState.SPEAKING
+        )):
             self._live_muted = True   # Gemini keeps generating internally; we just stop relaying audio
         during = str(vs.state)
         try:
@@ -686,6 +800,11 @@ class VoiceRuntime:
     async def close(self) -> None:
         self._gen += 1
         self._dead = True
+        for task in [self._live_recovery, self._live_rotation, *self._live_tools.values()]:
+            if task and task is not asyncio.current_task() and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
         if self._live is not None:
             live, self._live = self._live, None
             await live.close()

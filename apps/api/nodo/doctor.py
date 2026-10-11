@@ -86,7 +86,7 @@ async def run_checks(c) -> list[Check]:
     from nodo.voice.live import missing_reason
     why = missing_reason(s, c)
     out.append(Check("Voce dal vivo (Gemini Live)", "ok" if why is None else "optional",
-                     "parli con NODO in tempo reale, voce naturale, ~1 secondo di attesa."
+                     "configurazione disponibile; connessione, quota e microfono vanno verificati con una conversazione."
                      if why is None else f"non attiva: {why}. La voce normale del browser funziona comunque.",
                      "" if why is None else
                      "Chiave gratuita: aistudio.google.com → Get API key → copiala in NODO_GEMINI_API_KEY "

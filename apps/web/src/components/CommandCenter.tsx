@@ -1,229 +1,182 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { get, streamCommand, type NodoEvent, type VoiceConfig } from "../api";
-import { VoiceDock, useVoiceSession } from "./Voice";
-import { Presence } from "./Presence";
+import { useEffect, useRef, useState } from "react";
+import { get, streamCommand, type NodoEvent, type VoiceConfig, type VoiceEvent } from "../api";
+import { useVoiceSession } from "./Voice";
+import { Presence, type PresenceMode } from "./Presence";
 
-type Turn = { who: "user" | "nodo"; text: string; meta?: string; doing?: string };
-
-// what NODO is doing while it thinks (brain tools, nodo/brain/tools.py)
+type Turn = { who: "user" | "nodo"; text: string; done?: boolean };
+type Decision = { id: string; label: string; site?: string; preview?: string; pr?: string; sending?: boolean };
+type Surface = { view: string; rows: Record<string, unknown>[]; summary: string };
 const DOING: Record<string, string> = {
-  night_report: "guardo cosa è successo stanotte…", sites_status: "guardo lo stato dei siti…",
-  check_sites: "controllo i siti adesso…", pending_decisions: "guardo cosa aspetta il tuo ok…",
-  decide: "eseguo la tua decisione…", request_site_change: "avvio la modifica al sito…",
-  projects: "guardo i progetti…", today_agenda: "metto in fila le priorità di oggi…",
-  create_task: "segno l'attività…", complete_task: "aggiorno l'attività…", remember: "me lo segno…",
-  recall: "cerco nella memoria…", save_draft: "salvo la bozza…",
+  night_report: "Rileggo il turno di notte", sites_status: "Guardo i tuoi siti", check_sites: "Controllo i siti",
+  pending_decisions: "Raccolgo le decisioni", decide: "Eseguo la tua decisione", request_site_change: "Preparo la modifica",
+  projects: "Guardo i progetti", today_agenda: "Metto a fuoco le priorità", create_task: "Segno l'attività",
+  complete_task: "Aggiorno l'attività", remember: "Aggiorno la memoria", recall: "Cerco nella memoria", save_draft: "Salvo la bozza",
 };
-const CONV_KEY = "nodo.conversation";
-const loadConv = () => { try { return localStorage.getItem(CONV_KEY); } catch { return null; } };
-const saveConv = (id: string | null) => { try { if (id) localStorage.setItem(CONV_KEY, id); else localStorage.removeItem(CONV_KEY); } catch { /* private mode */ } };
-type PendingVoice = { approvalId: string; tool: string; action: string; params?: unknown };
+const TITLES: Record<string, string> = { sites_status: "I tuoi siti", today_agenda: "Da qui si comincia",
+  projects: "I progetti sul tavolo", night_report: "Mentre non c'eri" };
+const STATUS: Record<string, string> = { ok: "Regolare", warning: "Da controllare", critical: "Richiede attenzione",
+  unknown: "Da verificare", open: "Da fare", in_progress: "In corso", blocked: "In attesa", active: "Attivo", done: "Completato" };
+const loadConv = () => { try { return localStorage.getItem("nodo.conversation"); } catch { return null; } };
+const safeUrl = (s?: string) => { try { const u = new URL(s || ""); return /^https?:$/.test(u.protocol) ? u.href : undefined; } catch { return undefined; } };
 
 export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequestDone }: {
-  voiceConfig: VoiceConfig | null;
-  onTrace: (e: NodoEvent[]) => void;
-  onActiveContext: (name: string | null) => void;
-  onRequestDone: () => void;
+  voiceConfig: VoiceConfig | null; onTrace: (e: NodoEvent[]) => void;
+  onActiveContext: (name: string | null) => void; onRequestDone: () => void;
 }) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [journalOpen, setJournalOpen] = useState(false);
+  const [diary, setDiary] = useState(false);
+  const [writing, setWriting] = useState(false);
   const [activity, setActivity] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [voicePending, setVoicePending] = useState<PendingVoice | null>(null);
-  const pendingApproval = useRef(false);
-  const conversationId = useRef<string | null>(loadConv());   // the brain remembers the conversation
+  const [error, setError] = useState<string | null>(null);
+  const [decision, setDecision] = useState<Decision | null>(null);
+  const [surface, setSurface] = useState<Surface | null>(null);
+  const conv = useRef(loadConv());
+  const journal = useRef<HTMLDivElement>(null);
+  const activeTools = useRef(new Set<string>());
 
-  // reopening the panel shows the last messages of the ongoing conversation (also what NODO finished meanwhile)
-  useEffect(() => {
-    const id = conversationId.current;
-    if (!id) return;
-    get<{ role: string; content: string }[]>(`/api/v1/conversations/${id}/messages`)
-      .then((ms) => setTurns((ts) => ts.length ? ts : ms.slice(-20).filter((m) => m.role === "user" || m.role === "nodo")
-        .map((m) => ({ who: m.role === "user" ? "user" as const : "nodo" as const, text: m.content, meta: m.role === "nodo" ? "·" : undefined }))))
-      .catch(() => { conversationId.current = null; saveConv(null); });
-  }, []);
-  const turnsRef = useRef<HTMLDivElement>(null);
-
-  const appendNodo = useCallback((delta: string) =>
-    setTurns((ts) => ts.map((t, i) => i === ts.length - 1 && t.who === "nodo" ? { ...t, text: t.text + delta } : t)), []);
-
-  const voice = useVoiceSession(voiceConfig, {
-    onEvent: (e) => {
-      onTrace([e as unknown as NodoEvent]);
-      if ((e.type === "voice.session.started" || e.type === "voice.engine") && e.reason === "quota") {
-        setNotice("Gemini Live ha raggiunto un limite di quota. Puoi continuare con la voce del browser; verifica le quote del progetto in Google AI Studio.");
-      }
-      if (e.type === "voice.engine" && e.engine === "live") setNotice(null);
-      if ((e.type === "nodo.response" || e.type === "voice.conversation")
-          && (typeof e.conversation_id === "string" || e.conversation_id === null)) {
-        conversationId.current = e.conversation_id as string | null;
-        saveConv(conversationId.current); // Voice-first conversations continue in text.
-      }
-      if (e.type === "nodo.step" && typeof e.step === "string" && e.step.startsWith("tool:")) {
-        setActivity(e.status === "running" ? DOING[e.step.slice(5)] ?? "Sto usando uno strumento…" : null);
-      }
-      if (e.type === "voice.turn.done" || e.type === "voice.interrupted") setActivity(null);
-      if (e.type === "nodo.intent" && e.entity_name) onActiveContext(e.entity_name as string);
-      if (e.type === "nodo.plan") pendingApproval.current = !!e.needs_approval;
-      if (e.type === "nodo.turn.done" || e.type === "voice.turn.done") onRequestDone();
-      if (e.type === "approval.required") {
-        pendingApproval.current = true;
-        setVoicePending({ approvalId: e.approval_id as string, tool: e.tool as string, action: e.action as string, params: e.params });
-      }
-      if (e.type === "approval.resolved") setVoicePending(null);
-    },
-    onUserText: (text) => setTurns((ts) => [...ts, { who: "user", text }]),
-    onNodoStart: () => {
-      setTurns((ts) => ts.length && ts[ts.length - 1].who === "nodo" && !ts[ts.length - 1].meta ? ts : [...ts, { who: "nodo", text: "" }]);
-    },
-    onNodoDelta: appendNodo,
-    onNodoDone: (e) => {
-      const text = e.text as string | undefined;
-      const meta = `${e.provider ?? ""} · ${e.intent ?? ""}${e.interrupted ? " · interrotto" : ""}`;
-      setTurns((ts) => {
-        const next = [...ts];
-        if (next.length && next[next.length - 1].who === "nodo") next[next.length - 1] = { who: "nodo", text: text ?? next[next.length - 1].text, meta };
-        else if (text) next.push({ who: "nodo", text, meta });
-        return next;
-      });
-    },
-    onError: (msg) => {
-      setActivity(null);
-      setNotice(msg);
-      setTurns((ts) => [...ts, { who: "nodo", text: `Errore voce: ${msg}`, meta: "error" }]);
-    },
-  });
-
-  const answer = (decision: "approve" | "reject") => {
-    if (!voicePending) return;
-    voice.answer(voicePending.approvalId, decision);
-    setVoicePending(null);
+  const rememberConv = (id: unknown) => {
+    if (typeof id !== "string" && id !== null) return;
+    conv.current = id;
+    try { if (id) localStorage.setItem("nodo.conversation", id); else localStorage.removeItem("nodo.conversation"); } catch { /* private mode */ }
   };
+  const addDelta = (delta: string) => setTurns((ts) => {
+    const last = ts[ts.length - 1];
+    return last?.who === "nodo" && !last.done
+      ? [...ts.slice(0, -1), { ...last, text: last.text + delta }]
+      : [...ts, { who: "nodo", text: delta }];
+  });
+  const endReply = (e: Record<string, unknown>) => {
+    rememberConv(e.conversation_id);
+    setBusy(false);
+    if (typeof e.text === "string") setTurns((ts) => {
+      const next: Turn = { who: "nodo", text: e.text as string, done: true };
+      return ts.at(-1)?.who === "nodo" && !ts.at(-1)?.done ? [...ts.slice(0, -1), next] : [...ts, next];
+    });
+  };
+  const onEvent = (e: VoiceEvent) => {
+    onTrace([e as unknown as NodoEvent]);
+    if (e.conversation_id !== undefined) rememberConv(e.conversation_id);
+    if (e.type === "voice.conversation" && e.conversation_id === null) {
+      setTurns([]); setSurface(null); setError(null);
+    }
+    if ((e.type === "voice.session.started" || e.type === "voice.engine") && e.reason === "quota") {
+      setError("Gemini Live ha raggiunto un limite di quota. Puoi continuare con la voce del browser; verifica le quote del progetto in Google AI Studio.");
+    }
+    if (e.type === "nodo.intent" && e.entity_name) onActiveContext(e.entity_name as string);
+    if (e.type === "voice.turn.done") { setBusy(false); onRequestDone(); }
+    if (e.type === "voice.interrupted") {
+      setTurns((ts) => ts.map((t) => t.done ? t : { ...t, done: true }));
+      setBusy(false);
+    }
+    if (e.type === "nodo.step" || e.type === "tool.started" || e.type === "tool.finished") {
+      const name = String(e.step || e.tool || "").replace(/^tool:/, "");
+      if (e.status === "running" || e.type === "tool.started") activeTools.current.add(name);
+      else activeTools.current.delete(name);
+      const current = Array.from(activeTools.current).at(-1);
+      setActivity(current ? DOING[current] || "Ci lavoro" : null);
+    }
+    if (e.type === "ui.present") setSurface({ view: String(e.view), rows: e.rows as Surface["rows"] || [], summary: String(e.summary || "") });
+    if (e.type === "approval.required") setDecision({ id: String(e.approval_id), label: String(e.label || "Conferma questa azione"),
+      site: e.site as string, preview: safeUrl(e.preview_url as string), pr: safeUrl(e.pr_url as string) });
+    if (e.type === "approval.resolved") { setDecision(null); onRequestDone(); }
+    if (e.type === "approval.ignored") { setDecision((d) => d ? { ...d, sending: false } : null); setError("La conferma non è più valida. Chiedi a NODO di mostrarti le decisioni aggiornate."); }
+    if (e.type === "voice.connection" && e.status === "connected") setError(null);
+  };
+  const voice = useVoiceSession(voiceConfig, {
+    onEvent, onUserText: (text) => setTurns((ts) => [...ts, { who: "user", text, done: true }]),
+    onNodoStart: () => {}, onNodoDelta: addDelta, onNodoDone: endReply,
+    onError: (message) => { setError(message); setBusy(false); },
+  });
+  useEffect(() => {
+    if (!conv.current) return;
+    get<{ role: string; content: string }[]>(`/api/v1/conversations/${conv.current}/messages`)
+      .then((ms) => setTurns((ts) => ts.length ? ts : ms.slice(-30).filter((m) => ["user", "nodo"].includes(m.role))
+        .map((m) => ({ who: m.role as Turn["who"], text: m.content, done: true })))).catch(() => {});
+  }, []);
+  useEffect(() => { if (diary) journal.current?.scrollTo(0, journal.current.scrollHeight); }, [turns, diary]);
 
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
-    setInput(""); setBusy(true); setActivity(null);
-    setTurns((ts) => [...ts, { who: "user", text }, { who: "nodo", text: "" }]);
+    setInput(""); setBusy(true); setError(null);
+    if (voice.engine === "live" && voice.connected) {
+      await voice.sendText(text).catch((e: Error) => { setError(e.message); setBusy(false); }); return;
+    }
+    setTurns((ts) => [...ts, { who: "user", text, done: true }]);
     try {
-      await streamCommand({ text, conversation_id: conversationId.current }, (ev) => {
-        onTrace([ev]);
-        if (ev.type === "token") appendNodo(ev.delta as string);
-        if (ev.type === "step" && typeof ev.step === "string" && ev.step.startsWith("tool:")) {
-          const doing = ev.status === "running" ? DOING[ev.step.slice(5)] ?? "ci lavoro…" : undefined;
-          setActivity(doing ?? null);
-          setTurns((ts) => ts.map((t, i) => i === ts.length - 1 && t.who === "nodo" ? { ...t, doing } : t));
+      await streamCommand({ text, conversation_id: conv.current }, (e) => {
+        onTrace([e]);
+        if (e.type === "token") addDelta(String(e.delta));
+        if (e.type === "done" || e.type === "response") {
+          endReply(e);
+          if (typeof e.conversation_id === "string") voice.setConversation(e.conversation_id);
         }
-        if (ev.type === "done" && ev.conversation_id) {
-          setActivity(null);
-          conversationId.current = ev.conversation_id as string;
-          saveConv(conversationId.current);
-          voice.setConversation(conversationId.current); // Text-first conversations continue in Live.
-        }
-        if (ev.type === "done" || ev.type === "response") {
-          setTurns((ts) => {
-            const next = [...ts];
-            next[next.length - 1] = { who: "nodo", text: ev.text as string, meta: `${ev.provider} · ${ev.intent}` };
-            return next;
-          });
-        }
-        if (ev.type === "error") {
-          setTurns((ts) => {
-            const next = [...ts];
-            next[next.length - 1] = { who: "nodo", text: `Errore: ${String(ev.message)}`, meta: "error" };
-            return next;
-          });
-        }
-        if (ev.type === "intent" && ev.entity_name) onActiveContext(ev.entity_name as string);
-        if (ev.type === "plan" || ev.type === "approval") pendingApproval.current = !!(ev.needs_approval ?? true);
+        if (e.type === "step") setActivity(e.status === "running" ? DOING[String(e.step).replace("tool:", "")] || "Ci lavoro" : null);
+        if (e.type === "error") setError(String(e.message));
       });
       onRequestDone();
-    } catch (e) {
-      setTurns((ts) => [...ts, { who: "nodo", text: `Errore: ${(e as Error).message}`, meta: "error" }]);
-    } finally {
-      setBusy(false);
-      setActivity(null);
-    }
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); setActivity(null); }
   };
-
-  const newConversation = () => {
-    conversationId.current = null;
-    saveConv(null);
-    voice.setConversation(null);
-    setTurns([]);
-    setActivity(null);
-    setJournalOpen(false);
+  const answer = (choice: "approve" | "reject") => {
+    if (!decision || decision.sending) return;
+    voice.answer(decision.id, choice); setDecision({ ...decision, sending: true });
   };
+  const mode: PresenceMode = voice.recovering ? "reconnect" : decision ? "approve" : voice.audioPlaying ? "speak"
+    : activity ? "act" : busy || ["THINKING", "UNDERSTANDING", "ACTING"].includes(voice.state) ? "think"
+    : voice.microphoneOn ? "listen" : voice.state === "TRANSCRIBING" ? "think" : "rest";
+  const title = { rest: "Sono qui.", listen: "Ti ascolto.", think: "Metto a fuoco.", act: "Ci sto lavorando.",
+    speak: "Un passo avanti.", approve: "Decidiamo insieme.", reconnect: "Riprendo il filo." }[mode];
+  const subtitle = mode === "reconnect" ? "Sto riconnettendo la voce. Attendi un momento prima di parlare."
+    : activity || (mode === "rest" ? "Un pensiero, un progetto, una cosa da risolvere."
+      : mode === "approve" ? "Guarda la proposta. La scelta resta tua."
+      : mode === "listen" ? "Prenditi il tuo tempo." : mode === "speak" ? "Puoi interrompermi quando vuoi." : "Collego la tua richiesta alle cose che contano.");
 
-  const lastAnswer = [...turns].reverse().find((t) => t.who === "nodo" && t.text && t.meta !== "error")?.text ?? null;
-  const presenceState = busy ? (activity ? "WORKING" : "THINKING") : voice.state;
-
-  return (
-    <section className="command">
-      <Presence
-        state={presenceState}
-        connected={voice.connected}
-        engine={voice.engine}
-        activity={activity}
-        partial={voice.partial}
-        latest={lastAnswer}
-      />
-      {notice && (
-        <div className="voice-notice" role="status">
-          <span>{notice}</span>
-          <button type="button" onClick={() => setNotice(null)} aria-label="Chiudi avviso">×</button>
-        </div>
-      )}
-      <div className="conversation-toolbar">
-        <span>Conversazione continua · la trascrizione è facoltativa</span>
-        <button
-          type="button"
-          className="journal-toggle"
-          onClick={() => setJournalOpen((open) => !open)}
-          aria-expanded={journalOpen}
-          aria-controls="nodo-journal"
-        >
-          {journalOpen ? "Chiudi diario" : `Apri diario${turns.length ? ` · ${turns.length}` : ""}`}
-        </button>
+  return <section className={`conversation-room ${diary ? "with-diary" : ""}`}>
+    <div className="voice-stage">
+      <div className="stage-topline"><span className="eyebrow">IL TUO SPAZIO DI LAVORO</span>
+        <button className={`quiet-button ${diary ? "selected" : ""}`} aria-expanded={diary} onClick={() => setDiary(!diary)}>Diario <span>↗</span></button></div>
+      <div className="presence-copy" aria-live="polite"><span className={`presence-state ${mode}`}><i />
+        {!voice.connected ? "COLLEGAMENTO IN CORSO" : mode === "rest" ? "PRONTO QUANDO VUOI" : { listen: "IN ASCOLTO", think: "STO PENSANDO", act: "AL LAVORO", speak: "NODO PARLA", approve: "UNA TUA DECISIONE", reconnect: "RICONNESSIONE" }[mode]}</span>
+        <h2>{title}</h2><p>{subtitle}</p></div>
+      <Presence mode={mode} sampleLevel={voice.sampleLevel} />
+      {error && <div className="voice-notice" role="alert"><span>{error}</span><button aria-label="Chiudi avviso" onClick={() => setError(null)}>×</button></div>}
+      {decision ? <section className="context-sheet decision-sheet" aria-label="Decisione in attesa">
+        <div className="sheet-kicker">SERVE IL TUO OK {decision.site && `· ${decision.site}`}</div>
+        <h3>{decision.label}</h3><p>La conferma vale solo per questa proposta.</p>
+        <div className="sheet-actions">{decision.preview && <a href={decision.preview} target="_blank" rel="noreferrer">Apri anteprima ↗</a>}
+          {decision.pr && <a href={decision.pr} target="_blank" rel="noreferrer">Guarda le modifiche ↗</a>}
+          <button disabled={decision.sending || !voice.connected} onClick={() => answer("reject")}>Lascia stare</button>
+          <button className="primary" disabled={decision.sending || !voice.connected} onClick={() => answer("approve")}>{decision.sending ? "Conferma in corso…" : "Conferma"}</button></div>
+      </section> : surface && <section className="context-sheet" aria-label="Risultato del lavoro">
+        <div className="sheet-heading"><span className="sheet-kicker">SUL TAVOLO</span><button aria-label="Riponi scheda" onClick={() => setSurface(null)}>×</button></div>
+        <h3>{TITLES[surface.view] || "Il punto della situazione"}</h3>
+        {surface.summary && <p>{surface.summary}</p>}
+        <ul>{surface.rows.map((row, i) => <li key={i}><span>{String(row.title || row.name || "")}</span><small>{STATUS[String(row.status)] || String(row.project || "")}</small></li>)}</ul>
+        {!surface.summary && !surface.rows.length && <p>Non ci sono elementi da mostrare.</p>}
+      </section>}
+      <div className="voice-controls">
+        <button className={`conversation-button ${voice.liveOn ? "active" : ""}`} disabled={!voice.connected || voice.recovering} onClick={voice.toggleMic}>
+          <svg width="18" height="20" viewBox="0 0 18 22" fill="none" aria-hidden="true"><rect x="6" y="1" width="6" height="12" rx="3" stroke="currentColor" strokeWidth="1.5" /><path d="M2 9v2a7 7 0 0 0 14 0V9M9 18v3M5 21h8" stroke="currentColor" strokeWidth="1.5" /></svg>
+          {voice.liveOn ? "Microfono aperto" : voice.microphoneOn ? "Finito, invia" : "Parla con NODO"}</button>
+        {(voice.audioPlaying || busy || activity) && <button className="quiet-button" onClick={() => voice.interrupt()}>Interrompi</button>}
+        {voice.liveOn && <button className="quiet-button" onClick={voice.endConversation}>Chiudi voce</button>}
+        <button className="quiet-button" aria-expanded={writing} onClick={() => setWriting(!writing)}>{writing ? "Chiudi testo" : "Scrivi un pensiero"}</button>
       </div>
-      <div id="nodo-journal" className={journalOpen ? "turns journal-open" : "turns journal-closed"} ref={turnsRef}>
-        {journalOpen && turns.map((t, i) => (
-          <div key={i} className={`turn ${t.who}`}>
-            <div className="who">{t.who === "nodo" ? "NODO" : "Tu"}</div>
-            <div className="text">
-              {t.text}
-              {t.who === "nodo" && !t.text && t.doing && <span className="doing">{t.doing}</span>}
-              {t.who === "nodo" && !t.meta && i === turns.length - 1 && (busy || voice.state === "THINKING" || voice.state === "ACTING" || voice.state === "SPEAKING") && <span className="cursor" />}
-            </div>
-            {t.meta && <div className="meta">{t.meta}</div>}
-          </div>
-        ))}
-        {journalOpen && !turns.length && <p className="journal-empty">Il diario apparirà qui dopo la prima interazione.</p>}
-      </div>
-      {voicePending && (
-        <div className="approval-banner" role="group" aria-label="Approvazione richiesta">
-          NODO chiede conferma: <b>{voicePending.tool}.{voicePending.action}</b>
-          <button onClick={() => answer("approve")}>Conferma</button>
-          <button className="ghost" onClick={() => answer("reject")}>Rifiuta</button>
-        </div>
-      )}
-      <div className="composer">
-        <VoiceDock voice={voice} />
-        <textarea
-          rows={1}
-          value={input}
-          aria-label="Messaggio scritto a NODO"
-          placeholder="Oppure scrivi qualcosa…"
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }}
-        />
-        <button onClick={() => void send()} disabled={busy || !input.trim()}>Invia</button>
-        {turns.length > 0 && !busy && (
-          <button className="ghost" title="Inizia una nuova conversazione" onClick={newConversation}>Nuova</button>
-        )}
-      </div>
-    </section>
-  );
+      {writing && <form className="thought-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
+        <input autoFocus aria-label="Scrivi a NODO" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Da dove cominciamo?" />
+        <button disabled={!input.trim() || busy}>Invia ↗</button></form>}
+      <footer className="stage-footnote"><span>{voice.microphoneOn ? "MICROFONO ATTIVO" : "ATTIVA LA VOCE PER COMINCIARE"}</span><span>{voice.engine === "live" ? "Conversazione dal vivo" : "Voce del browser"}</span></footer>
+    </div>
+    {diary && <aside className="conversation-diary"><header><span className="eyebrow">DIARIO</span><button className="quiet-button" onClick={() => setDiary(false)}>Chiudi</button></header>
+      <p className="diary-intro">Le parole restano qui. Il lavoro continua al centro.</p>
+      {!!turns.length && <button className="quiet-button" disabled={!voice.connected || busy || !!decision || !!activity || voice.audioPlaying || voice.microphoneOn}
+        onClick={() => voice.setConversation(null)}>Nuova conversazione</button>}
+      <div className="diary-entries" ref={journal}>{!turns.length && <p className="muted">La conversazione deve ancora cominciare.</p>}
+        {turns.map((t, i) => <article key={i}><small>{t.who === "user" ? "TU" : "NODO"}</small><p>{t.text}</p></article>)}
+        {voice.partial && <article className="partial-entry"><small>TI STO ASCOLTANDO</small><p>{voice.partial}</p></article>}</div>
+    </aside>}
+  </section>;
 }

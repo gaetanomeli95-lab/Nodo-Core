@@ -45,9 +45,13 @@ class FakeLiveSession:
         self.tool_responses.extend(function_responses)
 
     async def receive(self):
-        for m in self.script:
+        while self.script:
+            m = self.script.pop(0)
             await asyncio.sleep(0.01)
             yield m
+            # Match google-genai: receive() ends after ONE model turn.
+            if getattr(getattr(m, "server_content", None), "turn_complete", False):
+                return
         await asyncio.Event().wait()   # a real session stays open; close() cancels this
 
 
@@ -248,6 +252,137 @@ def test_approval_answer_speaks_through_live(client, db, container):
     assert session.contents and session.contents[-1]["turn_complete"] is True
 
 
+def test_live_two_turns_keep_one_connection_and_persist_diary(client, container):
+    """Regression: SDK's per-turn iterator must not be mistaken for a disconnect."""
+    holder, script = [], []
+    for question, answer in (("primo messaggio", "Prima risposta."), ("secondo messaggio", "Seconda risposta.")):
+        script += [_sc(input_transcription=SimpleNamespace(text=question)),
+                   _sc(output_transcription=SimpleNamespace(text=answer)), _sc(turn_complete=True)]
+    container.live_connect = make_connect(script, holder)
+    with client.websocket_connect(WS) as ws:
+        _open_live(ws)
+        events, _ = _recv_until(ws, "voice.turn.done")
+        events2, _ = _recv_until(ws, "voice.turn.done")
+        assert len(holder) == 1
+        assert not any(e["type"] == "voice.engine" for e in events + events2)
+        response = next(e for e in events2 if e["type"] == "nodo.response")
+        conversation = response["conversation_id"]
+        first_types = [e["type"] for e in events]
+        assert first_types.index("transcript.final") < first_types.index("nodo.token")
+    messages = client.get(f"/api/v1/conversations/{conversation}/messages").json()
+    assert [(m["role"], m["content"]) for m in messages] == [
+        ("user", "primo messaggio"), ("nodo", "Prima risposta."),
+        ("user", "secondo messaggio"), ("nodo", "Seconda risposta.")]
+
+
+def test_live_recovery_reuses_handle_and_model(client, container):
+    class ResumeThenDrop(FakeLiveSession):
+        async def receive(self):
+            yield SimpleNamespace(session_resumption_update=SimpleNamespace(resumable=True, new_handle="resume-test"))
+            raise RuntimeError("1011 temporary network failure")
+    holder = []
+    def connect(key, model, config):
+        session = ResumeThenDrop([]) if not holder else FakeLiveSession([])
+        holder.append((model, config, session))
+        return _CM(session)
+    container.live_connect = connect
+    with client.websocket_connect(WS) as ws:
+        _open_live(ws)
+        _recv_until(ws, "voice.interrupted")
+        while True:
+            _, event = _recv_until(ws, "voice.connection")
+            if event["status"] == "connected":
+                break
+        assert len(holder) == 2
+        assert holder[1][0] == holder[0][0]
+        assert holder[1][1]["session_resumption"] == {"handle": "resume-test"}
+
+
+def test_live_quota_degrades_without_cycling_models(client, container):
+    class Quota(FakeLiveSession):
+        async def receive(self):
+            raise RuntimeError("429 RESOURCE_EXHAUSTED")
+            yield  # async generator
+    holder = []
+    def connect(key, model, config):
+        holder.append(model)
+        return _CM(Quota([]))
+    container.live_connect = connect
+    with client.websocket_connect(WS) as ws:
+        _open_live(ws)
+        _, event = _recv_until(ws, "voice.engine")
+        assert event["engine"] == "browser"
+    assert len(holder) == 1
+
+
+async def test_live_stop_survives_incoming_mic_frames(container, engine):
+    from nodo.db.session import session_scope
+    from nodo.voice.base import VoiceState
+    from nodo.voice.protocol import AudioChunk, SessionStart
+    from nodo.voice.runtime import VoiceRuntime
+    events = []
+    async def emit(event):
+        events.append(event)
+    container.live_connect = make_connect([], [])
+    vs = container.voice_sessions.create(None, "it")
+    runtime = VoiceRuntime(vs, container, emit, session_scope)
+    await runtime.handle(SessionStart())
+    await runtime.handle(AudioChunk(data="AAEAAg=="))
+    vs.state = VoiceState.SPEAKING
+    await runtime.interrupt()
+    events.clear()
+    await runtime.handle(AudioChunk(data="AAEAAg=="))
+    await runtime._on_live_event({"kind": "audio", "data": b"\x00\x00"})
+    assert not any(e["type"] == "tts.chunk" for e in events)
+    await runtime.close()
+
+
+async def test_live_goaway_and_resumability_are_distinct(settings):
+    from nodo.voice.live import LiveBridge
+    events = []
+    async def emit(e):
+        events.append(e)
+    session = FakeLiveSession([
+        SimpleNamespace(session_resumption_update=SimpleNamespace(resumable=True, new_handle="first")),
+        SimpleNamespace(session_resumption_update=SimpleNamespace(resumable=False, new_handle=None)),
+        SimpleNamespace(go_away=SimpleNamespace(time_left="30s")), _sc(turn_complete=True)])
+    bridge = LiveBridge(settings, emit, lambda *a: _CM(session))
+    await bridge.start("Italiano", [], "it")
+    for _ in range(30):
+        if any(e["kind"] == "go_away" for e in events):
+            break
+        await asyncio.sleep(.01)
+    assert bridge.resume_handle is None
+    assert any(e["kind"] == "go_away" for e in events)
+    assert not any(e["kind"] == "closed" for e in events)
+    await bridge.close()
+
+
+def test_live_config_validates_with_real_sdk(settings):
+    import pytest
+    types = pytest.importorskip("google.genai.types")
+    from nodo.voice.live import live_config
+    config = types.LiveConnectConfig(**live_config(settings, "Parla italiano", [], "resume-test"))
+    assert config.session_resumption.handle == "resume-test"
+    assert config.realtime_input_config.automatic_activity_detection.disabled is False
+    assert config.speech_config.language_code is None
+
+
+async def test_live_mic_off_flushes_server_vad(settings):
+    from nodo.voice.live import LiveBridge
+    flags = []
+    class AudioEnd(FakeLiveSession):
+        async def send_realtime_input(self, **kw):
+            flags.append(kw)
+    async def emit(e):
+        pass
+    bridge = LiveBridge(settings, emit, lambda *a: _CM(AudioEnd([])))
+    await bridge.start("Italiano", [], "it")
+    await bridge.end_audio()
+    assert flags == [{"audio_stream_end": True}]
+    await bridge.close()
+
+
 def test_live_turn_is_saved_to_the_shared_diary(client, db, container):
     """Speech-to-speech must persist transcribed user and NODO messages for later text turns."""
     from sqlalchemy import select
@@ -337,11 +472,11 @@ def test_quota_error_rests_the_key_instead_of_retrying_the_ladder(container):
         bridge = live_engine.LiveBridge(container.settings, lambda e: None, connect=quota_connect)
         with pytest.raises(RuntimeError):
             asyncio.run(bridge.start("sys", [], "it"))
-        assert len(calls) == 1                       # quota is per key: no point trying the other models
+        assert len(calls) == 1                       # Google quota is per project; stop the ladder
         assert live_engine.quota_note(container.settings) is not None
         assert live_engine.missing_reason(container.settings) == live_engine.quota_note(container.settings)
         container.settings.gemini_api_key = "another-key"
-        assert live_engine.quota_note(container.settings) is None   # a fresh key gets a fresh quota
+        assert live_engine.quota_note(container.settings) is None   # no local cache entry; NOT a fresh Google quota
     finally:
         container.settings.env = "TEST"
         container.settings.gemini_api_key = None
@@ -404,3 +539,98 @@ def test_live_quota_during_session_skips_reconnect_and_falls_back(client, contai
             assert any(e["type"] == "voice.turn.done" for e in events)
     finally:
         live_engine._quota.update(old)
+
+
+async def test_live_approval_cannot_target_another_visible_binding(container, monkeypatch):
+    from nodo.brain.tools import Toolbox
+    from nodo.db.session import session_scope
+    from nodo.voice.runtime import VoiceRuntime
+
+    calls, events = [], []
+    async def forbidden_call(*args):
+        calls.append(args)
+        raise AssertionError("An unbound decision must not reach Toolbox")
+    async def emit(event):
+        events.append(event)
+    monkeypatch.setattr(Toolbox, "call", forbidden_call)
+    vs = container.voice_sessions.create(None, "it")
+    vs.pending_approval_id = "shown-now"
+    runtime = VoiceRuntime(vs, container, emit, session_scope)
+    await runtime._live_tool_calls([{"id": "decision-call", "name": "decide", "user_text": "sì",
+                                    "args": {"approval_id": "shown-earlier", "approve": True}}])
+    assert not calls
+    assert vs.pending_approval_id == "shown-now"
+    assert any(e.get("ok") is False for e in events)
+    await runtime.close()
+
+
+async def test_live_slow_tool_does_not_block_barge_in(container, engine, monkeypatch):
+    from nodo.brain.tools import Toolbox
+    from nodo.db.session import session_scope
+    from nodo.voice.protocol import AudioChunk, SessionStart
+    from nodo.voice.runtime import VoiceRuntime
+
+    started, finish = asyncio.Event(), asyncio.Event()
+    events = []
+    async def slow_call(self, name, args):
+        started.set()
+        await finish.wait()
+        return {"sites": []}
+    async def emit(event):
+        events.append(event)
+    monkeypatch.setattr(Toolbox, "call", slow_call)
+    container.live_connect = make_connect([], [])
+    runtime = VoiceRuntime(container.voice_sessions.create(None, "it"), container, emit, session_scope)
+    await runtime.handle(SessionStart())
+    await runtime.handle(AudioChunk(data="AAEAAg=="))
+    try:
+        await asyncio.wait_for(runtime._on_live_event({"kind": "tool_call", "id": "slow",
+                                                      "name": "sites_status", "args": {}}), .5)
+        await asyncio.wait_for(started.wait(), .5)
+        await runtime._on_live_event({"kind": "interrupted"})
+        assert any(e["type"] == "voice.interrupted" for e in events)
+        finish.set()
+        await asyncio.wait_for(asyncio.gather(*runtime._live_tools.values()), .5)
+    finally:
+        finish.set()
+        await runtime.close()
+
+
+def test_repeated_short_connections_have_a_finite_retry_budget(client, container):
+    class Flapping(FakeLiveSession):
+        async def receive(self):
+            raise RuntimeError("1011 internal error: backend restart")
+            yield
+    attempts = []
+    def connect(key, model, config):
+        attempts.append(model)
+        return _CM(Flapping([]))
+    container.live_connect = connect
+    with client.websocket_connect(WS) as ws:
+        _open_live(ws)
+        _, fallback = _recv_until(ws, "voice.engine")
+        assert fallback["reason"] == "connection"
+        assert len(attempts) == 4  # initial connection plus at most three recoveries
+        assert len(set(attempts)) == 1
+
+
+async def test_stopping_finished_playback_does_not_mute_the_next_reply(container, engine):
+    from nodo.db.session import session_scope
+    from nodo.voice.base import VoiceState
+    from nodo.voice.protocol import AudioChunk, SessionStart
+    from nodo.voice.runtime import VoiceRuntime
+
+    events = []
+    async def emit(event):
+        events.append(event)
+    container.live_connect = make_connect([], [])
+    runtime = VoiceRuntime(container.voice_sessions.create(None, "it"), container, emit, session_scope)
+    await runtime.handle(SessionStart())
+    await runtime.handle(AudioChunk(data="AAEAAg=="))
+    runtime.vs.state = VoiceState.LISTENING
+    runtime.vs.turn_active = False  # backend completed; the browser may still have queued audio
+    await runtime.interrupt(reason="microphone_off")
+    await runtime._on_live_event({"kind": "input", "text": "Nuova domanda"})
+    await runtime._on_live_event({"kind": "audio", "data": b"\x00\x00"})
+    assert any(e["type"] == "tts.chunk" for e in events)
+    await runtime.close()

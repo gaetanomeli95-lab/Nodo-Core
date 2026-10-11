@@ -18,9 +18,10 @@ import asyncio
 import hashlib
 import importlib.util
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 log = logging.getLogger("nodo.voice.live")
@@ -29,11 +30,9 @@ IN_MIME = "audio/pcm;rate=16000"    # what the browser microphone sends us (16-b
 OUT_MIME = "audio/pcm;rate=24000"   # what Gemini Live sends back (16-bit PCM, mono)
 
 # tried in order until one accepts the connection (names change; a key may not have them all).
-# The *-preview-12/09-2025 snapshots are known to drop sessions mid-call (server-side 1007),
-# so the newer live models come first and a dropped model is skipped on reconnect.
-LIVE_MODELS = ("gemini-3.8-live", "gemini-3.1-flash-live-preview", "gemini-2.5-flash-native-audio-latest",
-               "gemini-2.5-flash-native-audio-preview-12-2025",
-               "gemini-2.5-flash-native-audio-preview-09-2025")
+# Do not cycle through dated snapshots of the same model after a network failure.
+# An explicitly configured model is still supported, including for regression probes.
+LIVE_MODELS = ("gemini-3.8-live", "gemini-3.1-flash-live-preview")
 
 # returns an async context manager yielding a live session (duck-typed: send_realtime_input,
 # send_client_content, send_tool_response, receive()). In tests a fake factory replaces this.
@@ -82,6 +81,54 @@ class LiveDropped(Exception):
     """The live socket is gone (closed mid-send): the runtime treats it like a 'closed' event."""
 
 
+def error_kind(error: str) -> str:
+    """Recovery policy depends on the error, not on which model happened to be active."""
+    text = error.lower()
+    if any(s in text for s in ("429", "resource_exhausted", "quota", "rate limit")):
+        return "quota"
+    if any(s in text for s in ("401", "403", "api key", "permission_denied", "unauthenticated")):
+        return "auth"
+    if any(s in text for s in ("1007", "404", "not found", "not supported", "unsupported", "invalid_argument")):
+        return "configuration"
+    return "transient"
+
+
+def safe_error(error: Exception | str) -> str:
+    """Provider exceptions can include request URLs; never echo credentials into logs/UI."""
+    text = re.sub(r"(?i)(key|token|authorization)=([^\s&]+)", r"\1=[redacted]", str(error))
+    return re.sub(r"AIza[\w-]+", "[redacted]", text)[:240]
+
+
+def live_config(settings, system: str, tool_decls: list[dict], handle: str | None = None) -> dict:
+    """Conservative audio-only baseline. Tune VAD on the user's microphone, not by guesswork."""
+    config = {
+        "response_modalities": ["AUDIO"],
+        "system_instruction": system,
+        # Native audio uses the language instruction in the prompt. Avoid forcing a locale
+        # unsupported by a fallback model's speech configuration.
+        "speech_config": {"voice_config": {"prebuilt_voice_config": {
+            "voice_name": settings.live_voice or "Kore"}}},
+        "input_audio_transcription": {},
+        "output_audio_transcription": {},
+        "realtime_input_config": {
+            "automatic_activity_detection": {
+                "disabled": False,
+                "start_of_speech_sensitivity": "START_SENSITIVITY_LOW",
+                "end_of_speech_sensitivity": "END_SENSITIVITY_LOW",
+                "prefix_padding_ms": 100,
+                "silence_duration_ms": 600,
+            },
+            "activity_handling": "START_OF_ACTIVITY_INTERRUPTS",
+            "turn_coverage": "TURN_INCLUDES_ONLY_ACTIVITY",
+        },
+        "context_window_compression": {"sliding_window": {}},
+        "session_resumption": {"handle": handle} if handle else {},
+    }
+    if tool_decls:
+        config["tools"] = [{"function_declarations": tool_decls}]
+    return config
+
+
 def missing_reason(settings, container=None) -> str | None:
     """None = the live engine can run; otherwise the plain-Italian reason it cannot."""
     if getattr(container, "live_connect", None) is not None:
@@ -99,10 +146,16 @@ def missing_reason(settings, container=None) -> str | None:
     return None
 
 
-def _real_connect(api_key: str, model: str, config: dict):
+@asynccontextmanager
+async def _real_connect(api_key: str, model: str, config: dict):
     from google import genai  # imported only when actually used
     client = genai.Client(api_key=api_key)
-    return client.aio.live.connect(model=model, config=config)
+    try:
+        async with client.aio.live.connect(model=model, config=config) as session:
+            yield session
+    finally:
+        await client.aio.aclose()
+        client.close()
 
 
 class LiveBridge:
@@ -128,45 +181,40 @@ class LiveBridge:
         self._pump_task: asyncio.Task | None = None
         self._dead = False
         self._send_lock = asyncio.Lock()
+        self.resume_handle: str | None = None
 
     async def start(self, system: str, tool_decls: list[dict], language: str,
-                    exclude: set[str] | None = None) -> None:
-        lang = language if "-" in language else f"{language}-{language.upper()}"
-        config = {
-            "response_modalities": ["AUDIO"],
-            "system_instruction": system,
-            "speech_config": {"voice_config": {"prebuilt_voice_config":
-                                               {"voice_name": self.settings.live_voice or "Kore"}},
-                              "language_code": lang},
-            "input_audio_transcription": {},        # server transcribes the user for the panel + logs
-            "output_audio_transcription": {},       # and the model's own words for the chat
-        }
-        if tool_decls:
-            config["tools"] = [{"function_declarations": tool_decls}]
-        # sessions die after ~10 min without these: compression keeps the conversation alive,
-        # resumption lets a reconnect continue the same session
-        config["context_window_compression"] = {"sliding_window": {}}
-        config["session_resumption"] = {}
+                    exclude: set[str] | None = None, resume_model: str | None = None,
+                    resume_handle: str | None = None) -> None:
+        system += f"\nLingua della conversazione: {language}."
         models = [self.settings.gemini_live_model] if self.settings.gemini_live_model else LIVE_MODELS
-        models = [m for m in models if not exclude or m not in exclude]   # skip models that just dropped us
+        models = [m for m in dict.fromkeys(([resume_model] if resume_model else []) + list(models))
+                  if not exclude or m not in exclude]
         last: Exception | None = None
         for model in models:
+            handle = resume_handle if model == resume_model else None
             try:
+                config = live_config(self.settings, system, tool_decls, handle)
                 self._cm = self._connect(self.settings.gemini_api_key or "test", model, config)
-                self._session = await self._cm.__aenter__()
+                self._session = await asyncio.wait_for(self._cm.__aenter__(), timeout=8)
                 self.model = model
+                self.resume_handle = handle
                 break
             except Exception as e:                  # this key has no access to this model: next rung
                 last = e
-                log.info("live model %s refused the connection: %s", model, str(e)[:160])
+                log.info("live model %s refused the connection: %s", model, safe_error(e))
                 self._cm = self._session = None
                 if _is_quota_error(e):
                     _mark_quota(settings=self.settings)
                     raise LiveQuotaExceeded(
                         "Google AI Studio ha rifiutato Gemini Live per quota o limiti del progetto"
                     ) from e  # stop here: trying the other models won't resolve project quota
+                if error_kind(str(e)) != "configuration" or handle:
+                    # Auth/quota affect the project; network errors deserve a retry on
+                    # the same model. A rejected handle is retried fresh by the runtime.
+                    raise
         if self._session is None:
-            raise RuntimeError(f"nessun modello Live disponibile ({last})")
+            raise RuntimeError(f"nessun modello Live disponibile ({safe_error(last or 'configurazione')})")
         self._pump_task = asyncio.create_task(self._pump())
 
     async def send_audio(self, pcm: bytes) -> None:
@@ -190,6 +238,16 @@ class LiveBridge:
             except Exception as e:
                 self._dead = True
                 raise LiveDropped(f"{type(e).__name__}: {e}") from e
+
+    async def end_audio(self) -> None:
+        """Flush VAD when the user switches the microphone off; keep conversation context."""
+        if self._session is not None and not self._dead:
+            async with self._send_lock:
+                try:
+                    await self._session.send_realtime_input(audio_stream_end=True)
+                except Exception as e:
+                    self._dead = True
+                    raise LiveDropped(safe_error(e)) from e
 
     async def tool_response(self, calls: list[tuple[str, str, dict]]) -> None:
         """(call_id, name, result_dict) back to the model so it can comment on the outcome."""
@@ -217,23 +275,29 @@ class LiveBridge:
     # ------------------------------------------------------------------ receive side
     async def _pump(self) -> None:
         try:
-            async for msg in self._session.receive():
-                if self._dead:
-                    return
-                for ev in self._normalize(msg):
-                    try:
+            while not self._dead:
+                received = False
+                # google-genai receive() is a TURN iterator, not a connection iterator.
+                # Start the next one on the SAME session after turn_complete.
+                async for msg in self._session.receive():
+                    received = True
+                    if self._dead:
+                        return
+                    update = getattr(msg, "session_resumption_update", None)
+                    if update is not None:
+                        if not getattr(update, "resumable", False):
+                            self.resume_handle = None
+                        elif getattr(update, "new_handle", None):
+                            self.resume_handle = update.new_handle
+                    for ev in self._normalize(msg):
                         await self._on_event(ev)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        log.exception("live event handler failed (%s)", ev.get("kind"))
+                if not received:
+                    raise LiveDropped("ricezione chiusa senza eventi")
         except asyncio.CancelledError:
             raise
         except Exception as e:
             if not self._dead:
-                await self._on_event({"kind": "closed", "error": f"{type(e).__name__}: {e}"})
-        if not self._dead:
-            await self._on_event({"kind": "closed", "error": "sessione terminata"})
+                await self._on_event({"kind": "closed", "error": safe_error(e)})
 
     def _normalize(self, msg) -> list[dict]:
         out: list[dict] = []
@@ -245,7 +309,8 @@ class LiveBridge:
                 blob = getattr(part, "inline_data", None)
                 if blob is not None and getattr(blob, "data", None):
                     out.append({"kind": "audio", "data": blob.data})
-                if getattr(part, "text", None):
+                if (getattr(part, "text", None) and not getattr(part, "thought", False)
+                        and not getattr(sc, "output_transcription", None)):
                     out.append({"kind": "output", "text": part.text})
             if t := getattr(getattr(sc, "input_transcription", None), "text", None):
                 out.append({"kind": "input", "text": t})
@@ -257,5 +322,7 @@ class LiveBridge:
             out.append({"kind": "tool_call", "id": getattr(fc, "id", "") or "",
                         "name": getattr(fc, "name", ""), "args": dict(getattr(fc, "args", None) or {})})
         if getattr(msg, "go_away", None):
-            out.append({"kind": "closed", "error": "la sessione Live sta per scadere"})
+            out.append({"kind": "go_away", "time_left": str(msg.go_away.time_left)})
+        if cancellation := getattr(msg, "tool_call_cancellation", None):
+            out.append({"kind": "tool_cancelled", "ids": list(cancellation.ids or [])})
         return out

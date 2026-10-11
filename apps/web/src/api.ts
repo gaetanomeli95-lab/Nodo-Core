@@ -82,12 +82,15 @@ export class VoiceSocket {
     this.ws.onclose = onClose;
   }
   send(o: Record<string, unknown>): void {
+    // Stale speech must not pile up during reconnects or a stalled local socket.
+    if (o.type === "audio.chunk" && (this.ws.readyState !== WebSocket.OPEN || this.ws.bufferedAmount > 64000)) return;
     const m = JSON.stringify(o);
     if (this.ws.readyState === WebSocket.OPEN) this.ws.send(m);
     else if (this.ws.readyState === WebSocket.CONNECTING) this.pending.push(m);
   }
   close(): void {
     this.ws.onclose = null;   // closing on purpose: no reconnect
+    this.ws.onmessage = null;
     this.ws.close();
   }
 }

@@ -12,8 +12,7 @@ function initialTab(): Tab {
   try {
     const fromHash = location.hash.slice(1) as Tab;
     if (["command", "night", "sites", "setup"].includes(fromHash)) return fromHash;
-    const h = new Date().getHours();
-    return h >= 5 && h < 12 ? "night" : "command"; // in the morning NODO opens on the night report
+    return "command";
   } catch { return "command"; }
 }
 
@@ -28,6 +27,7 @@ export default function App() {
   const [activeContext, setActiveContext] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>(initialTab);
+  const [details, setDetails] = useState(false);
 
   const refresh = useCallback(() => {
     Promise.all([get<SystemInfo>("/api/v1/system"), get<Project[]>("/api/v1/projects"), get<Task[]>("/api/v1/tasks")])
@@ -38,6 +38,11 @@ export default function App() {
   }, []);
 
   useEffect(() => { refresh(); get<VoiceConfig>("/api/v1/voice/config").then(setVoice).catch(() => {}); }, [refresh]);
+  useEffect(() => {
+    const reloadVoice = () => { void get<VoiceConfig>("/api/v1/voice/config").then(setVoice).catch(() => {}); };
+    window.addEventListener("nodo:access-updated", reloadVoice);
+    return () => window.removeEventListener("nodo:access-updated", reloadVoice);
+  }, []);
   useEffect(() => { const t = setInterval(refresh, 60_000); return () => clearInterval(t); }, [refresh]);
   useEffect(() => { try { history.replaceState(null, "", `#${tab}`); } catch { /* ignore */ } }, [tab]);
   useEffect(() => {
@@ -48,21 +53,23 @@ export default function App() {
 
   const critical = sites.filter((s) => s.status === "critical").length;
   const tabs: [Tab, string, number][] = [
-    ["command", "Comando", 0], ["night", "Notte", pending.length], ["sites", "Siti", critical], ["setup", "Accessi", 0],
+    ["command", "Presenza", 0], ["night", "Notte", pending.length], ["sites", "Siti", critical], ["setup", "Accessi", 0],
   ];
 
   return (
-    <main className="layout">
+    <main className={`layout presence-layout ${details ? "show-details" : ""}`}>
       <StatePanel system={system} projects={projects} tasks={tasks} activeContext={activeContext} sites={sites}
                   pending={pending.length} onOpen={(t) => setTab(t as Tab)} />
       <div className="center">
         {error && <div className="error">{error}</div>}
         <nav className="tabs">
+          <a className="nodo-wordmark" href="#command" aria-label="NODO, torna alla conversazione">nodo<span>CORE</span></a>
           {tabs.map(([id, label, n]) => (
             <button key={id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
               {label}{n > 0 && <span className="count">{n}</span>}
             </button>
           ))}
+          <button className="details-toggle" aria-expanded={details} onClick={() => setDetails(!details)}>{details ? "Chiudi dettagli" : "Dettagli"}</button>
         </nav>
         <div className={tab === "command" ? "tab-body" : "tab-body hidden"}>
           <CommandCenter voiceConfig={voice} onTrace={setTrace} onActiveContext={setActiveContext} onRequestDone={refresh} />

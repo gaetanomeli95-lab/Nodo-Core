@@ -88,7 +88,9 @@ Pop-Location
 # 6. web dashboard (rebuilt when sources are newer than the build)
 if (-not $SkipBuild) {
   $dist = Join-Path $Web "dist\index.html"
-  $newest = (Get-ChildItem (Join-Path $Web "src") -Recurse -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+  $sources = @(Get-ChildItem (Join-Path $Web "src"), (Join-Path $Web "public") -Recurse -File)
+  $sources += Get-Item (Join-Path $Web "package.json"), (Join-Path $Web "package-lock.json"), (Join-Path $Web "index.html")
+  $newest = ($sources | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
   if (-not (Test-Path $dist) -or ((Get-Item $dist).LastWriteTime -lt $newest)) {
     if (Get-Command npm -ErrorAction SilentlyContinue) {
       Say "Costruisco il pannello web..."

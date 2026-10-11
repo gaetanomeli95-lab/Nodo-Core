@@ -32,8 +32,9 @@ class ChunkPlayer {
   private queue: string[] = [];
   private playing = false;
   private current: HTMLAudioElement | null = null;
-  private finishCurrent: (() => void) | null = null;
   private generation = 0;
+  private finish: (() => void) | null = null;
+  constructor(private onPlaying: (playing: boolean) => void) {}
 
   push(b64: string, mime: string) {
     const bin = atob(b64);
@@ -42,48 +43,37 @@ class ChunkPlayer {
     this.queue.push(URL.createObjectURL(new Blob([bytes], { type: mime })));
     void this.pump();
   }
-
   private async pump() {
     if (this.playing) return;
     this.playing = true;
-    const generation = this.generation;
-    try {
-      // Each URL is played exactly once; an interrupt invalidates this generation.
-      while (this.queue.length && generation === this.generation) {
-        const url = this.queue.shift()!;
-        const audio = new Audio(url);
-        this.current = audio;
-        try {
-          await audio.play();
-          if (generation !== this.generation) continue;
-          await new Promise<void>((resolve) => {
-            this.finishCurrent = resolve;
-            audio.onended = () => resolve();
-            audio.onerror = () => resolve();
-          });
-        } catch {
-          // Autoplay can be blocked before the first user gesture.
-        } finally {
-          audio.pause();
-          audio.onended = null;
-          audio.onerror = null;
-          if (this.current === audio) this.current = null;
-          this.finishCurrent = null;
-          URL.revokeObjectURL(url);
-        }
-      }
-    } finally {
-      this.playing = false;
-      if (this.queue.length) void this.pump();
+    this.onPlaying(true);
+    const gen = this.generation;
+    while (this.queue.length && gen === this.generation) {
+      const url = this.queue.shift()!;
+      const audio = new Audio(url);
+      this.current = audio;
+      await new Promise<void>((resolve) => {
+        this.finish = resolve;
+        audio.onended = () => resolve(); audio.onerror = () => resolve();
+        void audio.play().catch(() => resolve());
+      });
+      URL.revokeObjectURL(url);
     }
+    if (gen !== this.generation) return;
+    this.playing = false;
+    this.onPlaying(false);
+    this.current = null;
   }
-
   stop() {
     this.generation += 1;
-    for (const url of this.queue) URL.revokeObjectURL(url);
+    this.queue.forEach((url) => URL.revokeObjectURL(url));
     this.queue = [];
     this.current?.pause();
-    this.finishCurrent?.(); // release a pending onended promise on barge-in
+    this.finish?.();
+    this.finish = null;
+    this.current = null;
+    this.playing = false;
+    this.onPlaying(false);
   }
 }
 
@@ -93,6 +83,25 @@ class PcmPlayer {
   private ctx: AudioContext | null = null;
   private next = 0;
   private sources = new Set<AudioBufferSourceNode>();
+  private analyser: AnalyserNode | null = null;
+  private samples = new Float32Array(256);
+  constructor(private onPlaying: (playing: boolean) => void) {}
+
+  async unlock() {
+    if (!this.ctx || this.ctx.state === "closed") {
+      this.ctx = new AudioContext();
+      this.analyser = this.ctx.createAnalyser();
+      this.analyser.fftSize = 256;
+      this.analyser.connect(this.ctx.destination);
+    }
+    await this.ctx.resume();
+  }
+
+  level() {
+    if (!this.analyser || !this.sources.size) return 0;
+    this.analyser.getFloatTimeDomainData(this.samples);
+    return Math.sqrt(this.samples.reduce((sum, n) => sum + n * n, 0) / this.samples.length);
+  }
 
   push(b64: string, mime: string) {
     const m = /rate=(\d+)/.exec(mime || "");
@@ -104,37 +113,32 @@ class PcmPlayer {
     const f32 = new Float32Array(i16.length);
     for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 0x8000;
     if (!f32.length) return;
-    if (!this.ctx) this.ctx = new AudioContext();
+    if (!this.ctx || !this.analyser) return;
     if (this.ctx.state === "suspended") void this.ctx.resume();
     const buf = this.ctx.createBuffer(1, f32.length, rate);
     buf.copyToChannel(f32, 0);
     const s = this.ctx.createBufferSource();
     s.buffer = buf;
-    s.connect(this.ctx.destination);
+    s.connect(this.analyser);
     const t = Math.max(this.ctx.currentTime + 0.02, this.next);
     s.start(t);
     this.next = t + buf.duration;
     this.sources.add(s);
-    s.onended = () => this.sources.delete(s);
+    this.onPlaying(true);
+    s.onended = () => { this.sources.delete(s); if (!this.sources.size) this.onPlaying(false); };
   }
 
   stop() {
     for (const s of this.sources) { try { s.stop(); } catch { /* already ended */ } }
     this.sources.clear();
     this.next = this.ctx ? this.ctx.currentTime : 0;
+    this.onPlaying(false);
   }
-}
-
-/** Float32 mic samples -> 16-bit PCM at outRate (nearest-sample downsample: enough for speech). */
-function toPcm16(input: Float32Array, inRate: number, outRate: number): Uint8Array {
-  const ratio = inRate / outRate;
-  const n = Math.floor(input.length / ratio);
-  const out = new Int16Array(n);
-  for (let i = 0; i < n; i++) {
-    const s = Math.max(-1, Math.min(1, input[Math.floor(i * ratio)]));
-    out[i] = s * 0x7fff;
+  dispose() {
+    this.stop();
+    if (this.ctx) void this.ctx.close();
+    this.ctx = null; this.analyser = null;
   }
-  return new Uint8Array(out.buffer);
 }
 
 function toB64(bytes: Uint8Array): string {
@@ -149,9 +153,15 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const [partial, setPartial] = useState("");
   const [engine, setEngine] = useState<"live" | "browser">("browser");   // live = Gemini Live (real-time voice)
   const [liveOn, setLiveOn] = useState(false);                            // live mode: conversation mic open
+  const [audioPlaying, setAudioPlaying] = useState(false);
+  const [recovering, setRecovering] = useState(false);
+  const [capturing, setCapturing] = useState(false);
+  const inputLevel = useRef(0);
+  const micStarting = useRef(false);
+  const micEpoch = useRef(0);
   const sock = useRef<VoiceSocket | null>(null);
   const rec = useRef<Recognition | null>(null);
-  const player = useRef(new ChunkPlayer());
+  const player = useRef(new ChunkPlayer(setAudioPlaying));
   const held = useRef(false);
   const toggled = useRef(false);
   const listening = useRef(false);   // browser speech recognition running for this press     // started with a click: listening until the next click
@@ -161,7 +171,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const finalBuf = useRef("");
   const streamingStarted = useRef(false);
   const media = useRef<{ rec: MediaRecorder; stream: MediaStream } | null>(null);
-  const pcm = useRef(new PcmPlayer());
+  const pcm = useRef(new PcmPlayer(setAudioPlaying));
   const liveMic = useRef<{ ctx: AudioContext; stream: MediaStream } | null>(null);
   const cbRef = useRef(cb);
   cbRef.current = cb;
@@ -174,13 +184,14 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   };
   const browserTtsNext = () => {
     const text = speechQueue.current.shift();
-    if (!text) { speaking.current = false; return; }
+    if (!text) { speaking.current = false; setAudioPlaying(false); return; }
     if (!("speechSynthesis" in window)) {
       speaking.current = false;
       ttsFail("questo browser non può leggere le risposte ad alta voce: usa Chrome o Edge");
       return;
     }
     speaking.current = true;
+    setAudioPlaying(true);
     const u = new SpeechSynthesisUtterance(text);
     u.lang = config?.language === "it" ? "it-IT" : config?.language || "it-IT";
     const voices = window.speechSynthesis.getVoices().filter((v) => v.lang?.toLowerCase().startsWith("it"));
@@ -200,6 +211,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   };
 
   useEffect(() => {
+    setConnected(false); setLiveOn(false); setRecovering(false);
     let closed = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let attempt = 0;
@@ -220,6 +232,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
               }
               setEngine(e.engine === "live" ? "live" : "browser");
               setConnected(true);
+              setRecovering(false);
               setState(((e.state as VoiceState) || "IDLE"));   // ready: the button works from here
               break;
             case "transcript.partial":
@@ -242,12 +255,12 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
               if (!speaking.current) browserTtsNext();
               break;
             case "voice.engine":       // live session died mid-conversation: back to push-to-talk
+              setRecovering(false);
               setEngine(e.engine === "live" ? "live" : "browser");
-              if (e.engine !== "live") {
-                stopLiveMic();
-                stopLocalAudio();  // never play buffered Live speech after the provider has fallen back
-                setLiveOn(false);
-              }
+              if (e.engine !== "live") { stopLiveMic(); stopLocalAudio(); setLiveOn(false); setState("IDLE"); }
+              break;
+            case "voice.connection":
+              setRecovering(e.status === "reconnecting");
               break;
             case "tts.chunk":
               if ((e.mime as string || "").startsWith("audio/pcm")) pcm.current.push(e.audio as string, e.mime as string);
@@ -273,6 +286,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
           // NODO restarted or the network dropped: try again (2s, 4s, ... up to 15s)
           setConnected(false);
           setState("CONNECTING");
+          stopLocalAudio(); stopLiveMic(); setLiveOn(false);
           if (closed) return;
           attempt += 1;
           retry = setTimeout(connect, Math.min(15000, 2000 * attempt));
@@ -285,13 +299,20 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
       sock.current = s;
     };
     connect();
-    return () => { closed = true; if (retry) clearTimeout(retry); sock.current?.close(); stopLocalAudio(); stopLiveMic(); };
+    return () => {
+      closed = true; if (retry) clearTimeout(retry); sock.current?.close();
+      stopLocalAudio(); stopLiveMic(); pcm.current.dispose();
+      if (rec.current) { rec.current.onend = null; rec.current.onresult = null; rec.current.onerror = null; rec.current.stop(); rec.current = null; }
+      listening.current = false; held.current = false; toggled.current = false; setCapturing(false);
+      media.current?.stream.getTracks().forEach((t) => t.stop());
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [config]);
 
   const stopLocalAudio = () => {
     speechQueue.current = [];
     speaking.current = false;
+    setAudioPlaying(false);
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
     player.current.stop();
     pcm.current.stop();
@@ -299,35 +320,49 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
 
   // ---------------------------------------------------------- Gemini Live: mic streaming
   const startLiveMic = async (): Promise<boolean> => {
+    if (micStarting.current || liveMic.current) return false;
+    micStarting.current = true;
+    const epoch = ++micEpoch.current;
+    let stream: MediaStream | null = null;
+    let ctx: AudioContext | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      await pcm.current.unlock(); // create/resume playback from the user's gesture
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
       });
-      const ctx = new AudioContext();
+      ctx = new AudioContext();
+      await ctx.resume();
       await ctx.audioWorklet.addModule("/pcm-worklet.js");
       const src = ctx.createMediaStreamSource(stream);
       const node = new AudioWorkletNode(ctx, "pcm-worklet");
-      const srcRate = ctx.sampleRate;
       node.port.onmessage = (ev: MessageEvent) => {
-        const pcm16 = toPcm16(ev.data as Float32Array, srcRate, 16000);
+        if (epoch !== micEpoch.current) return;
+        const pcm16 = new Uint8Array(ev.data as ArrayBuffer);
+        const samples = new Int16Array(ev.data as ArrayBuffer);
+        inputLevel.current = Math.sqrt(samples.reduce((sum, n) => sum + (n / 32768) ** 2, 0) / samples.length);
         if (pcm16.length) sock.current?.send({ type: "audio.chunk", data: toB64(pcm16), mime: "audio/pcm;rate=16000" });
       };
-      // The worklet must stay running without monitoring the microphone on the speakers.
-      // A zero-gain destination keeps the graph alive and avoids acoustic feedback.
+      src.connect(node);
       const silent = ctx.createGain();
       silent.gain.value = 0;
-      src.connect(node);
       node.connect(silent);
       silent.connect(ctx.destination);
+      if (epoch !== micEpoch.current) {
+        stream.getTracks().forEach((t) => t.stop()); void ctx.close(); return false;
+      }
       liveMic.current = { ctx, stream };
       return true;
     } catch {
+      stream?.getTracks().forEach((t) => t.stop());
+      if (ctx) void ctx.close();
       cbRef.current.onError("microfono non disponibile: consenti l'accesso dal lucchetto vicino all'indirizzo e riprova");
       return false;
-    }
+    } finally { micStarting.current = false; }
   };
 
   const stopLiveMic = () => {
+    micEpoch.current += 1;
+    inputLevel.current = 0;
     if (!liveMic.current) return;
     liveMic.current.stream.getTracks().forEach((t) => t.stop());
     void liveMic.current.ctx.close();
@@ -357,6 +392,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     if (state !== "IDLE" && state !== "LISTENING" && state !== "INTERRUPTED" && state !== "CONNECTING"
         && state !== "ERROR") return;
     held.current = true;
+    setCapturing(true);
     pressedAt.current = Date.now();
     setState("LISTENING");
     finalBuf.current = "";
@@ -373,7 +409,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
           if (res.isFinal) fin += res[0].transcript;
           else interim += res[0].transcript;
         }
-        finalBuf.current += fin;
+        finalBuf.current = fin; // SpeechRecognition results are cumulative for this session
         const live = (finalBuf.current + " " + interim).trim();
         if (live) sock.current?.send({ type: "transcript.partial", text: live });
       };
@@ -381,6 +417,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
         const why = (ev as { error?: string } | null)?.error;
         if (why === "no-speech" || why === "aborted") return;
         held.current = false; toggled.current = false; listening.current = false;
+        setCapturing(false);
         setState("IDLE");
         cbRef.current.onError(why === "not-allowed" || why === "service-not-allowed"
           ? "il browser non mi lascia usare il microfono: clicca il lucchetto vicino all'indirizzo e consenti il microfono, poi ricarica la pagina"
@@ -394,6 +431,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
       listening.current = true;
       try { r.start(); } catch {
         listening.current = false; held.current = false; toggled.current = false; setState("IDLE");
+        setCapturing(false);
         cbRef.current.onError("il riconoscimento vocale non è partito: riprova tra un attimo");
       }
     } else {
@@ -403,31 +441,40 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   };
 
   const startAudioCapture = async () => {
+    const epoch = ++micEpoch.current;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (epoch !== micEpoch.current || !held.current && !toggled.current) {
+        stream.getTracks().forEach((t) => t.stop()); return;
+      }
       const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      let chunks = Promise.resolve();
       mr.ondataavailable = (e) => {
-        e.data.arrayBuffer().then((buf) => {
+        chunks = chunks.then(async () => {
+          const buf = await e.data.arrayBuffer();
           const bytes = new Uint8Array(buf);
           let bin = "";
           for (const b of bytes) bin += String.fromCharCode(b);
           sock.current?.send({ type: "audio.chunk", data: btoa(bin), mime: "audio/webm" });
         });
       };
+      mr.onstop = () => { void chunks.then(() => sock.current?.send({ type: "speech.end" })); };
       mr.start(250); // chunk every 250ms
       media.current = { rec: mr, stream };
-    } catch { cbRef.current.onError("microfono non disponibile"); }
+    } catch { setCapturing(false); setState("IDLE"); cbRef.current.onError("microfono non disponibile"); }
   };
 
   const stopAudioCapture = () => {
+    micEpoch.current += 1;
+    setCapturing(false);
     if (!media.current) return;
     media.current.rec.stop();
     media.current.stream.getTracks().forEach((t) => t.stop());
     media.current = null;
-    sock.current?.send({ type: "speech.end" });
   };
 
   const commit = () => {
+    setCapturing(false);
     toggled.current = false;
     held.current = false;
     const text = finalBuf.current.trim();
@@ -457,26 +504,39 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const answer = (approvalId: string, decision: "approve" | "reject") =>
     sock.current?.send({ type: "approval.answer", approval_id: approvalId, decision });
 
+  const sendText = async (text: string) => {
+    await pcm.current.unlock();
+    sock.current?.send({ type: "transcript.final", text });
+  };
+
+  const toggleMic = () => { pressStart(); if (engine !== "live") pressStop(); };
+  const endConversation = () => {
+    sock.current?.send({ type: "interrupt", reason: "microphone_off" });
+    stopLiveMic(); stopLocalAudio(); setLiveOn(false); setState("IDLE");
+    sock.current?.send({ type: "speech.end" });
+  };
+
+  const setConversation = (conversationId: string | null) => {
+    sock.current?.send({ type: "conversation.set", conversation_id: conversationId });
+  };
+
   // push-to-talk on Space
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (e.code === "Space" && (e.target as HTMLElement).tagName !== "TEXTAREA" && !e.repeat) {
+      if (e.code === "Space" && !(e.target as HTMLElement).closest("input, textarea, button, select, a, [contenteditable]") && !e.repeat) {
         e.preventDefault(); pressStart();
       }
     };
     const up = (e: KeyboardEvent) => {
-      if (e.code === "Space" && (e.target as HTMLElement).tagName !== "TEXTAREA") pressStop();
+      if (e.code === "Space" && !(e.target as HTMLElement).closest("input, textarea, button, select, a, [contenteditable]")) pressStop();
     };
     window.addEventListener("keydown", down); window.addEventListener("keyup", up);
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
   });
 
-  // Text and voice share the same conversation ID without reconnecting the socket.
-  const setConversation = (conversationId: string | null) => {
-    sock.current?.send({ type: "conversation.set", conversation_id: conversationId });
-  };
-
-  return { state, connected, partial, engine, liveOn, pressStart, pressStop, interrupt, answer, setConversation };
+  return { state, connected, partial, engine, liveOn, audioPlaying, recovering, pressStart, pressStop,
+    interrupt, answer, sendText, toggleMic, endConversation, setConversation, microphoneOn: liveOn || capturing,
+    sampleLevel: () => ({ input: inputLevel.current, output: pcm.current.level() }) };
 }
 
 export function VoiceDock({ voice, onInterrupt }: {

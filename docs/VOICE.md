@@ -72,7 +72,7 @@ Gemini ─► audio (pcm) / input+output transcription / tool_call / interrupted
 The command screen is now **voice-first**: a central presence reacts to real WebSocket states
 (`LISTENING`, `THINKING`, `ACTING`, `SPEAKING`, `WAITING_FOR_APPROVAL`, etc.).
 Tool activity is shown only when a `nodo.step` event indicates actual execution. The
-transcription stays available through the **Apri diario** control, but is no longer the main
+transcription stays available through the **Diario** control, but is no longer the main
 surface; approvals stay visible even with the diary closed. Animations honor
 `prefers-reduced-motion`.
 
@@ -87,7 +87,7 @@ the old Live bridge is closed so the next utterance loads the new conversation c
 The browser audio chunk player consumes each queued URL once, revokes URLs after use
 or interruption and wakes the pending completion promise on barge-in. The Live
 interrupt flag is never cleared merely because the microphone still sends PCM packets.
-New speech transcriptions or turn completion restore normal output.
+Provider barge-in or turn completion restore normal output; incoming PCM packets and delayed input transcripts do not.
 
 Manual Windows acceptance: verify browser microphone permission, voice-first and
 text-first follow-ups, long pauses, `Ferma` during playback, repeated start/stop,
@@ -98,12 +98,12 @@ Typed JSON frames (`nodo/voice/protocol.py`, pydantic-validated); binary frames 
 Auth mirrors REST: `NODO_API_TOKEN` via `?token=` or `Authorization` header.
 
 **Client → server:** `session.start`, `audio.chunk`, `speech.end`, `transcript.partial`, `transcript.final`,
-`interrupt`, `approval.answer`, `session.end`.
+`interrupt`, `approval.answer`, `conversation.set`, `session.end`.
 
 **Server → client:** `voice.session.started|state|closed`, `transcript.partial|final` (echo or server STT),
 `nodo.thinking|intent|plan|context|step`, `agent.*`, `tool.*`, `nodo.token|sentence|response`,
 `tts.started|speak|chunk|finished`, `voice.interrupted`, `voice.turn.done` (with `latency_ms`),
-`approval.required|resolved|ignored`, `error`.
+`approval.required|resolved|ignored`, `voice.connection`, `voice.conversation`, `voice.engine`, `ui.present`, `error`.
 
 Every frame carries `session_id`, `turn`, `seq`. `VoiceRuntime` (`nodo/voice/runtime.py`) is transport-
 agnostic: it takes an `emit` callable and parsed inbound messages.
@@ -128,7 +128,7 @@ plus `INTERRUPTED`, `WAITING_FOR_APPROVAL`, `ERROR`, `CLOSED`. Legal transitions
 
 ## Where speech is processed
 `GET /api/v1/voice/config` reports `stt.location` / `tts.location`:
-- `browser` (default, FREE): Web Speech API STT + `speechSynthesis`. Audio never leaves the device; the
+- `browser` (default, FREE): Web Speech API STT + `speechSynthesis`. The browser may use a remote recognition service; this is not an offline guarantee. The
   client sends `transcript.partial/final` over the socket. Browser TTS receives `tts.speak` text events.
 - `cloud` (`openai`): audio chunks buffered → `/voice/transcribe` contract inside the runtime; `tts.chunk`
   streams base64 audio back. Refused in `NODO_MODE=FREE` unless `NODO_ALLOW_PAID_IN_FREE_MODE=true`.
@@ -158,10 +158,15 @@ Hold the mic button or Space. Web Speech API produces partials live; without it,
 
 ## Known limitations
 - Live mode needs a Gemini key and keeps the mic stream open while the conversation is on (explicit click,
-  visible state); Live sessions expire (~10 min) and reconnect once transparently.
+  visible state); Live connections have their own lifetime; resumption is supported with at most three consecutive recovery attempts without a successful turn.
 - Browser STT quality/availability varies (Chrome/Edge good, Firefox has no STT → falls back to audio upload).
 - Server-side streaming STT is a seam: only fakes implement `begin/feed/end` today; real audio upload path
   transcribes on `speech.end` (not yet word-by-word).
 - `speechSynthesis` has no barge-in midpoint: cancelling restarts at the next sentence.
 - No production VAD/turn detector yet; `TurnDetector`/`WakeWordEngine` remain protocols.
 - `interrupted` turns still finish DB writes internally (by design — records stay consistent).
+
+## Stability and presence review — October 2026
+
+See [VOICE_PRESENCE_REVIEW.md](VOICE_PRESENCE_REVIEW.md) for the per-turn receive fix, recovery policy,
+current voice-first UI, local diagnostic report and Windows acceptance protocol.

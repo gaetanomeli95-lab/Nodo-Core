@@ -3,7 +3,7 @@
 ## 1. Prova la demo: 2 minuti, nessun accesso
 Doppio click su **`demo-nodo.bat`**. La prima volta installa tutto da solo (servono
 [Python 3.12+](https://www.python.org/downloads/) e [Node.js LTS](https://nodejs.org)). Si apre
-http://127.0.0.1:8000, scheda **Notte**: trovi una notte simulata con un sito andato giù e riportato su
+http://127.0.0.1:8000. Apri la scheda **Notte**: trovi una notte simulata con un sito andato giù e riportato su
 (rollback), una correzione pronta da pubblicare, una build rilanciata e una bozza. Premi **Pubblica**
 e guarda NODO verificare la correzione.
 
@@ -27,3 +27,10 @@ Installa Claude Code e fai l'accesso con il tuo account Claude Pro: due comandi,
 «segnati di chiamare il commercialista venerdì». Le pubblicazioni partono solo dopo il tuo sì.
 
 Il turno di notte nel dettaglio: [docs/NIGHT_SHIFT.md](docs/NIGHT_SHIFT.md).
+
+## Se la voce funziona male
+
+Chiudi e riapri NODO dopo ogni aggiornamento. Fai doppio click su **`diagnosi-nodo.bat`**: si apre
+`nodo-diagnosi.json`, con versione del codice, librerie e conteggi degli errori. Puoi condividerlo insieme
+all’orario della prova e a cosa è successo (non sente / non risponde / voce interrotta). Il rapporto non
+contiene chiavi, registrazioni, trascrizioni o righe originali del log. Non prova da solo che la voce funzioni.
