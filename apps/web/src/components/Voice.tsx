@@ -553,9 +553,15 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     let stream: MediaStream | null = null;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (!connectedRef.current || (!held.current && !toggled.current)) {
+      if (!connectedRef.current) {
+        // Permission can arrive after a disconnect: drop the mic without mutating
+        // CONNECTING state or emitting a message on an obsolete socket.
         stream.getTracks().forEach((t) => t.stop());
-        if (connectedRef.current) sock.current?.send({ type: "speech.end" });
+        return;
+      }
+      if (!held.current && !toggled.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        sock.current?.send({ type: "speech.end" });
         setState("IDLE");
         return;
       }
