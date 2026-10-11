@@ -167,8 +167,10 @@ plus `INTERRUPTED`, `WAITING_FOR_APPROVAL`, `ERROR`, `CLOSED`. Legal transitions
 
 ## Where speech is processed
 `GET /api/v1/voice/config` reports `stt.location` / `tts.location`:
-- `browser` (default, FREE): Web Speech API STT + `speechSynthesis`. Audio never leaves the device; the
-  client sends `transcript.partial/final` over the socket. Browser TTS receives `tts.speak` text events.
+- `browser` (default, FREE): Web Speech API STT + `speechSynthesis`. NODO invia al proprio
+  backend la trascrizione (`transcript.partial/final`), non registra file audio in questa modalità.
+  **Il browser può appoggiarsi a un servizio remoto per riconoscere il parlato**: Web Speech
+  non garantisce elaborazione offline. Browser TTS riceve gli eventi `tts.speak`.
 - `cloud` (`openai`): audio chunks buffered → `/voice/transcribe` contract inside the runtime; `tts.chunk`
   streams base64 audio back. Refused in `NODO_MODE=FREE` unless `NODO_ALLOW_PAID_IN_FREE_MODE=true`.
 - `local` (planned): Whisper/Piper or any `StreamingSTT/TTS` implementation on a NODO Node.
@@ -188,7 +190,7 @@ no credentials.
 - Mic state is explicit: the dock shows the real session state; audio is captured only while held
   (push-to-talk) or between `speech` boundaries.
 - Raw audio is never persisted; transcripts become `Message` rows like typed text.
-- No always-on listening. Wake word ("Node.") is reserved for a local Node — never continuous cloud upload.
+- Nessun ascolto invisibile: il browser hands-free richiede attivazione esplicita, resta visibile e si spegne su disconnessione. La wake word rimane riservata al Node locale.
 
 ## Push-to-talk UX (`apps/web/src/components/Voice.tsx`)
 Hold the mic button or Space. Web Speech API produces partials live; without it, `MediaRecorder` streams
@@ -201,6 +203,6 @@ Hold the mic button or Space. Web Speech API produces partials live; without it,
 - Browser STT quality/availability varies (Chrome/Edge good, Firefox has no STT → falls back to audio upload).
 - Server-side streaming STT is a seam: only fakes implement `begin/feed/end` today; real audio upload path
   transcribes on `speech.end` (not yet word-by-word).
-- `speechSynthesis` has no barge-in midpoint: cancelling restarts at the next sentence.
+- Con sintesi browser il pulsante **Ferma** cancella il parlato, ma l\'ascolto libero è half-duplex: non riconosce interruzioni vocali durante la riproduzione.
 - No production VAD/turn detector yet; `TurnDetector`/`WakeWordEngine` remain protocols.
 - `interrupted` turns still finish DB writes internally (by design — records stay consistent).
