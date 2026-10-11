@@ -1,3 +1,17 @@
+## Browser audio reliability (V06)
+
+Il fallback MediaRecorder non invia più separatamente ciascun chunk mentre viene
+registrato: raccoglie i blocchi `dataavailable`, inclusa la parte finale emessa
+**dopo** `stop()`, quindi invia l'intero contenuto come `audio.chunk` e solo
+successivamente `speech.end`. Questo evita trascrizioni premature/troncate
+dovute a callback `arrayBuffer()` asincrone fuori ordine. Il metodo batch
+occupa memoria proporzionale alla durata della registrazione e **non** sostituisce
+un provider STT streaming vero; evitare registrazioni eccessivamente lunghe.
+Su disconnessione/interruzione annulla la registrazione e libera i track audio.
+
+La riproduzione `ChunkPlayer` installa le callback di completamento prima di
+chiamare `play()`, evitando un blocco su frammenti audio brevissimi.
+
 ## Browser hands-free (V06) — conversatione a turni, attivazione esplicita
 
 Quando il motore è browser e STT/TTS del browser sono disponibili, `VoiceDock`
