@@ -15,8 +15,10 @@ tried in order, because model names change and a key may not have them all; the 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Any
@@ -43,6 +45,38 @@ class LiveDropped(Exception):
     """The live socket is gone (closed mid-send): the runtime treats it like a 'closed' event."""
 
 
+class LiveQuotaExceeded(RuntimeError):
+    """Google rejected Live usage due to quota or billing limits."""
+
+
+# Prevent repeated chargeable/denied Live connection attempts after a quota error.
+# This is process-local and keyed by a non-reversible fingerprint, never the API key.
+QUOTA_COOLDOWN_SECONDS = 15 * 60
+_quota_until: dict[str, float] = {}
+
+
+def _key_id(settings) -> str:
+    return hashlib.sha256((settings.gemini_api_key or "").encode("utf-8")).hexdigest()[:24]
+
+
+def is_quota_error(error: str) -> bool:
+    """1011 is not sufficient on its own: the server must explicitly mention limits."""
+    reason = str(error).lower()
+    return any(s in reason for s in ("quota", "resource_exhausted", "rate limit",
+                                    "too many requests", "429"))
+
+
+def quota_seconds_remaining(settings) -> int:
+    if not settings.gemini_api_key:
+        return 0
+    return max(0, int(_quota_until.get(_key_id(settings), 0.0) - time.monotonic() + 0.999))
+
+
+def mark_quota_exhausted(settings) -> None:
+    if settings.gemini_api_key:
+        _quota_until[_key_id(settings)] = time.monotonic() + QUOTA_COOLDOWN_SECONDS
+
+
 def missing_reason(settings, container=None) -> str | None:
     """None = the live engine can run; otherwise the plain-Italian reason it cannot."""
     if getattr(container, "live_connect", None) is not None:
@@ -52,7 +86,9 @@ def missing_reason(settings, container=None) -> str | None:
     if settings.env in ("TEST", "DEMO"):
         return "disattivata in test/demo"
     if not settings.gemini_api_key:
-        return "manca NODO_GEMINI_API_KEY (chiave gratuita su aistudio.google.com)"
+        return "manca NODO_GEMINI_API_KEY (chiave su aistudio.google.com)"
+    if quota_seconds_remaining(settings):
+        return "quota Gemini Live temporaneamente indisponibile: uso la voce del browser"
     if importlib.util.find_spec("google.genai") is None:
         return "manca la libreria google-genai (la installa avvia-nodo)"
     return None
@@ -115,10 +151,15 @@ class LiveBridge:
                 self._session = await self._cm.__aenter__()
                 self.model = model
                 break
-            except Exception as e:                  # this key has no access to this model: next rung
+            except Exception as e:                  # model not accessible: try the next one
                 last = e
-                log.info("live model %s refused the connection: %s", model, str(e)[:160])
                 self._cm = self._session = None
+                if is_quota_error(str(e)):
+                    mark_quota_exhausted(self.settings)
+                    log.warning("Gemini Live quota limit reached for %s; stop model ladder for %s seconds",
+                                model, QUOTA_COOLDOWN_SECONDS)
+                    raise LiveQuotaExceeded("quota o fatturazione Gemini Live: controlla Google AI Studio") from e
+                log.info("live model %s refused the connection: %s", model, str(e)[:160])
         if self._session is None:
             raise RuntimeError(f"nessun modello Live disponibile ({last})")
         self._pump_task = asyncio.create_task(self._pump())
