@@ -420,8 +420,8 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     // the user has explicitly kept hands-free enabled. No microphone stays open on disconnect.
     resumeTimer.current = setTimeout(() => {
       resumeTimer.current = null;
-      if (handsFreeRef.current && connectedRef.current && !awaitingTurn.current &&
-          !speaking.current && !rec.current) startBrowserRecognition(true);
+      if (handsFreeRef.current && connectedRef.current && engineRef.current === "browser" &&
+          !awaitingTurn.current && !speaking.current && !rec.current) startBrowserRecognition(true);
     }, 350);
   };
 
@@ -586,9 +586,10 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
 
   const interrupt = (reason = "user") => {
     stopLocalAudio();
+    // Wait for the server's voice.interrupted ACK before opening the mic again;
+    // otherwise a fast follow-up can race the still-running backend turn.
+    if (handsFreeRef.current) awaitingTurn.current = true;
     sock.current?.send({ type: "interrupt", reason });
-    awaitingTurn.current = false;
-    maybeResumeHandsFree();
   };
 
   const answer = (approvalId: string, decision: "approve" | "reject") =>
