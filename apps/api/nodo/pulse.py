@@ -5,7 +5,7 @@ never execute an approval from Pulse. Callers may ask the conversation brain to 
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
