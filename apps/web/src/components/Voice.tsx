@@ -5,6 +5,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { VoiceSocket, type VoiceConfig, type VoiceEvent } from "../api";
+import { silenceDelay, speechSnapshot } from "./browserSpeech";
 
 export type VoiceState =
   | "IDLE" | "CONNECTING" | "LISTENING" | "TRANSCRIBING" | "UNDERSTANDING" | "THINKING"
@@ -54,13 +55,16 @@ class ChunkPlayer {
         const audio = new Audio(url);
         this.current = audio;
         try {
-          await audio.play();
-          if (generation !== this.generation) continue;
-          await new Promise<void>((resolve) => {
+          // Bind the completion handlers BEFORE play(): extremely short chunks can
+          // finish before play() resolves, leaving a permanently blocked queue.
+          const finished = new Promise<void>((resolve) => {
             this.finishCurrent = resolve;
             audio.onended = () => resolve();
             audio.onerror = () => resolve();
           });
+          await audio.play();
+          if (generation !== this.generation) continue;
+          await finished;
         } catch {
           // Autoplay can be blocked before the first user gesture.
         } finally {
@@ -149,8 +153,21 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const [partial, setPartial] = useState("");
   const [engine, setEngine] = useState<"live" | "browser">("browser");   // live = Gemini Live (real-time voice)
   const [liveOn, setLiveOn] = useState(false);                            // live mode: conversation mic open
+  const [handsFree, setHandsFree] = useState(false);                      // explicit opt-in; browser half-duplex
+  const [localSpeaking, setLocalSpeaking] = useState(false);
   const sock = useRef<VoiceSocket | null>(null);
   const rec = useRef<Recognition | null>(null);
+  const handsFreeRef = useRef(false);
+  const connectedRef = useRef(false);
+  const engineRef = useRef<"live" | "browser">("browser");
+  const awaitingTurn = useRef(false);
+  const silenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastInterim = useRef("");
+  const handsFreeSupported = typeof window !== "undefined" &&
+    !!((window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown })
+      .SpeechRecognition || (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition)
+    && config?.tts.location === "browser";
   const player = useRef(new ChunkPlayer());
   const held = useRef(false);
   const toggled = useRef(false);
@@ -158,11 +175,14 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const pressedAt = useRef(0);
   const speechQueue = useRef<string[]>([]);
   const speaking = useRef(false);
+  const ttsGeneration = useRef(0); // canceled utterances may still fire delayed onend/onerror
   const finalBuf = useRef("");
   const streamingStarted = useRef(false);
   const media = useRef<{ rec: MediaRecorder; stream: MediaStream } | null>(null);
   const pcm = useRef(new PcmPlayer());
   const liveMic = useRef<{ ctx: AudioContext; stream: MediaStream } | null>(null);
+  const liveGeneration = useRef(0);
+  const liveOpening = useRef(false);
   const cbRef = useRef(cb);
   cbRef.current = cb;
 
@@ -173,14 +193,23 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     cbRef.current.onError(msg);
   };
   const browserTtsNext = () => {
+    const generation = ttsGeneration.current;
     const text = speechQueue.current.shift();
-    if (!text) { speaking.current = false; return; }
+    if (!text) {
+      speaking.current = false;
+      setLocalSpeaking(false);
+      maybeResumeHandsFree();
+      return;
+    }
     if (!("speechSynthesis" in window)) {
       speaking.current = false;
+      setLocalSpeaking(false);
       ttsFail("questo browser non può leggere le risposte ad alta voce: usa Chrome o Edge");
+      stopHandsFree();
       return;
     }
     speaking.current = true;
+    setLocalSpeaking(true);
     const u = new SpeechSynthesisUtterance(text);
     u.lang = config?.language === "it" ? "it-IT" : config?.language || "it-IT";
     const voices = window.speechSynthesis.getVoices().filter((v) => v.lang?.toLowerCase().startsWith("it"));
@@ -188,8 +217,11 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     const best = voices.find((v) => /natural|online|neural/i.test(v.name))
       || voices.find((v) => /google/i.test(v.name)) || voices[0];
     if (best) u.voice = best;
-    u.onend = browserTtsNext;
+    u.onend = () => {
+      if (generation === ttsGeneration.current) browserTtsNext();
+    };
     u.onerror = (ev) => {
+      if (generation !== ttsGeneration.current) return;
       const code = (ev as SpeechSynthesisErrorEvent).error;
       if (code && code !== "interrupted" && code !== "canceled")
         ttsFail(`non riesco a leggere la risposta ad alta voce (${code}): controlla la voce italiana in
@@ -218,7 +250,9 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
                 window.speechSynthesis.getVoices();   // Chrome loads voices lazily: warm them up
                 window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
               }
-              setEngine(e.engine === "live" ? "live" : "browser");
+              engineRef.current = e.engine === "live" ? "live" : "browser";
+              connectedRef.current = true;
+              setEngine(engineRef.current);
               setConnected(true);
               setState(((e.state as VoiceState) || "IDLE"));   // ready: the button works from here
               break;
@@ -241,8 +275,10 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
               speechQueue.current.push(e.text as string);
               if (!speaking.current) browserTtsNext();
               break;
-            case "voice.engine":       // live session died mid-conversation: back to push-to-talk
-              setEngine(e.engine === "live" ? "live" : "browser");
+            case "voice.engine":       // live session died mid-conversation: browser fallback is opt-in
+              engineRef.current = e.engine === "live" ? "live" : "browser";
+              setEngine(engineRef.current);
+              if (e.engine === "live") stopHandsFree();
               if (e.engine !== "live") {
                 stopLiveMic();
                 stopLocalAudio();  // never play buffered Live speech after the provider has fallen back
@@ -256,6 +292,8 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
             case "voice.interrupted":
               setPartial("");
               stopLocalAudio();
+              awaitingTurn.current = false;
+              maybeResumeHandsFree();
               break;
             case "nodo.response":
               streamingStarted.current = false;
@@ -263,6 +301,8 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
               break;
             case "voice.turn.done":
               streamingStarted.current = false;
+              awaitingTurn.current = false;
+              maybeResumeHandsFree(); // wait for the actual speechSynthesis queue, not just server completion
               break;
             case "error":
               c.onError(e.message as string);
@@ -271,6 +311,9 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
         },
         () => {
           // NODO restarted or the network dropped: try again (2s, 4s, ... up to 15s)
+          connectedRef.current = false;
+          stopHandsFree(); // a reconnect must never silently re-enable microphone capture
+          cancelAudioCapture();
           setConnected(false);
           setState("CONNECTING");
           if (closed) return;
@@ -285,13 +328,20 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
       sock.current = s;
     };
     connect();
-    return () => { closed = true; if (retry) clearTimeout(retry); sock.current?.close(); stopLocalAudio(); stopLiveMic(); };
+    return () => {
+      closed = true;
+      connectedRef.current = false;
+      if (retry) clearTimeout(retry);
+      stopHandsFree(); cancelAudioCapture(); sock.current?.close(); stopLocalAudio(); stopLiveMic();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const stopLocalAudio = () => {
+    ttsGeneration.current += 1;
     speechQueue.current = [];
     speaking.current = false;
+    setLocalSpeaking(false);
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
     player.current.stop();
     pcm.current.stop();
@@ -299,46 +349,69 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
 
   // ---------------------------------------------------------- Gemini Live: mic streaming
   const startLiveMic = async (): Promise<boolean> => {
+    const generation = liveGeneration.current;
+    let stream: MediaStream | null = null;
+    let ctx: AudioContext | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
       });
-      const ctx = new AudioContext();
+      if (!connectedRef.current || engineRef.current !== "live" ||
+          generation !== liveGeneration.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return false; // user disconnected or provider fell back while permission was pending
+      }
+      ctx = new AudioContext();
       await ctx.audioWorklet.addModule("/pcm-worklet.js");
+      if (!connectedRef.current || engineRef.current !== "live" ||
+          generation !== liveGeneration.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        void ctx.close();
+        return false;
+      }
       const src = ctx.createMediaStreamSource(stream);
       const node = new AudioWorkletNode(ctx, "pcm-worklet");
       const srcRate = ctx.sampleRate;
       node.port.onmessage = (ev: MessageEvent) => {
+        if (!connectedRef.current || engineRef.current !== "live" ||
+            generation !== liveGeneration.current) return;
         const pcm16 = toPcm16(ev.data as Float32Array, srcRate, 16000);
-        if (pcm16.length) sock.current?.send({ type: "audio.chunk", data: toB64(pcm16), mime: "audio/pcm;rate=16000" });
+        if (pcm16.length) sock.current?.send({
+          type: "audio.chunk", data: toB64(pcm16), mime: "audio/pcm;rate=16000",
+        });
       };
-      // The worklet must stay running without monitoring the microphone on the speakers.
-      // A zero-gain destination keeps the graph alive and avoids acoustic feedback.
       const silent = ctx.createGain();
-      silent.gain.value = 0;
+      silent.gain.value = 0; // worklet stays alive without acoustic feedback
       src.connect(node);
       node.connect(silent);
       silent.connect(ctx.destination);
       liveMic.current = { ctx, stream };
       return true;
     } catch {
-      cbRef.current.onError("microfono non disponibile: consenti l'accesso dal lucchetto vicino all'indirizzo e riprova");
+      stream?.getTracks().forEach((t) => t.stop());
+      if (ctx) void ctx.close();
+      if (generation === liveGeneration.current)
+        cbRef.current.onError("Microfono non disponibile: controlla i permessi di Windows/browser.");
       return false;
     }
   };
 
   const stopLiveMic = () => {
+    liveGeneration.current += 1; // also cancels any in-flight getUserMedia permission request
     if (!liveMic.current) return;
     liveMic.current.stream.getTracks().forEach((t) => t.stop());
     void liveMic.current.ctx.close();
     liveMic.current = null;
   };
 
-  /** Live mode: one click opens the conversation (the mic streams, Gemini hears pauses and
-   *  interruptions by itself); while NODO speaks a click interrupts it; another click hangs up. */
+  /** Gemini Live is full-duplex; a click starts the streaming session.
+   *  A second click ends it, while a click during speech interrupts playback. */
   const liveButton = async () => {
-    if (!connected) return;
-    if (liveOn && (state === "SPEAKING" || state === "THINKING" || state === "ACTING")) { interrupt(); return; }
+    if (!connectedRef.current || liveOpening.current) return;
+    if (liveOn && (state === "SPEAKING" || state === "THINKING" || state === "ACTING")) {
+      interrupt();
+      return;
+    }
     if (liveOn) {
       stopLiveMic();
       setLiveOn(false);
@@ -346,85 +419,233 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
       setState("IDLE");
       return;
     }
-    if (await startLiveMic()) { setLiveOn(true); setState("LISTENING"); }
+    liveOpening.current = true;
+    try {
+      const opened = await startLiveMic();
+      if (opened && connectedRef.current && engineRef.current === "live") {
+        setLiveOn(true);
+        setState("LISTENING");
+      }
+    } finally {
+      liveOpening.current = false;
+    }
+  };
+
+  // ---------------------------------------------------------- Browser conversation (explicit half-duplex)
+  const clearSilence = () => {
+    if (silenceTimer.current) clearTimeout(silenceTimer.current);
+    silenceTimer.current = null;
+  };
+  const clearResume = () => {
+    if (resumeTimer.current) clearTimeout(resumeTimer.current);
+    resumeTimer.current = null;
+  };
+
+  const stopHandsFree = () => {
+    handsFreeRef.current = false;
+    setHandsFree(false);
+    awaitingTurn.current = false;
+    clearSilence();
+    clearResume();
+    if (rec.current) {
+      const active = rec.current;
+      rec.current = null; // ignore delayed onend after explicit microphone shutdown
+      active.onend = null;
+      active.onresult = null;
+      active.onerror = null;
+      try { active.stop(); } catch { /* already stopped */ }
+    }
+    listening.current = false;
+    held.current = toggled.current = false;
+    finalBuf.current = lastInterim.current = "";
+    setPartial("");
+  };
+
+  const maybeResumeHandsFree = () => {
+    if (!handsFreeRef.current || !connectedRef.current || engineRef.current !== "browser" ||
+        awaitingTurn.current || speaking.current || speechQueue.current.length ||
+        listening.current || rec.current || resumeTimer.current) return;
+    // Browsers can end a recognition session on long silence. Retry is allowed only while
+    // the user has explicitly kept hands-free enabled. No microphone stays open on disconnect.
+    resumeTimer.current = setTimeout(() => {
+      resumeTimer.current = null;
+      if (handsFreeRef.current && connectedRef.current && engineRef.current === "browser" &&
+          !awaitingTurn.current && !speaking.current && !rec.current) startBrowserRecognition(true);
+    }, 350);
+  };
+
+  const startBrowserRecognition = (automatic: boolean) => {
+    const SR = window as unknown as {
+      SpeechRecognition?: new () => Recognition;
+      webkitSpeechRecognition?: new () => Recognition;
+    };
+    const Ctor = SR.SpeechRecognition || SR.webkitSpeechRecognition;
+    if (!Ctor) {
+      if (automatic) stopHandsFree();
+      cbRef.current.onError("Ascolto libero richiede il riconoscimento vocale di Chrome o Edge.");
+      return;
+    }
+    clearSilence();
+    clearResume();
+    finalBuf.current = "";
+    lastInterim.current = "";
+    const r = new Ctor();
+    r.lang = config?.language === "it" ? "it-IT" : config?.language || "it-IT";
+    r.interimResults = true;
+    r.continuous = true;
+    r.onresult = (e) => {
+      // Chrome repeats previously finalized results on later events. Reconstruct each
+      // snapshot rather than appending the same transcript multiple times.
+      const snapshot = speechSnapshot(e.results);
+      finalBuf.current = snapshot.final;
+      lastInterim.current = snapshot.tentative;
+      if (snapshot.partial) sock.current?.send({ type: "transcript.partial", text: snapshot.partial });
+      if (automatic) {
+        clearSilence();
+        const delay = silenceDelay(snapshot);
+        if (delay !== null) {
+          silenceTimer.current = setTimeout(() => {
+            if (rec.current === r && listening.current) {
+              try { r.stop(); } catch { /* already closing */ }
+            }
+          }, delay);
+        }
+      }
+    };
+    r.onerror = (ev: unknown) => {
+      if (rec.current !== r) return;
+      const why = (ev as { error?: string } | null)?.error;
+      if (why === "no-speech" || why === "aborted") return;
+      listening.current = false;
+      clearSilence();
+      if (automatic) stopHandsFree();
+      else { held.current = false; toggled.current = false; }
+      setState("IDLE");
+      cbRef.current.onError(why === "not-allowed" || why === "service-not-allowed"
+        ? "Microfono non autorizzato: consenti l'accesso nel browser."
+        : why === "network" ? "Riconoscimento vocale del browser non raggiungibile: prova Chrome o Edge con internet."
+        : why === "audio-capture" ? "Nessun microfono disponibile in Windows."
+        : `Riconoscimento vocale interrotto (${why ?? "errore sconosciuto"}).`);
+    };
+    r.onend = () => {
+      if (rec.current !== r) return;
+      rec.current = null;
+      listening.current = false;
+      clearSilence();
+      const text = (finalBuf.current || (automatic ? lastInterim.current : "")).trim();
+      if (automatic) {
+        if (!handsFreeRef.current) return;
+        if (!text) { maybeResumeHandsFree(); return; }
+        awaitingTurn.current = true;
+        setState("UNDERSTANDING");
+        sock.current?.send({ type: "transcript.final", text });
+      } else {
+        commit();
+      }
+    };
+    rec.current = r;
+    listening.current = true;
+    setState("LISTENING");
+    try { r.start(); } catch {
+      if (rec.current === r) rec.current = null;
+      listening.current = false;
+      setState("IDLE");
+      if (automatic) stopHandsFree();
+      cbRef.current.onError("Riconoscimento vocale non disponibile: riattiva il microfono dal browser.");
+    }
+  };
+
+  const toggleHandsFree = () => {
+    if (handsFreeRef.current) {
+      stopHandsFree();
+      setState("IDLE");
+      return;
+    }
+    if (!connectedRef.current || engineRef.current !== "browser" || !handsFreeSupported) return;
+    if (speaking.current || awaitingTurn.current || listening.current) {
+      cbRef.current.onError("Termina la risposta o la registrazione prima di attivare l'ascolto libero.");
+      return;
+    }
+    handsFreeRef.current = true;
+    setHandsFree(true);
+    startBrowserRecognition(true);
   };
 
   const pressStart = () => {
-    if (!connected) return;
-    if (engine === "live") { void liveButton(); return; }
-    if (toggled.current) { toggled.current = false; finishListening(); return; }  // second click: send
-    if (state === "SPEAKING" || state === "THINKING" || state === "ACTING") interrupt(); // barge-in
+    if (!connectedRef.current) return;
+    if (engineRef.current === "live") { void liveButton(); return; }
+    if (handsFreeRef.current) { toggleHandsFree(); return; }
+    if (toggled.current) { toggled.current = false; finishListening(); return; }
+    if (state === "SPEAKING" || state === "THINKING" || state === "ACTING") interrupt();
     if (state !== "IDLE" && state !== "LISTENING" && state !== "INTERRUPTED" && state !== "CONNECTING"
         && state !== "ERROR") return;
     held.current = true;
     pressedAt.current = Date.now();
-    setState("LISTENING");
-    finalBuf.current = "";
-    const SR = (window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition });
-    const Ctor = SR.SpeechRecognition || SR.webkitSpeechRecognition;
-    if (Ctor) {
-      const r = new Ctor();
-      r.lang = config?.language === "it" ? "it-IT" : config?.language || "it-IT";
-      r.interimResults = true;
-      r.continuous = true;
-      r.onresult = (e) => {
-        let interim = "", fin = "";
-        for (const res of Array.from(e.results)) {
-          if (res.isFinal) fin += res[0].transcript;
-          else interim += res[0].transcript;
-        }
-        finalBuf.current += fin;
-        const live = (finalBuf.current + " " + interim).trim();
-        if (live) sock.current?.send({ type: "transcript.partial", text: live });
-      };
-      r.onerror = (ev: unknown) => {
-        const why = (ev as { error?: string } | null)?.error;
-        if (why === "no-speech" || why === "aborted") return;
-        held.current = false; toggled.current = false; listening.current = false;
-        setState("IDLE");
-        cbRef.current.onError(why === "not-allowed" || why === "service-not-allowed"
-          ? "il browser non mi lascia usare il microfono: clicca il lucchetto vicino all'indirizzo e consenti il microfono, poi ricarica la pagina"
-          : why === "network" ? "il riconoscimento vocale del browser non è raggiungibile (serve internet): prova con Chrome o Edge aggiornati"
-          : why === "audio-capture" ? "nessun microfono trovato: controlla che sia collegato e attivo in Windows"
-          : `riconoscimento vocale non riuscito (${why ?? "errore sconosciuto"})`);
-      };
-      // ends when you release/click again, or by itself after a long silence: either way send what was heard
-      r.onend = () => { if (listening.current) { listening.current = false; commit(); } };
-      rec.current = r;
-      listening.current = true;
-      try { r.start(); } catch {
-        listening.current = false; held.current = false; toggled.current = false; setState("IDLE");
-        cbRef.current.onError("il riconoscimento vocale non è partito: riprova tra un attimo");
+    const SR = window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown };
+    if (SR.SpeechRecognition || SR.webkitSpeechRecognition) startBrowserRecognition(false);
+    else { setState("LISTENING"); void startAudioCapture(); }
+  };
+
+  // Server-side STT fallback: MediaRecorder emits its last dataavailable AFTER stop().
+  // Assemble once, then send speech.end so the backend never transcribes a truncated file.
+  const startAudioCapture = async () => {
+    let stream: MediaStream | null = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!connectedRef.current) {
+        // Permission can arrive after a disconnect: drop the mic without mutating
+        // CONNECTING state or emitting a message on an obsolete socket.
+        stream.getTracks().forEach((t) => t.stop());
+        return;
       }
-    } else {
-      // no browser STT: capture audio and let the server transcribe on release
-      void startAudioCapture();
+      if (!held.current && !toggled.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        sock.current?.send({ type: "speech.end" });
+        setState("IDLE");
+        return;
+      }
+      const format = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]
+        .find((m) => MediaRecorder.isTypeSupported(m));
+      const mr = new MediaRecorder(stream, format ? { mimeType: format } : undefined);
+      const capturedStream = stream;
+      const chunks: Blob[] = [];
+      mr.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      mr.onstop = () => {
+        capturedStream.getTracks().forEach((t) => t.stop());
+        // Flush all recorded blobs in order, including the final chunk.
+        const audio = new Blob(chunks, { type: mr.mimeType || format || "audio/webm" });
+        void audio.arrayBuffer().then((buffer) => {
+          if (!connectedRef.current) return;
+          const bytes = new Uint8Array(buffer);
+          if (bytes.length) sock.current?.send({
+            type: "audio.chunk", data: toB64(bytes), mime: audio.type,
+          });
+          sock.current?.send({ type: "speech.end" });
+        }).catch(() => cbRef.current.onError("Non riesco a leggere l'audio registrato."));
+      };
+      mr.start(250);
+      media.current = { rec: mr, stream };
+    } catch {
+      stream?.getTracks().forEach((t) => t.stop());
+      cbRef.current.onError("Microfono o formato audio non disponibile: prova Chrome o Edge.");
     }
   };
 
-  const startAudioCapture = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
-      mr.ondataavailable = (e) => {
-        e.data.arrayBuffer().then((buf) => {
-          const bytes = new Uint8Array(buf);
-          let bin = "";
-          for (const b of bytes) bin += String.fromCharCode(b);
-          sock.current?.send({ type: "audio.chunk", data: btoa(bin), mime: "audio/webm" });
-        });
-      };
-      mr.start(250); // chunk every 250ms
-      media.current = { rec: mr, stream };
-    } catch { cbRef.current.onError("microfono non disponibile"); }
+  const stopAudioCapture = () => {
+    const active = media.current;
+    if (!active) return;
+    media.current = null;
+    if (active.rec.state !== "inactive") active.rec.stop();
   };
 
-  const stopAudioCapture = () => {
-    if (!media.current) return;
-    media.current.rec.stop();
-    media.current.stream.getTracks().forEach((t) => t.stop());
+  const cancelAudioCapture = () => {
+    const active = media.current;
+    if (!active) return;
     media.current = null;
-    sock.current?.send({ type: "speech.end" });
+    active.rec.onstop = null; // cancellation must never transmit accidental final audio
+    active.rec.ondataavailable = null;
+    if (active.rec.state !== "inactive") active.rec.stop();
+    active.stream.getTracks().forEach((t) => t.stop());
   };
 
   const commit = () => {
@@ -450,7 +671,11 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   };
 
   const interrupt = (reason = "user") => {
+    cancelAudioCapture();
     stopLocalAudio();
+    // Wait for the server's voice.interrupted ACK before opening the mic again;
+    // otherwise a fast follow-up can race the still-running backend turn.
+    if (handsFreeRef.current) awaitingTurn.current = true;
     sock.current?.send({ type: "interrupt", reason });
   };
 
@@ -476,18 +701,22 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     sock.current?.send({ type: "conversation.set", conversation_id: conversationId });
   };
 
-  return { state, connected, partial, engine, liveOn, pressStart, pressStop, interrupt, answer, setConversation };
+  return { state: localSpeaking && engine === "browser" ? "SPEAKING" as VoiceState : state,
+    connected, partial, engine, liveOn, handsFree, handsFreeSupported, toggleHandsFree,
+    pressStart, pressStop, interrupt, answer, setConversation };
 }
 
 export function VoiceDock({ voice, onInterrupt }: {
   voice: ReturnType<typeof useVoiceSession>;
   onInterrupt?: () => void;
 }) {
-  const { state, connected, partial, engine, liveOn, pressStart, pressStop } = voice;
+  const { state, connected, partial, engine, liveOn, handsFree, handsFreeSupported, toggleHandsFree,
+    pressStart, pressStop } = voice;
   const label = !connected ? "voce offline"
     : engine === "live" && !liveOn ? "Parla con NODO"
     : engine === "live" && state === "SPEAKING" ? "NODO parla · tocca per interrompere"
     : engine === "live" ? "Ti ascolto · clicca per chiudere"
+    : handsFree ? "Ascolto libero attivo · clicca per chiudere"
     : state === "LISTENING" ? "Ti ascolto · clicca per inviare"
     : state === "TRANSCRIBING" ? "Trascrivo"
     : state === "UNDERSTANDING" ? "Capisco"
@@ -511,6 +740,13 @@ export function VoiceDock({ voice, onInterrupt }: {
       >
         <span className="mic-dot" />{label}
       </button>
+      {connected && engine === "browser" && handsFreeSupported && (
+        <button type="button" className={handsFree ? "handsfree handsfree--active" : "handsfree"}
+                aria-pressed={handsFree} onClick={toggleHandsFree}
+                title="Una scelta esplicita: chiudo il turno dopo una pausa e riapro il microfono dopo la risposta. Non ascolto mentre NODO parla.">
+          {handsFree ? "Chiudi ascolto libero" : "Ascolto libero"}
+        </button>
+      )}
       {(state === "SPEAKING" || state === "THINKING" || state === "ACTING") && (
         <button type="button" className="ghost" onClick={() => { voice.interrupt(); onInterrupt?.(); }}>Ferma</button>
       )}

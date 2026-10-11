@@ -1,3 +1,56 @@
+## Browser audio reliability (V06)
+
+Il fallback MediaRecorder non invia più separatamente ciascun chunk mentre viene
+registrato: raccoglie i blocchi `dataavailable`, inclusa la parte finale emessa
+**dopo** `stop()`, quindi invia l'intero contenuto come `audio.chunk` e solo
+successivamente `speech.end`. Questo evita trascrizioni premature/troncate
+dovute a callback `arrayBuffer()` asincrone fuori ordine. Il metodo batch
+occupa memoria proporzionale alla durata della registrazione e **non** sostituisce
+un provider STT streaming vero; evitare registrazioni eccessivamente lunghe.
+Su disconnessione/interruzione annulla la registrazione e libera i track audio.
+
+La riproduzione `ChunkPlayer` installa le callback di completamento prima di
+chiamare `play()`, evitando un blocco su frammenti audio brevissimi.
+
+## Browser hands-free (V06) — conversatione a turni, attivazione esplicita
+
+Quando il motore è browser e STT/TTS del browser sono disponibili, `VoiceDock`
+mostra **Ascolto libero**. L'attivazione è un click esplicito, **non è una wake word**.
+NODO ricostruisce la trascrizione da ogni snapshot `SpeechRecognition.results`
+(Chrome può ripetere risultati finali) e rileva la fine del turno con un intervallo
+di silenzio: circa 1,1s per testo finale, 1,7s per testo ancora provvisorio.
+Gli intervalli sono euristiche UI, non una VAD acustica professionale.
+
+Il microfono viene sospeso appena un turno è riconosciuto; NODO elabora e
+riproduce tutta la coda `speechSynthesis`, **poi** riattiva l'ascolto, purché
+l'utente abbia mantenuto il toggle acceso e il WebSocket sia collegato.
+`voice.turn.done` da solo NON basta per riaprire il microfono: il browser
+potrebbe stare ancora pronunciando l'ultima frase. Se il riconoscimento
+termina naturalmente senza parole, si riavvia solo mentre il toggle resta
+attivo. Stop volontario, errori di microfono e disconnessioni disattivano
+l'ascolto libero. La sessione usa lo stesso `conversation_id` e lo stesso
+backend di sicurezza/approvazioni di push-to-talk e testo.
+
+**Limiti dichiarati:** questa è una modalità *half-duplex*, non ascolta
+mentre NODO pronuncia la risposta, quindi il barge-in completamente vocale
+non è garantito. Il pulsante **Ferma** continua a interrompere NODO.
+I browser possono terminare/rifiutare automaticamente la ripartenza del
+riconoscimento (limiti gestiti dal browser); perciò questo non equivale a un
+servizio locale sempre attivo. Chrome/Edge hanno implementazioni diverse.
+
+**Privacy Web Speech:** NODO salva la trascrizione nel suo database, non
+archivia file audio. Il motore Web Speech può però usare un servizio remoto
+del browser, a seconda della piattaforma/configurazione: non promettere
+«riconoscimento offline» in modalità browser. Per una modalità realmente
+locale servono motori STT/TTS on-device configurati esplicitamente.
+https://developer.mozilla.org/en-US/docs/Web/API/SpeechRecognition
+
+**Prove manuali Windows**: parla due volte senza cliccare tra i turni; frase
+con risultati final multipli (nessun testo duplicato); risposta lunga con
+sintesi a più frasi (il microfono non riapre mentre parla); interruzione
+con Ferma; disconnessione WebSocket (ascolto libero non si riattiva senza
+consenso); approvazione esplicita; browser senza Web Speech (toggle assente).
+
 ## Gemini Live quota: interpretazione e fallback (V04)
 
 Google Gemini API impone limiti **per progetto** (non per singola chiave).
@@ -128,8 +181,10 @@ plus `INTERRUPTED`, `WAITING_FOR_APPROVAL`, `ERROR`, `CLOSED`. Legal transitions
 
 ## Where speech is processed
 `GET /api/v1/voice/config` reports `stt.location` / `tts.location`:
-- `browser` (default, FREE): Web Speech API STT + `speechSynthesis`. Audio never leaves the device; the
-  client sends `transcript.partial/final` over the socket. Browser TTS receives `tts.speak` text events.
+- `browser` (default, FREE): Web Speech API STT + `speechSynthesis`. NODO invia al proprio
+  backend la trascrizione (`transcript.partial/final`), non registra file audio in questa modalità.
+  **Il browser può appoggiarsi a un servizio remoto per riconoscere il parlato**: Web Speech
+  non garantisce elaborazione offline. Browser TTS riceve gli eventi `tts.speak`.
 - `cloud` (`openai`): audio chunks buffered → `/voice/transcribe` contract inside the runtime; `tts.chunk`
   streams base64 audio back. Refused in `NODO_MODE=FREE` unless `NODO_ALLOW_PAID_IN_FREE_MODE=true`.
 - `local` (planned): Whisper/Piper or any `StreamingSTT/TTS` implementation on a NODO Node.
@@ -149,7 +204,7 @@ no credentials.
 - Mic state is explicit: the dock shows the real session state; audio is captured only while held
   (push-to-talk) or between `speech` boundaries.
 - Raw audio is never persisted; transcripts become `Message` rows like typed text.
-- No always-on listening. Wake word ("Node.") is reserved for a local Node — never continuous cloud upload.
+- Nessun ascolto invisibile: il browser hands-free richiede attivazione esplicita, resta visibile e si spegne su disconnessione. La wake word rimane riservata al Node locale.
 
 ## Push-to-talk UX (`apps/web/src/components/Voice.tsx`)
 Hold the mic button or Space. Web Speech API produces partials live; without it, `MediaRecorder` streams
@@ -162,6 +217,6 @@ Hold the mic button or Space. Web Speech API produces partials live; without it,
 - Browser STT quality/availability varies (Chrome/Edge good, Firefox has no STT → falls back to audio upload).
 - Server-side streaming STT is a seam: only fakes implement `begin/feed/end` today; real audio upload path
   transcribes on `speech.end` (not yet word-by-word).
-- `speechSynthesis` has no barge-in midpoint: cancelling restarts at the next sentence.
+- Con sintesi browser il pulsante **Ferma** cancella il parlato, ma l\'ascolto libero è half-duplex: non riconosce interruzioni vocali durante la riproduzione.
 - No production VAD/turn detector yet; `TurnDetector`/`WakeWordEngine` remain protocols.
 - `interrupted` turns still finish DB writes internally (by design — records stay consistent).
