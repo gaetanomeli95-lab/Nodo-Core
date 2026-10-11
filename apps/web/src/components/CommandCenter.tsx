@@ -175,7 +175,9 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       {writing && <form className="thought-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
         <input autoFocus aria-label="Scrivi a NODO" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Da dove cominciamo?" />
         <button disabled={!input.trim() || busy}>Invia ↗</button></form>}
-      <footer className="stage-footnote"><span>{voice.microphoneOn ? "MICROFONO ATTIVO" : "ATTIVA LA VOCE PER COMINCIARE"}</span><span>{voice.engine === "live" ? "Conversazione dal vivo" : "Voce del browser"}</span></footer>
+      <footer className="stage-footnote"><span>{voice.microphoneOn ? "MICROFONO ATTIVO" : "ATTIVA LA VOCE PER COMINCIARE"}</span><span>{voice.engine === "live" ? "Conversazione dal vivo" :
+        voiceConfig?.stt.location === "local" && voiceConfig?.tts.location === "local" ?
+          "Voce locale · senza Gemini Live" : "Voce del browser"}</span></footer>
     </div>
     {diary && <aside className="conversation-diary"><header><span className="eyebrow">DIARIO</span><button className="quiet-button" onClick={() => setDiary(false)}>Chiudi</button></header>
       <p className="diary-intro">Le parole restano qui. Il lavoro continua al centro.</p>
