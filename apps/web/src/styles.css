@@ -281,3 +281,15 @@ p.small { font-size: 11px; margin: 6px 0 0; }
 @media (prefers-reduced-motion: reduce) {
   .presence-ring, .presence-ring--inner, .presence-ring--mid, .presence-ring--outer { animation: none !important; transition: none; }
 }
+
+/* Voice engine fallback must remain visible when the conversation journal is closed. */
+.voice-notice {
+  display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between;
+  gap: 16px; padding: 10px 5%; background: #211d18; color: #dfbb86;
+  border-top: 1px solid rgba(223,187,134,.25); font-size: 12px; line-height: 1.5;
+}
+.voice-notice button {
+  flex: 0 0 auto; cursor: pointer; background: none; border: 0;
+  color: inherit; font-size: 19px; line-height: 1; padding: 4px 8px;
+}
+@media (max-width: 900px) { .voice-notice { padding-inline: 16px; } }
