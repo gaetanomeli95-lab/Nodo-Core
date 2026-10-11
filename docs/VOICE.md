@@ -1,3 +1,42 @@
+## Browser hands-free (V06) — conversatione a turni, attivazione esplicita
+
+Quando il motore è browser e STT/TTS del browser sono disponibili, `VoiceDock`
+mostra **Ascolto libero**. L'attivazione è un click esplicito, **non è una wake word**.
+NODO ricostruisce la trascrizione da ogni snapshot `SpeechRecognition.results`
+(Chrome può ripetere risultati finali) e rileva la fine del turno con un intervallo
+di silenzio: circa 1,1s per testo finale, 1,7s per testo ancora provvisorio.
+Gli intervalli sono euristiche UI, non una VAD acustica professionale.
+
+Il microfono viene sospeso appena un turno è riconosciuto; NODO elabora e
+riproduce tutta la coda `speechSynthesis`, **poi** riattiva l'ascolto, purché
+l'utente abbia mantenuto il toggle acceso e il WebSocket sia collegato.
+`voice.turn.done` da solo NON basta per riaprire il microfono: il browser
+potrebbe stare ancora pronunciando l'ultima frase. Se il riconoscimento
+termina naturalmente senza parole, si riavvia solo mentre il toggle resta
+attivo. Stop volontario, errori di microfono e disconnessioni disattivano
+l'ascolto libero. La sessione usa lo stesso `conversation_id` e lo stesso
+backend di sicurezza/approvazioni di push-to-talk e testo.
+
+**Limiti dichiarati:** questa è una modalità *half-duplex*, non ascolta
+mentre NODO pronuncia la risposta, quindi il barge-in completamente vocale
+non è garantito. Il pulsante **Ferma** continua a interrompere NODO.
+I browser possono terminare/rifiutare automaticamente la ripartenza del
+riconoscimento (limiti gestiti dal browser); perciò questo non equivale a un
+servizio locale sempre attivo. Chrome/Edge hanno implementazioni diverse.
+
+**Privacy Web Speech:** NODO salva la trascrizione nel suo database, non
+archivia file audio. Il motore Web Speech può però usare un servizio remoto
+del browser, a seconda della piattaforma/configurazione: non promettere
+«riconoscimento offline» in modalità browser. Per una modalità realmente
+locale servono motori STT/TTS on-device configurati esplicitamente.
+https://developer.mozilla.org/en-US/docs/Web/API/SpeechRecognition
+
+**Prove manuali Windows**: parla due volte senza cliccare tra i turni; frase
+con risultati final multipli (nessun testo duplicato); risposta lunga con
+sintesi a più frasi (il microfono non riapre mentre parla); interruzione
+con Ferma; disconnessione WebSocket (ascolto libero non si riattiva senza
+consenso); approvazione esplicita; browser senza Web Speech (toggle assente).
+
 ## Gemini Live quota: interpretazione e fallback (V04)
 
 Google Gemini API impone limiti **per progetto** (non per singola chiave).
