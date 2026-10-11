@@ -179,13 +179,19 @@ def build_voice(s: Settings) -> tuple[SpeechToTextProvider, TextToSpeechProvider
     paid_ok = s.mode != NodoMode.FREE or s.allow_paid_in_free_mode
     stt: SpeechToTextProvider
     tts: TextToSpeechProvider
-    if s.stt_provider == "openai" and s.openai_api_key and paid_ok:
+    if s.stt_provider == "local":
+        from nodo.voice.local import LocalWhisper
+        stt = LocalWhisper(s.local_voice_dir, s.whisper_model, s.whisper_device, s.whisper_compute_type)
+    elif s.stt_provider == "openai" and s.openai_api_key and paid_ok:
         stt = OpenAISpeech(s.openai_api_key, s.openai_base_url, default_voice=s.tts_voice)
     elif s.stt_provider == "fake":
         stt = FakeSTT()
     else:
         stt = BrowserSTT()
-    if s.tts_provider == "openai" and s.openai_api_key and paid_ok:
+    if s.tts_provider == "local":
+        from nodo.voice.local import LocalPiper
+        tts = LocalPiper(s.local_voice_dir, s.piper_voice)
+    elif s.tts_provider == "openai" and s.openai_api_key and paid_ok:
         tts = OpenAISpeech(s.openai_api_key, s.openai_base_url, default_voice=s.tts_voice)
     elif s.tts_provider == "fake":
         tts = FakeTTS()
