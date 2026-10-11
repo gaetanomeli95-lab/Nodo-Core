@@ -19,11 +19,14 @@ def config(c: Container = Depends(container)):
     """Tells the client where speech is processed and which transports are available."""
     from nodo.voice.live import missing_reason
     why = missing_reason(c.settings, c)
+    stt_status = c.stt.status() if hasattr(c.stt, "status") else {"ready": True}
+    tts_status = c.tts.status() if hasattr(c.tts, "status") else {"ready": True}
     return {"engine": "browser" if why else "live", "live_reason": why,
             "stt": {"name": c.stt.name, "location": c.stt.location,
-                    "streaming": bool(getattr(c.stt, "streaming", False))},
-            "tts": {"name": c.tts.name, "location": c.tts.location, "voice": c.settings.tts_voice,
-                    "streaming": bool(getattr(c.tts, "streaming", False))},
+                    "streaming": bool(getattr(c.stt, "streaming", False)), **stt_status},
+            "tts": {"name": c.tts.name, "location": c.tts.location,
+                    "voice": c.settings.piper_voice if c.tts.location == "local" else c.settings.tts_voice,
+                    "streaming": bool(getattr(c.tts, "streaming", False)), **tts_status},
             "language": c.settings.default_language, "push_to_talk": True, "wake_word": False,
             "streaming": True, "ws_path": "/api/v1/voice/stream",
             "states": [str(s) for s in VoiceState],
