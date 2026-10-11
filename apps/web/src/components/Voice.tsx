@@ -181,6 +181,8 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const media = useRef<{ rec: MediaRecorder; stream: MediaStream } | null>(null);
   const pcm = useRef(new PcmPlayer());
   const liveMic = useRef<{ ctx: AudioContext; stream: MediaStream } | null>(null);
+  const liveGeneration = useRef(0);
+  const liveOpening = useRef(false);
   const cbRef = useRef(cb);
   cbRef.current = cb;
 
@@ -326,7 +328,12 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
       sock.current = s;
     };
     connect();
-    return () => { closed = true; if (retry) clearTimeout(retry); stopHandsFree(); cancelAudioCapture(); sock.current?.close(); stopLocalAudio(); stopLiveMic(); };
+    return () => {
+      closed = true;
+      connectedRef.current = false;
+      if (retry) clearTimeout(retry);
+      stopHandsFree(); cancelAudioCapture(); sock.current?.close(); stopLocalAudio(); stopLiveMic();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -342,46 +349,69 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
 
   // ---------------------------------------------------------- Gemini Live: mic streaming
   const startLiveMic = async (): Promise<boolean> => {
+    const generation = liveGeneration.current;
+    let stream: MediaStream | null = null;
+    let ctx: AudioContext | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
       });
-      const ctx = new AudioContext();
+      if (!connectedRef.current || engineRef.current !== "live" ||
+          generation !== liveGeneration.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return false; // user disconnected or provider fell back while permission was pending
+      }
+      ctx = new AudioContext();
       await ctx.audioWorklet.addModule("/pcm-worklet.js");
+      if (!connectedRef.current || engineRef.current !== "live" ||
+          generation !== liveGeneration.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        void ctx.close();
+        return false;
+      }
       const src = ctx.createMediaStreamSource(stream);
       const node = new AudioWorkletNode(ctx, "pcm-worklet");
       const srcRate = ctx.sampleRate;
       node.port.onmessage = (ev: MessageEvent) => {
+        if (!connectedRef.current || engineRef.current !== "live" ||
+            generation !== liveGeneration.current) return;
         const pcm16 = toPcm16(ev.data as Float32Array, srcRate, 16000);
-        if (pcm16.length) sock.current?.send({ type: "audio.chunk", data: toB64(pcm16), mime: "audio/pcm;rate=16000" });
+        if (pcm16.length) sock.current?.send({
+          type: "audio.chunk", data: toB64(pcm16), mime: "audio/pcm;rate=16000",
+        });
       };
-      // The worklet must stay running without monitoring the microphone on the speakers.
-      // A zero-gain destination keeps the graph alive and avoids acoustic feedback.
       const silent = ctx.createGain();
-      silent.gain.value = 0;
+      silent.gain.value = 0; // worklet stays alive without acoustic feedback
       src.connect(node);
       node.connect(silent);
       silent.connect(ctx.destination);
       liveMic.current = { ctx, stream };
       return true;
     } catch {
-      cbRef.current.onError("microfono non disponibile: consenti l'accesso dal lucchetto vicino all'indirizzo e riprova");
+      stream?.getTracks().forEach((t) => t.stop());
+      if (ctx) void ctx.close();
+      if (generation === liveGeneration.current)
+        cbRef.current.onError("Microfono non disponibile: controlla i permessi di Windows/browser.");
       return false;
     }
   };
 
   const stopLiveMic = () => {
+    liveGeneration.current += 1; // also cancels any in-flight getUserMedia permission request
     if (!liveMic.current) return;
     liveMic.current.stream.getTracks().forEach((t) => t.stop());
     void liveMic.current.ctx.close();
     liveMic.current = null;
   };
 
-  /** Live mode: one click opens the conversation (the mic streams, Gemini hears pauses and
-   *  interruptions by itself); while NODO speaks a click interrupts it; another click hangs up. */
+  /** Gemini Live is full-duplex; a click starts the streaming session.
+   *  A second click ends it, while a click during speech interrupts playback. */
   const liveButton = async () => {
-    if (!connected) return;
-    if (liveOn && (state === "SPEAKING" || state === "THINKING" || state === "ACTING")) { interrupt(); return; }
+    if (!connectedRef.current || liveOpening.current) return;
+    if (liveOn && (state === "SPEAKING" || state === "THINKING" || state === "ACTING")) {
+      interrupt();
+      return;
+    }
     if (liveOn) {
       stopLiveMic();
       setLiveOn(false);
@@ -389,7 +419,16 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
       setState("IDLE");
       return;
     }
-    if (await startLiveMic()) { setLiveOn(true); setState("LISTENING"); }
+    liveOpening.current = true;
+    try {
+      const opened = await startLiveMic();
+      if (opened && connectedRef.current && engineRef.current === "live") {
+        setLiveOn(true);
+        setState("LISTENING");
+      }
+    } finally {
+      liveOpening.current = false;
+    }
   };
 
   // ---------------------------------------------------------- Browser conversation (explicit half-duplex)
