@@ -157,6 +157,11 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         <ul>{surface.rows.map((row, i) => <li key={i}><span>{String(row.title || row.name || "")}</span><small>{STATUS[String(row.status)] || String(row.project || "")}</small></li>)}</ul>
         {!surface.summary && !surface.rows.length && <p>Non ci sono elementi da mostrare.</p>}
       </section>}
+      {(voiceConfig?.stt.ready === false || voiceConfig?.tts.ready === false) && (
+        <p className="voice-notice" role="status">
+          La voce locale non è ancora installata. Esegui installa-voce-locale.bat e riavvia NODO.
+        </p>
+      )}
       <div className="voice-controls">
         <button className={`conversation-button ${voice.liveOn ? "active" : ""}`}
           disabled={!voice.connected || voice.recovering || voiceConfig?.stt.ready === false || voiceConfig?.tts.ready === false}
