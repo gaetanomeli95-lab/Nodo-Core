@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { get, streamCommand, type NodoEvent, type VoiceConfig } from "../api";
 import { VoiceDock, useVoiceSession } from "./Voice";
+import { Presence } from "./Presence";
 
 type Turn = { who: "user" | "nodo"; text: string; meta?: string; doing?: string };
 
@@ -27,6 +28,8 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [journalOpen, setJournalOpen] = useState(false);
+  const [activity, setActivity] = useState<string | null>(null);
   const [voicePending, setVoicePending] = useState<PendingVoice | null>(null);
   const pendingApproval = useRef(false);
   const conversationId = useRef<string | null>(loadConv());   // the brain remembers the conversation
@@ -48,6 +51,14 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const voice = useVoiceSession(voiceConfig, {
     onEvent: (e) => {
       onTrace([e as unknown as NodoEvent]);
+      if (e.type === "nodo.response" && typeof e.conversation_id === "string") {
+        conversationId.current = e.conversation_id;
+        saveConv(e.conversation_id); // Voice-first conversations must continue in text.
+      }
+      if (e.type === "nodo.step" && typeof e.step === "string" && e.step.startsWith("tool:")) {
+        setActivity(e.status === "running" ? DOING[e.step.slice(5)] ?? "Sto usando uno strumento…" : null);
+      }
+      if (e.type === "voice.turn.done" || e.type === "voice.interrupted") setActivity(null);
       if (e.type === "nodo.intent" && e.entity_name) onActiveContext(e.entity_name as string);
       if (e.type === "nodo.plan") pendingApproval.current = !!e.needs_approval;
       if (e.type === "nodo.turn.done" || e.type === "voice.turn.done") onRequestDone();
@@ -72,7 +83,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         return next;
       });
     },
-    onError: (msg) => setTurns((ts) => [...ts, { who: "nodo", text: `Errore voce: ${msg}`, meta: "error" }]),
+    onError: (msg) => { setActivity(null); setTurns((ts) => [...ts, { who: "nodo", text: `Errore voce: ${msg}`, meta: "error" }]); },
   });
 
   const answer = (decision: "approve" | "reject") => {
@@ -84,7 +95,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
-    setInput(""); setBusy(true);
+    setInput(""); setBusy(true); setActivity(null);
     setTurns((ts) => [...ts, { who: "user", text }, { who: "nodo", text: "" }]);
     try {
       await streamCommand({ text, conversation_id: conversationId.current }, (ev) => {
@@ -92,9 +103,11 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         if (ev.type === "token") appendNodo(ev.delta as string);
         if (ev.type === "step" && typeof ev.step === "string" && ev.step.startsWith("tool:")) {
           const doing = ev.status === "running" ? DOING[ev.step.slice(5)] ?? "ci lavoro…" : undefined;
+          setActivity(doing ?? null);
           setTurns((ts) => ts.map((t, i) => i === ts.length - 1 && t.who === "nodo" ? { ...t, doing } : t));
         }
         if (ev.type === "done" && ev.conversation_id) {
+          setActivity(null);
           conversationId.current = ev.conversation_id as string;
           saveConv(conversationId.current);
         }
@@ -120,6 +133,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       setTurns((ts) => [...ts, { who: "nodo", text: `Errore: ${(e as Error).message}`, meta: "error" }]);
     } finally {
       setBusy(false);
+      setActivity(null);
     }
   };
 
@@ -127,20 +141,37 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     conversationId.current = null;
     saveConv(null);
     setTurns([]);
+    setActivity(null);
+    setJournalOpen(false);
   };
 
-  const scroll = () => turnsRef.current?.scrollTo(0, turnsRef.current.scrollHeight);
+  const lastAnswer = [...turns].reverse().find((t) => t.who === "nodo" && t.text && t.meta !== "error")?.text ?? null;
+  const presenceState = busy ? (activity ? "WORKING" : "THINKING") : voice.state;
 
   return (
-    <section className="command" onClick={scroll}>
-      <div className="turns" ref={turnsRef}>
-        {!turns.length && (
-          <p className="hint">
-            Parla con NODO come con una persona: <em>"com'è andata stanotte?"</em>, <em>"cosa devo fare oggi?"</em>,{" "}
-            <em>"sul sito di … cambia il titolo della home"</em> — via testo o tenendo premuto il microfono.
-          </p>
-        )}
-        {turns.map((t, i) => (
+    <section className="command">
+      <Presence
+        state={presenceState}
+        connected={voice.connected}
+        engine={voice.engine}
+        activity={activity}
+        partial={voice.partial}
+        latest={lastAnswer}
+      />
+      <div className="conversation-toolbar">
+        <span>Conversazione continua · la trascrizione è facoltativa</span>
+        <button
+          type="button"
+          className="journal-toggle"
+          onClick={() => setJournalOpen((open) => !open)}
+          aria-expanded={journalOpen}
+          aria-controls="nodo-journal"
+        >
+          {journalOpen ? "Chiudi diario" : `Apri diario${turns.length ? ` · ${turns.length}` : ""}`}
+        </button>
+      </div>
+      <div id="nodo-journal" className={journalOpen ? "turns journal-open" : "turns journal-closed"} ref={turnsRef}>
+        {journalOpen && turns.map((t, i) => (
           <div key={i} className={`turn ${t.who}`}>
             <div className="who">{t.who === "nodo" ? "NODO" : "Tu"}</div>
             <div className="text">
@@ -151,23 +182,22 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
             {t.meta && <div className="meta">{t.meta}</div>}
           </div>
         ))}
-        {voicePending && (
-          <div className="approval-banner">
-            NODO chiede conferma: <b>{voicePending.tool}.{voicePending.action}</b>
-            <button onClick={() => answer("approve")}>Conferma</button>
-            <button className="ghost" onClick={() => answer("reject")}>Rifiuta</button>
-          </div>
-        )}
+        {journalOpen && !turns.length && <p className="journal-empty">Il diario apparirà qui dopo la prima interazione.</p>}
       </div>
-      <div className={`voice-state ${voice.state.toLowerCase()}`}>
-        {voice.connected ? `voce: ${voice.state}` : "voce: offline (WebSocket non connesso)"}
-      </div>
+      {voicePending && (
+        <div className="approval-banner" role="group" aria-label="Approvazione richiesta">
+          NODO chiede conferma: <b>{voicePending.tool}.{voicePending.action}</b>
+          <button onClick={() => answer("approve")}>Conferma</button>
+          <button className="ghost" onClick={() => answer("reject")}>Rifiuta</button>
+        </div>
+      )}
       <div className="composer">
         <VoiceDock voice={voice} />
         <textarea
           rows={1}
           value={input}
-          placeholder="Scrivi o detta… (Invio per inviare)"
+          aria-label="Messaggio scritto a NODO"
+          placeholder="Oppure scrivi qualcosa…"
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }}
         />
