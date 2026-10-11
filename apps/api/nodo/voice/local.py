@@ -7,8 +7,8 @@ Model inference runs in worker threads so HTTP/WebSocket handlers remain respons
 from __future__ import annotations
 
 import asyncio
-import io
 import importlib.util
+import io
 import threading
 import time
 import wave
