@@ -21,6 +21,12 @@ class SessionStart(BaseModel):
     client_stt: bool = True            # client does browser STT and sends transcripts instead of audio
 
 
+class ConversationSet(BaseModel):
+    """Switch the shared text/voice thread without restarting the WebSocket."""
+    type: Literal["conversation.set"] = "conversation.set"
+    conversation_id: str | None = None
+
+
 class AudioChunk(BaseModel):
     type: Literal["audio.chunk"] = "audio.chunk"
     data: str                          # base64-encoded audio bytes
@@ -58,7 +64,7 @@ class SessionEnd(BaseModel):
     type: Literal["session.end"] = "session.end"
 
 
-Inbound = SessionStart | AudioChunk | SpeechEnd | TranscriptPartial | TranscriptFinal | Interrupt \
+Inbound = SessionStart | ConversationSet | AudioChunk | SpeechEnd | TranscriptPartial | TranscriptFinal | Interrupt \
     | ApprovalAnswer | SessionEnd
 INBOUND = TypeAdapter(Inbound)  # validates on the `type` literal
 
@@ -75,7 +81,7 @@ def ev(type: str, session_id: str, turn: int = 0, seq: int = 0, **payload) -> di
 
 
 # outbound types (names, payloads documented in docs/VOICE.md):
-#   voice.session.started | voice.session.state | voice.session.closed
+#   voice.session.started | voice.session.state | voice.session.closed | voice.conversation
 #   transcript.partial | transcript.final            (echoes/server-side STT)
 #   nodo.thinking | nodo.intent | nodo.plan | nodo.context | nodo.step | agent.* | tool.*
 #   nodo.token | nodo.sentence | nodo.response
