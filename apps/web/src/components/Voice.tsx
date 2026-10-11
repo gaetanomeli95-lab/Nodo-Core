@@ -386,6 +386,10 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
 
   const pressStart = () => {
     if (!connected) return;
+    if (config?.stt.ready === false || config?.tts.ready === false) {
+      cbRef.current.onError("Motore vocale non installato: esegui installa-voce-locale.bat e riavvia NODO.");
+      return;
+    }
     if (engine === "live") { void liveButton(); return; }
     if (toggled.current) { toggled.current = false; finishListening(); return; }  // second click: send
     if (state === "SPEAKING" || state === "THINKING" || state === "ACTING") interrupt(); // barge-in
