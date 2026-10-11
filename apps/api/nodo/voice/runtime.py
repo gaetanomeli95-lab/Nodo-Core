@@ -23,7 +23,7 @@ from typing import Any
 
 from nodo.app import Container, ensure_workspace
 from nodo.core.events import EventBus
-from nodo.db.models import Approval, VoiceTurnMetric
+from nodo.db.models import Approval, Conversation, Message, VoiceTurnMetric
 from nodo.voice import live as live_engine
 from nodo.voice import protocol
 from nodo.voice.base import (
@@ -87,6 +87,7 @@ class VoiceRuntime:
         from nodo.voice.protocol import (
             ApprovalAnswer,
             AudioChunk,
+            ConversationSet,
             Interrupt,
             SessionEnd,
             SessionStart,
@@ -99,6 +100,8 @@ class VoiceRuntime:
         try:
             if isinstance(msg, SessionStart):
                 await self._on_start(msg)
+            elif isinstance(msg, ConversationSet):
+                await self._set_conversation(msg.conversation_id)
             elif isinstance(msg, SessionEnd):
                 await self.close()
             elif isinstance(msg, AudioChunk):
@@ -135,6 +138,34 @@ class VoiceRuntime:
         self._log("voice.session.started", {"language": vs.language, "engine": engine})
         await self._send("voice.session.started", state=str(vs.state), conversation_id=vs.conversation_id,
                          stt=self.c.stt.name, tts=self.c.tts.name, engine=engine)
+
+    async def _set_conversation(self, conversation_id: str | None) -> None:
+        """Sync text and voice to the same thread; never switch during an active turn or approval."""
+        vs = self.vs
+        if vs.turn_active or vs.pending_approval_id or vs.state in (
+            VoiceState.ACTING, VoiceState.SPEAKING, VoiceState.WAITING_FOR_APPROVAL
+        ):
+            await self._send("error", where="conversation",
+                             message="Termina il turno o l'approvazione prima di cambiare conversazione")
+            return
+        if conversation_id:
+            with self._db() as sdb:
+                org, _ = ensure_workspace(sdb)
+                conv = sdb.get(Conversation, conversation_id)
+                if conv is None or conv.organization_id != org.id:
+                    await self._send("error", where="conversation", message="Conversazione non trovata")
+                    return
+        if vs.conversation_id != conversation_id and self._live is not None:
+            # The Live model has the previous thread in its prompt. Recreate it on the
+            # next input so it cannot answer with stale context from another project.
+            old, self._live = self._live, None
+            await old.close()
+            self._live_used = False
+            self._live_failed_models.clear()
+            self._live_reconnects = 0
+            self._live_muted = False
+        vs.conversation_id = conversation_id
+        await self._send("voice.conversation", conversation_id=conversation_id)
 
     def _want_live(self) -> bool:
         return live_engine.missing_reason(self.c.settings, self.c) is None
@@ -396,6 +427,7 @@ class VoiceRuntime:
                                             getattr(self.c, "live_connect", None))
         try:
             await self._live.start(system, decls, self.vs.language, exclude=self._live_failed_models)
+            await self._send("voice.conversation", conversation_id=self.vs.conversation_id)
         except Exception:
             self._live = None                            # a half-open bridge would swallow the next audio
             raise
@@ -524,10 +556,26 @@ class VoiceRuntime:
 
     async def _live_end_turn(self) -> None:
         vs = self.vs
-        if self._in_text:
-            await self._send("transcript.final", text=self._in_text.strip(), provider="gemini-live")
-        vs.mark("model_done")
+        input_text = self._in_text.strip()
         text = "".join(self._out_text).strip()
+        if input_text or text:
+            try:
+                with self._db() as sdb:
+                    core = self.c.core(sdb)
+                    conv = core._conversation(vs.conversation_id, "voice")
+                    vs.conversation_id = conv.id
+                    if input_text:
+                        sdb.add(Message(conversation_id=conv.id, role="user", content=input_text))
+                    if text:
+                        sdb.add(Message(conversation_id=conv.id, role="nodo", content=text))
+                    sdb.commit()  # Live now has the same durable history as a text command.
+            except Exception:
+                log.exception("could not persist Live conversation turn")
+                await self._send("error", where="live-memory",
+                                 message="Non sono riuscito a salvare questo turno nel diario")
+        if input_text:
+            await self._send("transcript.final", text=input_text, provider="gemini-live")
+        vs.mark("model_done")
         if text:
             await self._send("nodo.response", text=text, conversation_id=vs.conversation_id,
                              intent="conversation", provider="gemini-live",
