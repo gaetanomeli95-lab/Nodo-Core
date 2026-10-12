@@ -92,5 +92,6 @@ desktop.ini
 *~
 
 nodo.log
+nodo-*.log
 nodo-diagnosi.json
 .local-voice/

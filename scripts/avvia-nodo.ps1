@@ -105,11 +105,30 @@ if (-not $SkipBuild) {
   }
 }
 
-# start
+# start: an older NODO still running (also one started in background by a coding agent) keeps the port busy
+# and the new version would not start. Stop it first.
+$busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+if ($busy) {
+  foreach ($procId in ($busy | Select-Object -ExpandProperty OwningProcess -Unique)) {
+    $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+    if ($p) {
+      Warn "C'e' gia' un programma sulla porta $Port ($($p.ProcessName), pid $procId): lo chiudo per avviare NODO aggiornato."
+      Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+    }
+  }
+  Start-Sleep -Seconds 2
+  if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
+    Warn "La porta $Port e' ancora occupata: riavvia il PC oppure avvia NODO con  avvia-nodo.bat -Port 8010"
+    Read-Host "Premi Invio per chiudere"; exit 1
+  }
+}
 $url = "http://127.0.0.1:$Port"
 Say "NODO e' acceso su $url  (chiudi questa finestra per spegnerlo)"
 if (-not $NoBrowser) { Start-Job -ScriptBlock { param($u) Start-Sleep 4; Start-Process $u } -ArgumentList $url | Out-Null }
 Push-Location $Api
 # il log resta anche in apps/api/nodo.log: utile per capire cosa e' successo dopo un errore
-& $Py -m uvicorn nodo.main:app --host 127.0.0.1 --port $Port 2>&1 | Tee-Object -FilePath (Join-Path $Api "nodo.log")
+$log = Join-Path $Api "nodo.log"
+try { $fs = [IO.File]::Open($log, 'Append', 'Write', 'ReadWrite'); $fs.Close() }
+catch { $log = Join-Path $Api ("nodo-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log") }  # nodo.log locked by another program
+& $Py -m uvicorn nodo.main:app --host 127.0.0.1 --port $Port 2>&1 | Tee-Object -FilePath $log
 Pop-Location
