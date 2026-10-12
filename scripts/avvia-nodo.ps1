@@ -130,5 +130,10 @@ Push-Location $Api
 $log = Join-Path $Api "nodo.log"
 try { $fs = [IO.File]::Open($log, 'Append', 'Write', 'ReadWrite'); $fs.Close() }
 catch { $log = Join-Path $Api ("nodo-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log") }  # nodo.log locked by another program
-& $Py -m uvicorn nodo.main:app --host 127.0.0.1 --port $Port 2>&1 | Tee-Object -FilePath $log
+# se NODO si ferma da solo (errore imprevisto) riparte dopo 10 secondi: di notte nessuno può riavviarlo
+while ($true) {
+  & $Py -m uvicorn nodo.main:app --host 127.0.0.1 --port $Port 2>&1 | Tee-Object -FilePath $log -Append
+  Warn "NODO si e' fermato (codice $LASTEXITCODE). Riparto tra 10 secondi... (chiudi la finestra per spegnerlo)"
+  Start-Sleep -Seconds 10
+}
 Pop-Location
