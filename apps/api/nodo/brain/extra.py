@@ -148,6 +148,13 @@ class ExtraTools:
         self._add("update_draft", "Cambia lo stato (idea/draft/approved/published) o il testo di una bozza esistente.",
                   _obj({"title": {**_STR, "description": "titolo attuale (anche parziale)"}, "status": _STR,
                         "body": _STR}, ["title"]), self.update_draft)
+        self._add("start_work", "Affida a NODO un LAVORO LUNGO da fare in background con il tuo abbonamento Claude: "
+                                "creare un piccolo progetto di più file, analizzare un testo o un documento, una "
+                                "ricerca approfondita sul web con relazione. Lavora in una cartella sua (niente "
+                                "shell, niente accesso al resto del PC) e ti avvisa quando ha finito; non pubblica "
+                                "nulla. Per risposte brevi o file singoli usa invece create_file.",
+                  _obj({"task": {**_STR, "description": "il lavoro, chiaro e completo, con tutto il contesto"}},
+                       ["task"]), self.start_work)
         self._add("nodo_health", "Come sta NODO stesso: quali accessi funzionano (Vercel, GitHub, AI, Telegram, voce) "
                                  "e cosa manca. Usalo se chiede «funziona tutto?» o «cosa manca?».",
                   _obj({}), self.nodo_health)
@@ -537,6 +544,20 @@ class ExtraTools:
         return {"updated": True, "title": x.title, "changes": changed,
                 "note": "NODO non pubblica nulla da solo: «published» è solo il segno che l'hai pubblicato tu"
                         if status == "published" else None}
+
+    async def start_work(self, task: str) -> dict:
+        from nodo.brain.workbench import provider_for_work, start_work, work_running
+        if self.c is None or self.c.files is None:
+            return {"started": False, "error": "archivio file non disponibile"}
+        if provider_for_work(self.c) is None:
+            return {"started": False, "error": "per i lavori lunghi serve l'abbonamento Claude collegato "
+                                               "(attiva-cervello.bat); per un file semplice uso create_file"}
+        if work_running() >= 2:
+            return {"started": False, "error": "ho già due lavori in corso: aspetta che ne finisca uno"}
+        job = start_work(self.c, self.org, task.strip()[:4000], self.conv.id)
+        return {"started": True, "job": job,
+                "next": "ci lavoro in background (da pochi minuti a un quarto d'ora); quando finisce te lo scrivo qui "
+                        "e su Telegram con i file pronti"}
 
     async def nodo_health(self) -> dict:
         from nodo.doctor import as_dicts, run_checks

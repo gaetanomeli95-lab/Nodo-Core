@@ -80,9 +80,10 @@ class ClaudeCodeProvider:
         env.pop("ANTHROPIC_API_KEY", None)        # make sure the subscription login is used
         return env
 
-    def _exec(self, args: list[str], stdin: bytes | None, timeout: float) -> subprocess.CompletedProcess:
+    def _exec(self, args: list[str], stdin: bytes | None, timeout: float,
+              cwd: Path | None = None) -> subprocess.CompletedProcess:
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
-        return subprocess.run(args, input=stdin, capture_output=True, env=self._env(), cwd=self._cwd,
+        return subprocess.run(args, input=stdin, capture_output=True, env=self._env(), cwd=cwd or self._cwd,
                               timeout=timeout, creationflags=flags)
 
     async def available(self) -> bool:
@@ -141,6 +142,48 @@ class ClaudeCodeProvider:
                 self._auth_ok, self._auth_checked_at = False, time.monotonic()
             raise ProviderError(f"Claude (abbonamento) errore: {detail.strip()}")
         return data
+
+    AGENT_TOOLS = "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch"   # no shell: it can read, write and search, not run
+
+    async def run_agent(self, task: str, workdir: Path, system: str, timeout: float = 900.0) -> str:
+        """A longer job: Claude Code with file and web tools, confined to `workdir` (no shell, no MCP). Returns its
+        final report. Used for «prepara un progetto», «analizza questo file», «fai una ricerca approfondita»."""
+        if not self.executable:
+            raise ProviderError("Claude Code non installato (comando 'claude' non trovato)")
+        workdir.mkdir(parents=True, exist_ok=True)
+        fd, sp_path = tempfile.mkstemp(prefix="nodo-sp-", suffix=".txt", dir=self._cwd)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(system)
+            args = [self.executable, "-p", "--output-format", "json", "--model", self.model,
+                    "--system-prompt-file", sp_path, "--tools", self.AGENT_TOOLS, "--permission-mode", "acceptEdits",
+                    "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"]
+            for _ in range(len(OPTIONAL_FLAGS) + 1):
+                try:
+                    proc = await asyncio.to_thread(self._exec, args, task.encode("utf-8"), timeout, workdir)
+                except subprocess.TimeoutExpired as e:
+                    raise ProviderError("il lavoro ha richiesto troppo tempo e l'ho interrotto") from e
+                except OSError as e:
+                    raise ProviderError(f"impossibile avviare Claude Code: {e}") from e
+                err = proc.stderr.decode("utf-8", "replace")
+                unknown = re.search(r"unknown option '(--[\w-]+)'", err)
+                if proc.returncode != 0 and unknown and unknown.group(1) in args:
+                    args.remove(unknown.group(1))     # older Claude Code: retry without that flag
+                    continue
+                break
+        finally:
+            try:
+                os.unlink(sp_path)
+            except OSError:
+                pass
+        text = proc.stdout.decode("utf-8", "replace").strip()
+        try:
+            data = json.loads(text[text.index("{"):]) if text else {}
+        except (ValueError, json.JSONDecodeError):
+            data = {}
+        if proc.returncode != 0 or data.get("is_error") or not data:
+            raise ProviderError(f"Claude (abbonamento) errore: {(str(data.get('result') or '') or err[-300:] or text[-300:]).strip()}")
+        return str(data.get("result") or "").strip()
 
     @staticmethod
     def _usage(data: dict, fallback_in: str, fallback_out: str) -> tuple[int, int]:

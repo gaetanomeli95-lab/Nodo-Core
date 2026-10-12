@@ -1,6 +1,7 @@
 """The brain's wider toolbox: clients, projects, tasks, reminders, site code, deployments, web, drafts, memory."""
 from __future__ import annotations
 
+import sys
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -155,3 +156,53 @@ async def test_every_tool_has_a_spec_the_models_can_use(box):
 
 def db_sites(box) -> int:
     return len(box.s.scalars(select(Site)).all())
+
+
+WORK_CLAUDE = r'''#!{python}
+import json, os, sys
+args = sys.argv[1:]
+if args[:2] == ["auth", "status"]:
+    print(json.dumps({{"loggedIn": True}}))
+    sys.exit(0)
+prompt = sys.stdin.read()
+open(os.environ["FAKE_WORK_LOG"], "w").write(json.dumps({{"args": args, "cwd": os.getcwd(), "prompt": prompt}}))
+open("piano.md", "w").write("# Piano\\n1. Partire\\n")
+open(".nascosto", "w").write("no")
+print(json.dumps({{"type": "result", "is_error": False, "result": "Ho scritto il piano."}}))
+'''
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the fake CLI is a shebang script")
+async def test_long_work_runs_in_its_own_folder_and_reports_back(box, db, tmp_path, monkeypatch):
+    import json
+    import stat
+
+    from nodo.brain import workbench as W
+    from nodo.providers.claude_cli import ClaudeCodeProvider
+    from nodo.services.files import FileStore
+
+    exe = tmp_path / "claude"
+    exe.write_text(WORK_CLAUDE.format(python=sys.executable), encoding="utf-8")
+    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("FAKE_WORK_LOG", str(tmp_path / "log.json"))
+    box.c.providers.insert(0, ClaudeCodeProvider("sonnet", executable=str(exe)))
+    box.c.files = FileStore(tmp_path / "files")
+    out = await box.call("start_work", {"task": "Prepara un piano di lancio per il sito di Bar Sole"})
+    assert out["started"]
+    db.commit()
+    await W.drain()
+    db.expire_all()
+    seen = json.loads((tmp_path / "log.json").read_text())
+    assert "piano di lancio" in seen["prompt"] and "lavori" in seen["cwd"]          # its own folder
+    tools = seen["args"][seen["args"].index("--tools") + 1]
+    assert "Bash" not in tools and "Write" in tools                                  # no shell
+    msg = [m.content for m in db.scalars(select(Message).where(Message.role == "nodo"))]
+    assert any("Ho scritto il piano" in m and "piano.md" in m for m in msg)
+    assert not any(".nascosto" in m for m in msg)
+    assert any(f.name.endswith("piano.md") for f in (tmp_path / "files").iterdir())
+    assert any("Ho scritto il piano" in m for m in box.c.notifier.sent)
+
+
+async def test_long_work_needs_the_subscription(box):
+    out = await box.call("start_work", {"task": "fai qualcosa"})
+    assert out["started"] is False and "abbonamento" in out["error"]

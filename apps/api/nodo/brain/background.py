@@ -95,7 +95,7 @@ async def _after_current_turn(db, conversation_id: str, started: datetime, timeo
                           .order_by(Message.created_at.desc()).limit(1)).first()
         at = last.created_at if last and last.created_at.tzinfo else (last.created_at.replace(tzinfo=UTC)
                                                                        if last else None)
-        if last is not None and last.role == "nodo" and at >= started:
+        if last is None or (last.role == "nodo" and at >= started):
             return
         db.expire_all()
         await asyncio.sleep(1)
