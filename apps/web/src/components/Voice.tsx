@@ -147,11 +147,20 @@ function toB64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
+export type VoiceEngine = "live" | "api" | "browser";
+const asEngine = (e: unknown): VoiceEngine => (e === "live" || e === "api" ? e : "browser");
+
 export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) {
   const [state, setState] = useState<VoiceState>("CONNECTING");
   const [connected, setConnected] = useState(false);
   const [partial, setPartial] = useState("");
-  const [engine, setEngine] = useState<"live" | "browser">("browser");   // live = Gemini Live (real-time voice)
+  // live = Gemini Live (real-time, Gemini hears pauses); api = server STT/TTS over the same mic stream, pauses
+  // detected here; browser = Web Speech API push-to-talk
+  const [engine, setEngine] = useState<VoiceEngine>("browser");
+  const engineRef = useRef<VoiceEngine>("browser");
+  const stateRef = useRef<VoiceState>("CONNECTING");
+  const playingRef = useRef(false);
+  const vad = useRef({ voiced: false, lastVoice: 0, since: 0, floor: 0.004, preroll: [] as Uint8Array[] });
   const [liveOn, setLiveOn] = useState(false);                            // live mode: conversation mic open
   const [audioPlaying, setAudioPlaying] = useState(false);
   const [recovering, setRecovering] = useState(false);
@@ -175,6 +184,9 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const liveMic = useRef<{ ctx: AudioContext; stream: MediaStream } | null>(null);
   const cbRef = useRef(cb);
   cbRef.current = cb;
+  engineRef.current = engine;
+  stateRef.current = state;
+  playingRef.current = audioPlaying;
 
   const ttsWarned = useRef(false);
   const ttsFail = (msg: string) => {
@@ -230,7 +242,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
                 window.speechSynthesis.getVoices();   // Chrome loads voices lazily: warm them up
                 window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
               }
-              setEngine(e.engine === "live" ? "live" : "browser");
+              setEngine(asEngine(e.engine));
               setConnected(true);
               setRecovering(false);
               setState(((e.state as VoiceState) || "IDLE"));   // ready: the button works from here
@@ -254,11 +266,15 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
               speechQueue.current.push(e.text as string);
               if (!speaking.current) browserTtsNext();
               break;
-            case "voice.engine":       // live session died mid-conversation: back to push-to-talk
+            case "voice.engine": {     // live session died mid-conversation
               setRecovering(false);
-              setEngine(e.engine === "live" ? "live" : "browser");
-              if (e.engine !== "live") { stopLiveMic(); stopLocalAudio(); setLiveOn(false); setState("IDLE"); }
+              const next = asEngine(e.engine);
+              setEngine(next);
+              stopLocalAudio();        // whatever Live was still saying is stale
+              if (next === "browser") { stopLiveMic(); setLiveOn(false); setState("IDLE"); }   // back to push-to-talk
+              else if (next === "api") { vad.current.voiced = false; setState("IDLE"); }        // same mic, pauses detected here
               break;
+            }
             case "voice.connection":
               setRecovering(e.status === "reconnecting");
               break;
@@ -339,8 +355,33 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
         if (epoch !== micEpoch.current) return;
         const pcm16 = new Uint8Array(ev.data as ArrayBuffer);
         const samples = new Int16Array(ev.data as ArrayBuffer);
-        inputLevel.current = Math.sqrt(samples.reduce((sum, n) => sum + (n / 32768) ** 2, 0) / samples.length);
-        if (pcm16.length) sock.current?.send({ type: "audio.chunk", data: toB64(pcm16), mime: "audio/pcm;rate=16000" });
+        const rms = Math.sqrt(samples.reduce((sum, n) => sum + (n / 32768) ** 2, 0) / samples.length);
+        inputLevel.current = rms;
+        if (!pcm16.length) return;
+        const frame = { type: "audio.chunk", data: toB64(pcm16), mime: "audio/pcm;rate=16000" };
+        if (engineRef.current !== "api") { sock.current?.send(frame); return; }   // Live: Gemini hears everything
+        // api engine: speak, pause ~0.8 s, the utterance goes to the server. Nothing is sent while NODO works
+        // or speaks (no echo turned into a question); interrupting is a click.
+        const v = vad.current, now = Date.now();
+        const busy = playingRef.current || !["IDLE", "LISTENING"].includes(stateRef.current);
+        if (busy) { v.voiced = false; v.preroll = []; return; }
+        if (!v.voiced) v.floor = v.floor * 0.95 + rms * 0.05;   // noise floor follows the room while quiet
+        const threshold = Math.max(0.012, v.floor * 3.5);
+        if (rms > threshold) {
+          if (!v.voiced) {
+            v.voiced = true; v.since = now;
+            for (const p of v.preroll) sock.current?.send({ ...frame, data: toB64(p) });   // the word's first syllable
+            v.preroll = [];
+          }
+          v.lastVoice = now;
+          sock.current?.send(frame);
+        } else if (v.voiced) {
+          sock.current?.send(frame);                       // trailing silence belongs to the utterance
+          if (now - v.lastVoice > 800 || now - v.since > 30_000) { v.voiced = false; sock.current?.send({ type: "speech.end" }); }
+        } else {
+          v.preroll.push(pcm16);
+          if (v.preroll.length > 12) v.preroll.shift();    // ~240 ms
+        }
       };
       src.connect(node);
       const silent = ctx.createGain();
@@ -386,7 +427,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
 
   const pressStart = () => {
     if (!connected) return;
-    if (engine === "live") { void liveButton(); return; }
+    if (engine !== "browser") { void liveButton(); return; }   // live and api: one click opens the conversation
     if (toggled.current) { toggled.current = false; finishListening(); return; }  // second click: send
     if (state === "SPEAKING" || state === "THINKING" || state === "ACTING") interrupt(); // barge-in
     if (state !== "IDLE" && state !== "LISTENING" && state !== "INTERRUPTED" && state !== "CONNECTING"
@@ -490,7 +531,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   };
 
   const pressStop = () => {
-    if (engine === "live") return;   // live conversation toggles on click, not on press-and-hold
+    if (engine !== "browser") return;   // live/api conversation toggles on click, not on press-and-hold
     if (!held.current || toggled.current) return;
     if (Date.now() - pressedAt.current < 400) { toggled.current = true; return; }  // a click: keep listening
     finishListening();
@@ -509,7 +550,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     sock.current?.send({ type: "transcript.final", text });
   };
 
-  const toggleMic = () => { pressStart(); if (engine !== "live") pressStop(); };
+  const toggleMic = () => { pressStart(); if (engine === "browser") pressStop(); };
   const endConversation = () => {
     sock.current?.send({ type: "interrupt", reason: "microphone_off" });
     stopLiveMic(); stopLocalAudio(); setLiveOn(false); setState("IDLE");
@@ -545,8 +586,11 @@ export function VoiceDock({ voice, onInterrupt }: {
 }) {
   const { state, connected, partial, engine, liveOn, pressStart, pressStop } = voice;
   const label = !connected ? "voce offline"
-    : engine === "live" && !liveOn ? "Parla con NODO"
-    : engine === "live" && state === "SPEAKING" ? "NODO parla · tocca per interrompere"
+    : engine !== "browser" && !liveOn ? "Parla con NODO"
+    : engine !== "browser" && state === "SPEAKING" ? "NODO parla · tocca per interrompere"
+    : engine === "api" && state === "TRANSCRIBING" ? "Ho sentito · trascrivo"
+    : engine === "api" && (state === "THINKING" || state === "UNDERSTANDING" || state === "ACTING") ? "Ci penso · tocca per fermare"
+    : engine === "api" ? "Ti ascolto · fai una pausa quando hai finito"
     : engine === "live" ? "Ti ascolto · clicca per chiudere"
     : state === "LISTENING" ? "Ti ascolto · clicca per inviare"
     : state === "TRANSCRIBING" ? "Trascrivo"

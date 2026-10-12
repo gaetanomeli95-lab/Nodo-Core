@@ -13,7 +13,7 @@ const DOING: Record<string, string> = {
   complete_task: "Aggiorno l'attività", remember: "Aggiorno la memoria", recall: "Cerco nella memoria", save_draft: "Salvo la bozza",
 };
 const TITLES: Record<string, string> = { sites_status: "I tuoi siti", today_agenda: "Da qui si comincia",
-  projects: "I progetti sul tavolo", night_report: "Mentre non c'eri" };
+  projects: "I progetti sul tavolo", night_report: "Mentre non c'eri", files: "File pronto" };
 const STATUS: Record<string, string> = { ok: "Regolare", warning: "Da controllare", critical: "Richiede attenzione",
   unknown: "Da verificare", open: "Da fare", in_progress: "In corso", blocked: "In attesa", active: "Attivo", done: "Completato" };
 const loadConv = () => { try { return localStorage.getItem("nodo.conversation"); } catch { return null; } };
@@ -101,7 +101,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     const text = input.trim();
     if (!text || busy) return;
     setInput(""); setBusy(true); setError(null);
-    if (voice.engine === "live" && voice.connected) {
+    if (voice.engine !== "browser" && voice.connected) {   // live/api: typed text is answered by voice too
       await voice.sendText(text).catch((e: Error) => { setError(e.message); setBusy(false); }); return;
     }
     setTurns((ts) => [...ts, { who: "user", text, done: true }]);
@@ -132,7 +132,9 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const subtitle = mode === "reconnect" ? "Sto riconnettendo la voce. Attendi un momento prima di parlare."
     : activity || (mode === "rest" ? "Un pensiero, un progetto, una cosa da risolvere."
       : mode === "approve" ? "Guarda la proposta. La scelta resta tua."
-      : mode === "listen" ? "Prenditi il tuo tempo." : mode === "speak" ? "Puoi interrompermi quando vuoi." : "Collego la tua richiesta alle cose che contano.");
+      : mode === "listen" ? (voice.engine === "api" ? "Parla, poi fai una pausa: ti rispondo in qualche secondo." : "Prenditi il tuo tempo.")
+      : mode === "speak" ? (voice.engine === "api" ? "Per interrompermi tocca Interrompi." : "Puoi interrompermi quando vuoi.")
+      : "Collego la tua richiesta alle cose che contano.");
 
   return <section className={`conversation-room ${diary ? "with-diary" : ""}`}>
     <div className="voice-stage">
@@ -154,7 +156,9 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         <div className="sheet-heading"><span className="sheet-kicker">SUL TAVOLO</span><button aria-label="Riponi scheda" onClick={() => setSurface(null)}>×</button></div>
         <h3>{TITLES[surface.view] || "Il punto della situazione"}</h3>
         {surface.summary && <p>{surface.summary}</p>}
-        <ul>{surface.rows.map((row, i) => <li key={i}><span>{String(row.title || row.name || "")}</span><small>{STATUS[String(row.status)] || String(row.project || "")}</small></li>)}</ul>
+        <ul>{surface.rows.map((row, i) => <li key={i}><span>{String(row.title || row.name || "")}</span>
+          {row.url ? <a href={String(row.url)} target="_blank" rel="noreferrer">Apri ↗</a>
+                   : <small>{STATUS[String(row.status)] || String(row.project || "")}</small>}</li>)}</ul>
         {!surface.summary && !surface.rows.length && <p>Non ci sono elementi da mostrare.</p>}
       </section>}
       <div className="voice-controls">
@@ -168,7 +172,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       {writing && <form className="thought-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
         <input autoFocus aria-label="Scrivi a NODO" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Da dove cominciamo?" />
         <button disabled={!input.trim() || busy}>Invia ↗</button></form>}
-      <footer className="stage-footnote"><span>{voice.microphoneOn ? "MICROFONO ATTIVO" : "ATTIVA LA VOCE PER COMINCIARE"}</span><span>{voice.engine === "live" ? "Conversazione dal vivo" : "Voce del browser"}</span></footer>
+      <footer className="stage-footnote"><span>{voice.microphoneOn ? "MICROFONO ATTIVO" : "ATTIVA LA VOCE PER COMINCIARE"}</span><span>{voice.engine === "live" ? "Conversazione dal vivo" : voice.engine === "api" ? "Voce Gemini · pause di qualche secondo" : "Voce del browser"}</span></footer>
     </div>
     {diary && <aside className="conversation-diary"><header><span className="eyebrow">DIARIO</span><button className="quiet-button" onClick={() => setDiary(false)}>Chiudi</button></header>
       <p className="diary-intro">Le parole restano qui. Il lavoro continua al centro.</p>

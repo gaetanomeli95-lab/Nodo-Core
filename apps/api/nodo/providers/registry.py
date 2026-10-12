@@ -30,7 +30,8 @@ def build_providers(s: Settings) -> list[ModelProvider]:
                                               extra_headers={"X-Title": "NODO CORE"}))
     if s.gemini_api_key:
         providers.append(OpenAICompatProvider("gemini", "https://generativelanguage.googleapis.com/v1beta/openai",
-                                              s.gemini_api_key, gemini_descriptors(s.gemini_model)))
+                                              s.gemini_api_key, gemini_descriptors(s.gemini_model),
+                                              reasoning_effort=s.gemini_reasoning or None))
     if s.anthropic_api_key:
         providers.append(AnthropicProvider(s.anthropic_api_key, s.anthropic_model, s.anthropic_base_url))
     if s.claude_subscription and s.env not in ("TEST", "DEMO"):

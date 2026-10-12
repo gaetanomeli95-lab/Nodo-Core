@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     groq_model: str = "llama-3.3-70b-versatile"
     gemini_api_key: str | None = None            # Google AI Studio key: free tier on Flash models
     gemini_model: str = "gemini-3.5-flash"     # 2.5 is closed to keys created after the 3.x rollout
+    gemini_reasoning: str = "none"             # none | low | medium | high: hidden thinking eats max_tokens (verified: empty answers)
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-sonnet-4-5"
     anthropic_base_url: str = "https://api.anthropic.com/v1"
@@ -71,9 +72,15 @@ class Settings(BaseSettings):
     brain_max_steps: int = 6                    # tool rounds per message
     brain_history: int = 16                     # previous messages of the conversation it remembers
 
+    # --- Personal knowledge: imported ChatGPT/Claude exports (docs/CONOSCENZA.md) ---
+    knowledge_distill: bool = True              # after an import, extract durable facts with the brain in background
+    knowledge_distill_max: int = 300            # newest conversations distilled per run (one model call each)
+
     # --- Voice ---
-    stt_provider: str = "browser"   # browser | openai | fake
-    tts_provider: str = "browser"   # browser | openai | fake
+    stt_provider: str = "auto"      # auto (gemini+groq chain with keys, else browser) | gemini | groq | browser | openai | fake
+    tts_provider: str = "auto"      # auto (gemini+edge chain, else browser) | gemini | edge | browser | openai | fake
+    gemini_tts_model: str = "gemini-3.8-flash-lite-tts"   # standard-API voice when Live is down (~2 s per sentence)
+    gemini_image_model: str = "gemini-3.1-flash-image"    # text -> image for the generate_image tool
     tts_voice: str = "alloy"
     # Real-time voice (Gemini Live API): talk to NODO like to a person — natural voice, ~1s, barge-in.
     # Needs the FREE Gemini key (aistudio.google.com). Without it NODO keeps the browser voice chain.
@@ -84,6 +91,7 @@ class Settings(BaseSettings):
     # --- Tools ---
     github_token: str | None = None
     github_connector: str = "auto"  # auto | http | fake
+    files_dir: str = ""             # where files NODO creates live (default: ./files next to the api dir)
 
     # --- Budgets ---
     agent_max_model_calls: int = 4

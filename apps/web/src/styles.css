@@ -162,6 +162,22 @@ pre.diff .add { color: #9fd3a8; background: rgba(120, 200, 140, .08); } pre.diff
 .keyrow { display: flex; gap: 8px; }
 .keyrow select { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font: inherit; font-size: 12px; }
 .keyrow input { flex: 1.4; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font: inherit; font-size: 12px; }
+/* Memoria: import, progresso di lettura, ricerca nelle vecchie conversazioni */
+.memory .howto { margin: 6px 0 12px; padding-left: 18px; font-size: 12px; color: var(--muted); }
+.memory .howto li { margin: 3px 0; } .memory .howto b { color: var(--text); }
+.memory input[type="file"] { flex: 1; background: var(--bg); color: var(--text); border: 1px dashed var(--line); border-radius: 6px; padding: 8px 10px; font: inherit; font-size: 12px; }
+.memory .sources, .memory .hits, .memory .facts-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.memory .source { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.memory .source-head { display: flex; gap: 10px; align-items: baseline; font-size: 13px; }
+.memory .source-head small { margin-left: auto; }
+.memory .source-bar { height: 3px; background: var(--line); border-radius: 2px; margin: 8px 0 6px; overflow: hidden; }
+.memory .source-bar i { display: block; height: 100%; background: var(--accent); transition: width .6s ease; }
+.memory .source.failed .source-bar i, .memory .source.no_model .source-bar i { background: var(--warn); }
+.memory .source-stats { margin: 0 0 8px; font-size: 12px; color: var(--muted); } .memory .source-stats b { color: var(--text); font-weight: 500; }
+.memory .hits li { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.memory .hits li p { margin: 4px 0 0; font-size: 12px; color: var(--muted); white-space: pre-wrap; }
+.memory .facts-list li { padding: 6px 0; font-size: 13px; border-bottom: 1px solid var(--line); }
+.memory .facts-list .tag { margin: 0 6px 0 0; }
 .pulse li.clickable { cursor: pointer; }
 .pulse b.warn { color: var(--warn); }
 .alerts li { cursor: pointer; } .alerts li.critical { border-left-color: var(--danger); }

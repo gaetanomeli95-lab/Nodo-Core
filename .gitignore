@@ -42,6 +42,8 @@ ENV/
 *.sqlite
 *.sqlite3
 nodo.db*
+# files NODO creates for the user (documents, images)
+apps/api/files/
 
 # ---- node / web ---------------------------------------------------------------
 node_modules/

@@ -18,7 +18,8 @@ from nodo.config import get_settings
 from nodo.db.session import make_engine
 
 # (revision, a table that exists once that revision is applied), oldest first
-MARKERS = [("51ea0000e744", "projects"), ("b2f3a91c7d01", "voice_turn_metrics"), ("c7d4e2f1a9b0", "sites")]
+MARKERS = [("51ea0000e744", "projects"), ("b2f3a91c7d01", "voice_turn_metrics"), ("c7d4e2f1a9b0", "sites"),
+           ("d9a1c4e7b2f3", "knowledge_sources")]
 
 
 def main() -> int:

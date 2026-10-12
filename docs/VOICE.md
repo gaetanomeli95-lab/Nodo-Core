@@ -130,6 +130,16 @@ plus `INTERRUPTED`, `WAITING_FOR_APPROVAL`, `ERROR`, `CLOSED`. Legal transitions
 `GET /api/v1/voice/config` reports `stt.location` / `tts.location`:
 - `browser` (default, FREE): Web Speech API STT + `speechSynthesis`. The browser may use a remote recognition service; this is not an offline guarantee. The
   client sends `transcript.partial/final` over the socket. Browser TTS receives `tts.speak` text events.
+- `cloud` (`gemini`, default with `NODO_STT_PROVIDER/NODO_TTS_PROVIDER=auto` and a Gemini key) — **engine
+  `api`**, the voice NODO keeps when Live is unavailable (quota, model, network). Free tier, quotas separate
+  from Live. The browser streams the same 16 kHz PCM worklet frames as Live; a small client-side pause
+  detector (~0.8 s of silence after speech, 240 ms pre-roll, nothing sent while NODO works or speaks) ends
+  the utterance with `speech.end`; the runtime buffers the PCM (350 ms minimum, 60 s maximum), wraps it in
+  WAV and asks `gemini-3.5-flash` for a bare transcript (`thinkingLevel: minimal`: hidden thinking otherwise
+  eats the token budget); the answer is spoken sentence by sentence by `NODO_GEMINI_TTS_MODEL`
+  (`gemini-3.8-flash-lite-tts`, same `NODO_LIVE_VOICE`) and streamed as `tts.chunk audio/pcm;rate=24000`.
+  Measured 11/10/2026 from Windows: ~1 s round trip to the text model, ~2 s per short TTS sentence, 2–5 s
+  per transcription. Not real-time: barge-in is a click, not a word. Empty transcripts never become turns.
 - `cloud` (`openai`): audio chunks buffered → `/voice/transcribe` contract inside the runtime; `tts.chunk`
   streams base64 audio back. Refused in `NODO_MODE=FREE` unless `NODO_ALLOW_PAID_IN_FREE_MODE=true`.
 - `local` (planned): Whisper/Piper or any `StreamingSTT/TTS` implementation on a NODO Node.
@@ -170,3 +180,10 @@ Hold the mic button or Space. Web Speech API produces partials live; without it,
 
 See [VOICE_PRESENCE_REVIEW.md](VOICE_PRESENCE_REVIEW.md) for the per-turn receive fix, recovery policy,
 current voice-first UI, local diagnostic report and Windows acceptance protocol.
+
+## Motore di riserva e free tier (fallback chain)
+Gerarchia voce: **Live → API standard → browser**. In `auto` il server costruisce catene con riserve
+gratuite: STT `gemini → groq` (Whisper `whisper-large-v3-turbo`, serve `NODO_GROQ_API_KEY`), TTS
+`gemini → edge` (edge-tts, voci neurali Microsoft, nessuna chiave). Un fallimento su un provider
+(quota, 5xx, timeout) passa al successivo nello stesso turno; il browser resta l'ultima spiaggia.
+Provider espliciti: `NODO_STT_PROVIDER=gemini|groq|browser|openai`, `NODO_TTS_PROVIDER=gemini|edge|browser|openai`.

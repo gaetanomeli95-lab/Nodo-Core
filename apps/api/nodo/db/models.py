@@ -149,6 +149,33 @@ class Document(Base, TimestampMixin):
     sensitivity: Mapped[str] = mapped_column(String(32), default=Sensitivity.INTERNAL)
 
 
+class KnowledgeSource(Base, TimestampMixin):
+    """One import of personal knowledge (a ChatGPT/Claude export, later mail or files). Distillation into
+    `MemoryFact` rows runs in the background; `stats` tracks its progress honestly."""
+    __tablename__ = "knowledge_sources"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(32))                 # chatgpt | claude | file
+    label: Mapped[str] = mapped_column(String(300))
+    status: Mapped[str] = mapped_column(String(20), default="imported")  # imported | distilling | done | partial | failed | no_model
+    note: Mapped[str | None] = mapped_column(Text)
+    stats: Mapped[dict] = mapped_column(JSON, default=dict)      # conversations, chunks, distilled, facts, skipped
+    sensitivity: Mapped[str] = mapped_column(String(32), default=Sensitivity.CONFIDENTIAL)
+
+
+class KnowledgeChunk(Base):
+    """A searchable slice of an imported conversation/document (full text; the FTS index mirrors it)."""
+    __tablename__ = "knowledge_chunks"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    source_id: Mapped[str] = mapped_column(ForeignKey("knowledge_sources.id"), index=True)
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), index=True)
+    seq: Mapped[int] = mapped_column(Integer, default=0)
+    text: Mapped[str] = mapped_column(Text)
+    happened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ContentItem(Base, TimestampMixin):
     __tablename__ = "content_items"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)

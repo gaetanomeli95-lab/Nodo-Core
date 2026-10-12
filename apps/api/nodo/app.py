@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -37,6 +38,7 @@ class Container:
     demo: object | None = None            # DemoWorld in NODO_ENV=DEMO
     scheduler: object | None = None       # NightScheduler when running inside the API
     telegram: object | None = None        # TelegramChannel (two-way) when configured
+    files: object | None = None           # FileStore: files NODO creates for you
     night_verify_delay: float = 20.0
     night_retry_delay: float = 5.0
     night_poll_interval: float = 15.0
@@ -98,8 +100,11 @@ def build_container(settings: Settings | None = None, **overrides) -> Container:
             prober = SimulatedProber(vercel)  # type: ignore[arg-type]
         else:
             prober = BrowserProber() if s.night_browser_checks else HttpProber()
+    from nodo.services.files import FileStore
+    root = Path(s.files_dir) if s.files_dir else Path(__file__).resolve().parents[1] / "files"
     c = Container(s, providers, gh, stt, tts, VoiceSessionStore(), PermissionPolicy(), vercel=vercel, repo=repo,
-                  prober=prober, notifier=build_notifier(s) if demo is None else NullNotifier(), demo=demo)
+                  prober=prober, notifier=build_notifier(s) if demo is None else NullNotifier(), demo=demo,
+                  files=FileStore(root))
     for k, v in overrides.items():
         setattr(c, k, v)
     return c

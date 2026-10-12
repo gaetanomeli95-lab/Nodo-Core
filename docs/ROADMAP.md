@@ -29,8 +29,10 @@ agent memory (`MemoryFact.layer = "agent"`).
 Done: approved actions are executed (REST + voice), GitHub branch/commit/PR/merge/close/issues, Vercel
 deploys/logs/rollback/promote/redeploy (night shift, ADR-009).
 Seams: `ToolSpec`/`ToolAction` with levels, `ToolExecutor` with approvals, `Approval` records + API.
-Next: execute approved actions (resume `ToolExecution` on `approval.approved`); GitHub issues/PR comments;
-Google Drive/Calendar/Gmail; documents ingestion → `Document` + facts; coding-agent execution provider.
+Done: personal knowledge import (ChatGPT/Claude exports → `Document` + FTS chunks → distilled facts with
+provenance, `docs/CONOSCENZA.md`).
+Next: GitHub issues/PR comments; Gmail read-only → same ingestion path; Google Drive/Calendar; fact
+confirmation UI; coding-agent execution provider.
 
 ## Phase 4b — Brain ✅
 - Tool-calling across providers (Anthropic, OpenAI-compatible incl. Gemini/Groq, Claude subscription via Claude Code)

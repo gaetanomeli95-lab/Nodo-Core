@@ -113,3 +113,71 @@ async def test_fallback_on_provider_error_is_recorded():
     assert res.text == "ciao"
     assert [x.status for x in records] == ["failed", "ok"]
     assert records[1].provider == "deterministic" and records[1].estimated_cost == 0
+
+
+async def test_openai_compat_passes_reasoning_effort_to_thinking_models():
+    """Gemini 3.x bills hidden thinking inside max_tokens: without `reasoning_effort` the answer came back empty
+    with finish_reason=length (verified on the real API). The provider must send it in both code paths."""
+    import json
+
+    import httpx
+
+    from nodo.providers.base import FunctionSpec
+    from nodo.providers.openai_compat import OpenAICompatProvider, gemini_descriptors
+
+    bodies: list[dict] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        if bodies[-1].get("stream"):
+            return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"[]"}}]}\n\ndata: [DONE]\n\n')
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}], "usage": {}})
+
+    p = OpenAICompatProvider("gemini", "https://example.test/v1", "k", gemini_descriptors("gemini-3.5-flash"),
+                             transport=httpx.MockTransport(handle), reasoning_effort="none")
+    assert (await collect(p.stream("gemini-3.5-flash", [ChatMessage("user", "ciao")]))).text == "[]"
+    await p.complete_tools("gemini-3.5-flash", [{"role": "user", "content": "ciao"}],
+                           [FunctionSpec("f", "d", {"type": "object", "properties": {}})])
+    assert [b["reasoning_effort"] for b in bodies] == ["none", "none"]
+
+    plain = OpenAICompatProvider("groq", "https://example.test/v1", "k", gemini_descriptors("x"),
+                                 transport=httpx.MockTransport(handle))
+    await plain.complete_tools("x", [{"role": "user", "content": "ciao"}], [])
+    assert "reasoning_effort" not in bodies[-1]
+
+
+async def test_openai_compat_echoes_gemini_thought_signatures_on_tool_calls():
+    """Gemini 3.x returns `tool_calls[i].extra_content.google.thought_signature` and answers HTTP 400 on the next
+    turn if it is not sent back with that call (seen live: 'Function call is missing a thought_signature')."""
+    import json
+
+    import httpx
+
+    from nodo.providers.base import FunctionSpec
+    from nodo.providers.openai_compat import OpenAICompatProvider, gemini_descriptors
+
+    bodies: list[dict] = []
+    sig = {"google": {"thought_signature": "abc"}}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"tool_calls": [
+            {"id": "call_1", "type": "function", "extra_content": sig,
+             "function": {"name": "clock", "arguments": "{\"city\": \"Palermo\"}"}}]}}], "usage": {}})
+
+    p = OpenAICompatProvider("gemini", "https://example.test/v1", "k", gemini_descriptors("gemini-3.5-flash"),
+                             transport=httpx.MockTransport(handle))
+    spec = [FunctionSpec("clock", "ora", {"type": "object", "properties": {}})]
+    turn = await p.complete_tools("gemini-3.5-flash", [{"role": "user", "content": "che ore sono?"}], spec)
+    assert turn.tool_calls[0].id == "call_1" and turn.tool_calls[0].arguments == {"city": "Palermo"}
+    history = [{"role": "user", "content": "che ore sono?"},
+               {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "name": "clock", "arguments": {"city": "Palermo"}}]},
+               {"role": "tool", "tool_call_id": "call_1", "name": "clock", "content": "{\"time\": \"10:00\"}"}]
+    await p.complete_tools("gemini-3.5-flash", history, spec)
+    sent = bodies[-1]["messages"][1]["tool_calls"][0]
+    assert sent["extra_content"] == sig and sent["function"]["name"] == "clock"
+    # unknown ids (another provider's history) are sent untouched
+    history[1]["tool_calls"][0]["id"] = "other"
+    history[2]["tool_call_id"] = "other"
+    await p.complete_tools("gemini-3.5-flash", history, spec)
+    assert "extra_content" not in bodies[-1]["messages"][1]["tool_calls"][0]

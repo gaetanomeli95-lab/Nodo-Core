@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from nodo.api import command, entities, night, voice, voice_ws
+from nodo.api import command, entities, files, knowledge, night, voice, voice_ws
 from nodo.app import build_container
 from nodo.config import Settings, get_settings
 from nodo.db.session import get_engine, session_scope
@@ -60,6 +60,8 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
     app.include_router(voice.router)
     app.include_router(voice_ws.router)
     app.include_router(night.router)
+    app.include_router(knowledge.router)
+    app.include_router(files.router)
 
     @app.get("/health")
     def health():

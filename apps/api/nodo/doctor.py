@@ -91,6 +91,14 @@ async def run_checks(c) -> list[Check]:
                      "" if why is None else
                      "Chiave gratuita: aistudio.google.com → Get API key → copiala in NODO_GEMINI_API_KEY "
                      "nel file apps/api/.env, poi riavvia NODO."))
+    api_voice = getattr(c.stt, "accepts_pcm", False) and c.tts.location != "browser"
+    tts_voice = getattr(c.tts, "voice", "") or ""
+    out.append(Check("Voce di riserva (quando Live non c'è)", "ok" if api_voice else "optional",
+                     (f"server: {c.stt.name} ti ascolta, {c.tts.name} parla"
+                      + (f" ({tts_voice})" if tts_voice else "") + ". Qualche secondo per turno.")
+                     if api_voice else f"voce del browser ({c.stt.name}/{c.tts.name}): dipende da Chrome/Edge.",
+                     "" if api_voice else "Con una chiave Gemini e NODO_STT_PROVIDER/NODO_TTS_PROVIDER=auto NODO "
+                                          "parla anche senza Live."))
     paused = cooldowns()
     if paused:
         out.append(Check("Modelli in pausa", "warning",

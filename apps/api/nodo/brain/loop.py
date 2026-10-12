@@ -70,7 +70,16 @@ class Brain:
             lines.append(f"Siti seguiti ({len(sites)}): " + ", ".join(f"{x.name} [{st.get(x.status, x.status)}]"
                                                                         for x in sites[:25]) + ".")
         else:
-            lines.append("Siti seguiti: nessuno ancora (manca il collegamento a Vercel o non sono stati aggiunti).")
+            lines.append("Siti seguiti: nessuno ancora." + (" Vercel è collegato: puoi importarli con sync_sites."
+                         if getattr(self.core.container, "vercel", None) is not None else
+                         " Manca il collegamento a Vercel (token nella scheda Accessi)."))
+        from nodo.tools.github import HttpGitHubConnector
+        access = [name for name, ok in
+                  (("GitHub", bool(self.settings.github_token)
+                    and isinstance(getattr(self.core.container, "github", None), HttpGitHubConnector)),
+                   ("Vercel", getattr(self.core.container, "vercel", None) is not None)) if ok]
+        if access:
+            lines.append("Accessi collegati e verificati: " + " e ".join(access) + ".")
         projects = self.s.scalars(select(Project).where(Project.organization_id == self.org,
                                                         Project.status == "active").order_by(Project.priority)).all()
         if projects:
@@ -90,9 +99,14 @@ class Brain:
         facts = self.s.scalars(select(MemoryFact).where(
             MemoryFact.organization_id == self.org, MemoryFact.subject_type == "user",
             MemoryFact.status.in_((FactStatus.CONFIRMED, FactStatus.INFERRED)), MemoryFact.valid_until.is_(None))
-            .order_by(MemoryFact.recorded_at.desc()).limit(15)).all()
+            .order_by(MemoryFact.status, MemoryFact.confidence.desc(), MemoryFact.recorded_at.desc()).limit(25)).all()
         if facts:
             lines.append("Cosa sai di Gaetano: " + " | ".join(f.content for f in facts) + ".")
+        from nodo.knowledge.service import KnowledgeService
+        k = KnowledgeService(self.s, self.org).overview()
+        if k["conversations"]:
+            lines.append(f"Hai accesso a {k['conversations']} vecchie conversazioni di Gaetano con ChatGPT/Claude "
+                         f"(search_knowledge) e a {k['facts']} fatti distillati da esse.")
         return "\n".join(lines)
 
     # ------------------------------------------------------------------ the loop
@@ -145,6 +159,10 @@ class Brain:
                 result = await box.call(c.name, c.arguments)
                 yield _ev("step", rid, step=f"tool:{c.name}", status="done",
                           ok="error" not in result)
+                if c.name in ("create_file", "generate_image") and result.get("url"):
+                    yield _ev("ui.present", rid, view="files",
+                              rows=[{"title": result.get("created"), "url": result["url"]}],
+                              summary=str(result.get("note") or ""))
                 messages.append({"role": "tool", "tool_call_id": c.id, "name": c.name,
                                  "content": result_text(result)})
                 for b in box.bindings:

@@ -52,8 +52,12 @@ _APPROVE_RE = re.compile(
 _REJECT_RE = re.compile(
     r"^\s*(no|nope|non procedere|non confermo|rifiuto|lascia stare|non farlo)[.\!\s]*$", re.IGNORECASE)
 
+_MIN_UTTERANCE_BYTES = 16000 * 2 * 0.35   # < 350 ms of 16 kHz PCM is a click, not speech
+_MAX_UTTERANCE_BYTES = 16000 * 2 * 60     # keep the last minute at most
+
 # event types from the core stream that are forwarded verbatim (renamed agent.*/tool.* already match protocol)
-_FORWARD = {"agent.started", "agent.finished", "tool.started", "tool.finished", "tool.denied", "model.failed"}
+_FORWARD = {"agent.started", "agent.finished", "tool.started", "tool.finished", "tool.denied", "model.failed",
+            "ui.present"}
 
 
 class VoiceRuntime:
@@ -70,6 +74,7 @@ class VoiceRuntime:
         self._speech_q: asyncio.Queue[str | None] = asyncio.Queue()
         self._audio = bytearray()
         self._audio_mime = "audio/webm"
+        self._chunk_mime: str | None = None   # mime of the frames actually received (pcm from the worklet)
         self._request_id: str | None = None
         self._stt_iter: AsyncIterator[SpeechEvent] | None = None
         self._stt_task: asyncio.Task | None = None
@@ -143,9 +148,9 @@ class VoiceRuntime:
         self._live_used = False
         self._live_wanted = self._want_live()
         # the live session opens lazily on the first real input: no idle sessions dying every 20s
-        engine = "live" if self._live_wanted else "browser"
+        engine = "live" if self._live_wanted else self._fallback_engine()
         self._log("voice.session.started", {"language": vs.language, "engine": engine})
-        quota_active = engine == "browser" and live_engine.quota_note(self.c.settings) is not None
+        quota_active = engine != "live" and live_engine.quota_note(self.c.settings) is not None
         await self._send("voice.session.started", state=str(vs.state), conversation_id=vs.conversation_id,
                          stt=self.c.stt.name, tts=self.c.tts.name, engine=engine,
                          reason="quota" if quota_active else None)
@@ -184,6 +189,11 @@ class VoiceRuntime:
     def _want_live(self) -> bool:
         return live_engine.missing_reason(self.c.settings, self.c) is None
 
+    def _fallback_engine(self) -> str:
+        """`api` = the server transcribes the microphone PCM and speaks through a cloud TTS (Gemini standard
+        API): the same mic/player path as Live, without barge-in by voice. `browser` = Web Speech API."""
+        return "api" if getattr(self.c.stt, "accepts_pcm", False) and self.c.tts.location != "browser" else "browser"
+
     async def _ensure_live(self) -> bool:
         """Opens the live session on demand. False = fell back to the browser chain for good."""
         if self._live is not None:
@@ -200,7 +210,7 @@ class VoiceRuntime:
         except Exception as e:
             log.warning("live voice engine failed to start: %s", live_engine.safe_error(e))
             self._live = None
-            await self._fallback_live(str(e))
+            await self._fallback_live(live_engine.safe_error(e))
             return False
 
     async def _fallback_live(self, reason: str) -> None:
@@ -210,12 +220,14 @@ class VoiceRuntime:
         self._live_wanted = False
         self._audio.clear()
         self.vs.turn_active = False
-        message = ("Gemini Live ha raggiunto un limite di quota. Continua con la voce del browser; "
+        engine = self._fallback_engine()
+        where = "la voce Gemini standard (qualche secondo di attesa in più)" if engine == "api" else "la voce del browser"
+        message = (f"Gemini Live ha raggiunto un limite di quota. Continuo con {where}; "
                    "controlla le quote del progetto in Google AI Studio." if quota else
                    f"La voce dal vivo si è fermata ({live_engine.safe_error(reason)}). "
-                   "Clicca il microfono per continuare con la voce del browser.")
+                   f"Clicca il microfono per continuare con {where}.")
         await self._send("error", where="live", message=message)
-        await self._send("voice.engine", engine="browser", reason="quota" if quota else "connection")
+        await self._send("voice.engine", engine=engine, reason="quota" if quota else "connection")
         if self.vs.state not in (VoiceState.CLOSED, VoiceState.WAITING_FOR_APPROVAL):
             await self._set_state(VoiceState.IDLE)
 
@@ -233,8 +245,9 @@ class VoiceRuntime:
             except live_engine.LiveDropped as e:
                 await self._live_dropped(str(e))
             return
-        # Late Live frames cannot be decoded by the browser WebM STT chain.
-        if (msg.mime or "").startswith("audio/pcm"):
+        stt = self.c.stt
+        # Late Live frames cannot be decoded by the browser WebM STT chain; a PCM-capable STT buffers them.
+        if (msg.mime or "").startswith("audio/pcm") and not getattr(stt, "accepts_pcm", False):
             return
         if vs.state == VoiceState.IDLE:
             await self._set_state(VoiceState.LISTENING)
@@ -242,8 +255,11 @@ class VoiceRuntime:
             return  # audio outside a listening phase is ignored (no silent capture)
         vs.mark("speech_started")
         chunk = protocol.decode_audio(msg.data)
+        if msg.mime:
+            self._chunk_mime = msg.mime
         self._audio += chunk
-        stt = self.c.stt
+        if len(self._audio) > _MAX_UTTERANCE_BYTES:        # ~60 s of 16 kHz PCM: never grow without bound
+            del self._audio[:len(self._audio) - _MAX_UTTERANCE_BYTES]
         if hasattr(stt, "begin"):  # streaming STT provider
             if self._stt_task is None or self._stt_task.done():
                 self._stt_iter = stt.begin(vs.language)
@@ -267,11 +283,18 @@ class VoiceRuntime:
         if self._audio:
             await self._set_state(VoiceState.TRANSCRIBING)
             audio, self._audio = bytes(self._audio), bytearray()
+            mime = self._chunk_mime or self._audio_mime
+            if mime.startswith("audio/pcm") and len(audio) < _MIN_UTTERANCE_BYTES:
+                await self._set_state(VoiceState.LISTENING)       # a click or a cough: nothing to transcribe
+                return
             try:
-                t = await stt.transcribe(audio, self._audio_mime, vs.language)
+                t = await stt.transcribe(audio, mime, vs.language)
             except Exception as e:
                 await self._send("error", where="stt", message=f"{type(e).__name__}: {e}")
                 await self._set_state(VoiceState.LISTENING)
+                return
+            if not t.text.strip():
+                await self._set_state(VoiceState.LISTENING)       # silence or noise: keep listening quietly
                 return
             await self._send("transcript.final", text=t.text, provider=t.provider)
             await self._begin_turn(t.text)
@@ -682,6 +705,10 @@ class VoiceRuntime:
                                         ("name", "title", "status", "project", "last_checked", "due")}
                                        for row in (rows or [])[:6] if isinstance(row, dict)],
                                  summary=str(result.get("briefing") or result.get("description") or "")[:1200])
+            if "error" not in result and c["name"] in ("create_file", "generate_image") and result.get("url"):
+                await self._send("ui.present", view="files",
+                                 rows=[{"title": result.get("created"), "url": result["url"]}],
+                                 summary=str(result.get("note") or ""))
         if self._live is not None and (bridge is None or self._live is bridge):
             await self._live.tool_response(responses)
         if bridge is not None and self._live is not bridge:

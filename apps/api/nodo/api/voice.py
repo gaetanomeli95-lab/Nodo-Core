@@ -19,10 +19,13 @@ def config(c: Container = Depends(container)):
     """Tells the client where speech is processed and which transports are available."""
     from nodo.voice.live import missing_reason
     why = missing_reason(c.settings, c)
-    return {"engine": "browser" if why else "live", "live_reason": why,
+    fallback = "api" if getattr(c.stt, "accepts_pcm", False) and c.tts.location != "browser" else "browser"
+    return {"engine": fallback if why else "live", "live_reason": why, "fallback_engine": fallback,
             "stt": {"name": c.stt.name, "location": c.stt.location,
                     "streaming": bool(getattr(c.stt, "streaming", False))},
-            "tts": {"name": c.tts.name, "location": c.tts.location, "voice": c.settings.tts_voice,
+            "tts": {"name": c.tts.name, "location": c.tts.location,
+                    "voice": getattr(c.tts, "voice", None) or getattr(c.tts, "default_voice", None)
+                    or c.settings.tts_voice,
                     "streaming": bool(getattr(c.tts, "streaming", False))},
             "language": c.settings.default_language, "push_to_talk": True, "wake_word": False,
             "streaming": True, "ws_path": "/api/v1/voice/stream",

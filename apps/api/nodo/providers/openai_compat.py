@@ -22,7 +22,7 @@ from nodo.providers.base import (
 class OpenAICompatProvider:
     def __init__(self, name: str, base_url: str, api_key: str, descriptors: list[ModelDescriptor],
                  timeout: float = 60.0, extra_headers: dict | None = None,
-                 transport: httpx.AsyncBaseTransport | None = None):
+                 transport: httpx.AsyncBaseTransport | None = None, reasoning_effort: str | None = None):
         self.name = name
         self._transport = transport
         self.base_url = base_url.rstrip("/")
@@ -30,6 +30,16 @@ class OpenAICompatProvider:
         self._descriptors = descriptors
         self._timeout = timeout
         self._headers = {"Authorization": f"Bearer {api_key}", **(extra_headers or {})}
+        # Thinking models (Gemini 3.x) bill their hidden reasoning inside `max_tokens`: with the default budget
+        # a 900-token request can come back EMPTY, finish_reason=length. "none" disables it; "low|medium|high" keep it.
+        self._reasoning_effort = reasoning_effort
+        self._signatures: dict[str, dict] = {}   # tool_call id -> extra_content to echo back (Gemini thought_signature)
+
+    def _body(self, model: str, messages: list[dict], temperature: float, max_tokens: int) -> dict:
+        body = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+        if self._reasoning_effort:
+            body["reasoning_effort"] = self._reasoning_effort
+        return body
 
     def models(self) -> list[ModelDescriptor]:
         return self._descriptors
@@ -39,13 +49,12 @@ class OpenAICompatProvider:
 
     async def stream(self, model: str, messages: list[ChatMessage], *, temperature: float = 0.3,
                      max_tokens: int = 800) -> AsyncIterator[ChatChunk]:
-        body = {"model": model, "messages": [{"role": m.role, "content": m.content} for m in messages],
-                "temperature": temperature, "max_tokens": max_tokens, "stream": True,
-                "stream_options": {"include_usage": True}}
+        body = {**self._body(model, [{"role": m.role, "content": m.content} for m in messages], temperature,
+                             max_tokens), "stream": True, "stream_options": {"include_usage": True}}
         tin = sum(estimate_tokens(m.content) for m in messages)
         tout = 0
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
                 async with client.stream("POST", f"{self.base_url}/chat/completions", json=body,
                                          headers=self._headers) as resp:
                     if resp.status_code >= 400:
@@ -77,13 +86,15 @@ class OpenAICompatProvider:
             if m["role"] == "assistant" and m.get("tool_calls"):
                 wire.append({"role": "assistant", "content": m.get("content") or None, "tool_calls": [
                     {"id": c["id"], "type": "function",
-                     "function": {"name": c["name"], "arguments": json.dumps(c["arguments"], ensure_ascii=False)}}
+                     "function": {"name": c["name"], "arguments": json.dumps(c["arguments"], ensure_ascii=False)},
+                     # Gemini 3.x rejects a follow-up turn whose earlier function calls lack their thought_signature
+                     **({"extra_content": self._signatures[c["id"]]} if c["id"] in self._signatures else {})}
                     for c in m["tool_calls"]]})
             elif m["role"] == "tool":
                 wire.append({"role": "tool", "tool_call_id": m["tool_call_id"], "content": m["content"]})
             else:
                 wire.append({"role": m["role"], "content": m["content"]})
-        body = {"model": model, "messages": wire, "temperature": temperature, "max_tokens": max_tokens}
+        body = self._body(model, wire, temperature, max_tokens)
         if tools:
             body["tools"] = [{"type": "function", "function": {"name": t.name, "description": t.description,
                                                                "parameters": t.parameters}} for t in tools]
@@ -104,7 +115,12 @@ class OpenAICompatProvider:
                 args = json.loads(fn.get("arguments") or "{}")
             except json.JSONDecodeError:
                 args = {"_raw": fn.get("arguments")}
-            calls.append(ToolCall(c.get("id") or f"call_{i}", fn.get("name", ""), args if isinstance(args, dict) else {}))
+            call_id = c.get("id") or f"call_{i}"
+            if c.get("extra_content"):
+                if len(self._signatures) >= 512:
+                    self._signatures.pop(next(iter(self._signatures)))
+                self._signatures[call_id] = c["extra_content"]
+            calls.append(ToolCall(call_id, fn.get("name", ""), args if isinstance(args, dict) else {}))
         usage = data.get("usage") or {}
         return ToolTurn(msg.get("content") or "", calls, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
 

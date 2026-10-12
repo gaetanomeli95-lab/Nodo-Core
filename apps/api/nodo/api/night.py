@@ -319,6 +319,7 @@ async def setup_check(c: Container = Depends(container)):
 _SETTABLE_KEYS = {
     "NODO_GEMINI_API_KEY": "gemini_api_key",
     "NODO_GROQ_API_KEY": "groq_api_key",
+    "NODO_OPENROUTER_API_KEY": "openrouter_api_key",
     "NODO_OPENAI_API_KEY": "openai_api_key",
     "NODO_ANTHROPIC_API_KEY": "anthropic_api_key",
     "NODO_GITHUB_TOKEN": "github_token",
@@ -327,7 +328,7 @@ _SETTABLE_KEYS = {
     "NODO_TELEGRAM_CHAT_ID": "telegram_chat_id",
 }
 # keys that unlock a model provider: rebuild the list so they work without restarting NODO
-_PROVIDER_KEYS = {"gemini_api_key", "groq_api_key", "openai_api_key", "anthropic_api_key"}
+_PROVIDER_KEYS = {"gemini_api_key", "groq_api_key", "openrouter_api_key", "openai_api_key", "anthropic_api_key"}
 
 
 class KeyIn(BaseModel):
@@ -363,10 +364,21 @@ async def save_key(body: KeyIn, c: Container = Depends(container)):
     if not written:
         out.append(f"{name}={value}")
     env.write_text("\n".join(out) + "\n", encoding="utf-8")
-    setattr(c.settings, _SETTABLE_KEYS[name], value)
-    if _SETTABLE_KEYS[name] in _PROVIDER_KEYS:
+    setting = _SETTABLE_KEYS[name]
+    setattr(c.settings, setting, value)
+    if setting in _PROVIDER_KEYS:
         from nodo.providers.registry import build_providers
         c.providers[:] = build_providers(c.settings)    # in place: every new Core picks them up
+    elif setting == "github_token" and c.settings.github_connector != "fake" \
+            and c.settings.env not in ("TEST", "DEMO"):
+        from nodo.tools.github import HttpGitHubConnector
+        from nodo.tools.github_repo import HttpGitHubRepoClient
+        c.github = HttpGitHubConnector(value)
+        c.repo = HttpGitHubRepoClient(value)
+    elif setting == "vercel_token" and c.settings.vercel_connector != "fake" \
+            and c.settings.env not in ("TEST", "DEMO"):
+        from nodo.tools.vercel import HttpVercelConnector
+        c.vercel = HttpVercelConnector(value, c.settings.vercel_team_id)
     return {"ok": True, "name": name}
 
 

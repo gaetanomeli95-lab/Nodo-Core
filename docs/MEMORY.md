@@ -34,6 +34,12 @@ Memory is explicit, relational and provenance-aware (ADR-003). Not "store chats,
 Builds a `ContextPackage` with only what the intent needs, records `sources`, and raises `sensitivity` to the
 max of the included entities. Exposed in the SSE stream (`context` event) and therefore inspectable.
 
+## Personal knowledge (imported conversations)
+ChatGPT/Claude exports → `Document` (`kind=chat:*`) + `KnowledgeChunk` rows mirrored in an FTS5 table, then a
+background distillation writes `MemoryFact(layer=semantic|preference|decision, status=INFERRED,
+source_type="document", source_id=<Document.id>)`. Brain tools: `search_knowledge`, `read_knowledge`.
+See [CONOSCENZA.md](CONOSCENZA.md).
+
 ## Next
 Embeddings (pgvector) as an additional retrieval index over `MemoryFact.content` and documents; fact extraction
-from conversations; staleness job; graph UI fed by `/graph/{type}/{id}`.
+from live conversations; staleness job; graph UI fed by `/graph/{type}/{id}`.

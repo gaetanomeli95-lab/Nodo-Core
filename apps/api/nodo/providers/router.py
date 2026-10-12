@@ -10,6 +10,7 @@ Fallback: on ProviderError the next candidate is tried. Every attempt is recorde
 """
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from collections.abc import AsyncIterator, Callable
@@ -75,7 +76,14 @@ _LIMIT_RE = re.compile(r"limit|quota|rate.?limit|\b429\b|too many requests|usage
 # provider rests much longer instead of wasting a timeout on every message
 _DEAD_RE = re.compile(r"not.?found|does not exist|no such model|invalid api key|unauthoriz|forbidden|"
                       r"permission denied|\b401\b|\b403\b|\b404\b", re.I)
+# transient trouble (timeout, overload, 5xx): may heal in minutes, so the pause is short
+_TRANSIENT_RE = re.compile(r"timed?\s*out|timeout|non ha risposto|unavailable|overloaded|\b50[0-9]\b|deadline",
+                           re.I)
 _cooldown: dict[str, float] = {}
+
+# A voice turn cannot wait minutes while a dead provider burns its own timeout: `prefer_fast`
+# bounds each attempt to this many seconds (per chunk for streams), then the router moves on.
+FAST_ATTEMPT_TIMEOUT = 30.0
 
 
 def cooldowns() -> dict[str, float]:
@@ -164,6 +172,8 @@ class ModelRouter:
             _cooldown[provider] = time.monotonic() + self.cooldown_seconds
         elif _DEAD_RE.search(error):
             _cooldown[provider] = time.monotonic() + self.cooldown_seconds * 12  # 6h with the default
+        elif _TRANSIENT_RE.search(error):
+            _cooldown[provider] = time.monotonic() + self.cooldown_seconds / 6  # ~5 min: worth retrying soon
 
     # ------------------------------------------------------------------ execution with fallback
     async def stream(self, messages: list[ChatMessage], req: RouteRequest, *, request_id: str | None = None,
@@ -184,7 +194,16 @@ class ModelRouter:
             tin = tout = 0
             produced = False
             try:
-                async for ch in provider.stream(d.model, messages, temperature=temperature, max_tokens=max_tokens):
+                ait = provider.stream(d.model, messages, temperature=temperature, max_tokens=max_tokens)
+                while True:
+                    try:
+                        ch = await (asyncio.wait_for(ait.__anext__(), FAST_ATTEMPT_TIMEOUT)
+                                    if req.prefer_fast else ait.__anext__())
+                    except StopAsyncIteration:
+                        break
+                    except TimeoutError as e:
+                        raise ProviderError(f"{d.provider}: timed out after "
+                                            f"{int(FAST_ATTEMPT_TIMEOUT)}s") from e
                     if ch.done:
                         tin, tout = ch.tokens_in, ch.tokens_out
                     else:
@@ -215,8 +234,16 @@ class ModelRouter:
             self.last_decision = cand
             t0 = time.perf_counter()
             try:
-                turn = await provider.complete_tools(d.model, messages, tools, temperature=temperature,
-                                                     max_tokens=max_tokens)
+                try:
+                    turn = await (asyncio.wait_for(
+                        provider.complete_tools(d.model, messages, tools, temperature=temperature,
+                                                max_tokens=max_tokens), FAST_ATTEMPT_TIMEOUT)
+                        if req.prefer_fast else
+                        provider.complete_tools(d.model, messages, tools, temperature=temperature,
+                                                max_tokens=max_tokens))
+                except TimeoutError as e:
+                    raise ProviderError(f"{d.provider}: timed out after "
+                                        f"{int(FAST_ATTEMPT_TIMEOUT)}s") from e
                 self._record(request_id, None, d, req, turn.tokens_in, turn.tokens_out, t0, "ok")
                 return turn
             except ProviderError as e:

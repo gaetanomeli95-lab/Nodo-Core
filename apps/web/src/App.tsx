@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { get, type NodoEvent, type Pending, type Project, type Site, type SystemInfo, type Task, type VoiceConfig } from "./api";
 import { CommandCenter } from "./components/CommandCenter";
+import { MemoryView } from "./components/Memory";
 import { NightView } from "./components/Night";
 import { StatePanel, TracePanel } from "./components/Panels";
 import { SetupView } from "./components/Setup";
 import { SitesView } from "./components/Sites";
 
-type Tab = "command" | "night" | "sites" | "setup";
+type Tab = "command" | "night" | "sites" | "memory" | "setup";
 
 function initialTab(): Tab {
   try {
     const fromHash = location.hash.slice(1) as Tab;
-    if (["command", "night", "sites", "setup"].includes(fromHash)) return fromHash;
+    if (["command", "night", "sites", "memory", "setup"].includes(fromHash)) return fromHash;
     return "command";
   } catch { return "command"; }
 }
@@ -53,7 +54,8 @@ export default function App() {
 
   const critical = sites.filter((s) => s.status === "critical").length;
   const tabs: [Tab, string, number][] = [
-    ["command", "Presenza", 0], ["night", "Notte", pending.length], ["sites", "Siti", critical], ["setup", "Accessi", 0],
+    ["command", "Presenza", 0], ["night", "Notte", pending.length], ["sites", "Siti", critical], ["memory", "Memoria", 0],
+    ["setup", "Accessi", 0],
   ];
 
   return (
@@ -76,6 +78,7 @@ export default function App() {
         </div>
         {tab === "night" && <div className="tab-body scroll"><NightView onChanged={refresh} /></div>}
         {tab === "sites" && <div className="tab-body scroll"><SitesView onChanged={refresh} /></div>}
+        {tab === "memory" && <div className="tab-body scroll"><MemoryView /></div>}
         {tab === "setup" && <div className="tab-body scroll"><SetupView /></div>}
       </div>
       <TracePanel events={trace} system={system} />

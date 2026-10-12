@@ -7,6 +7,7 @@ const ICON: Record<string, string> = { ok: "✓", missing: "–", error: "✕", 
 const KEYS = [
   { name: "NODO_GEMINI_API_KEY", label: "Gemini — voce dal vivo + cervello gratis (aistudio.google.com)" },
   { name: "NODO_GROQ_API_KEY", label: "Groq — cervello veloce gratis (console.groq.com)" },
+  { name: "NODO_OPENROUTER_API_KEY", label: "OpenRouter — modelli gratuiti di riserva (openrouter.ai)" },
   { name: "NODO_GITHUB_TOKEN", label: "GitHub — pull request e turno di notte" },
   { name: "NODO_VERCEL_TOKEN", label: "Vercel — pubblicazione dei siti" },
   { name: "NODO_TELEGRAM_BOT_TOKEN", label: "Telegram — il briefing sul telefono" },

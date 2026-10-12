@@ -95,7 +95,8 @@ def error_kind(error: str) -> str:
 
 def safe_error(error: Exception | str) -> str:
     """Provider exceptions can include request URLs; never echo credentials into logs/UI."""
-    text = re.sub(r"(?i)(key|token|authorization)=([^\s&]+)", r"\1=[redacted]", str(error))
+    raw = str(error) or (type(error).__name__ if isinstance(error, BaseException) else "")  # TimeoutError prints ""
+    text = re.sub(r"(?i)(key|token|authorization)=([^\s&]+)", r"\1=[redacted]", raw)
     return re.sub(r"AIza[\w-]+", "[redacted]", text)[:240]
 
 

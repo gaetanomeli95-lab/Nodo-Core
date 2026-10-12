@@ -7,7 +7,7 @@ export type Project = { id: string; name: string; kind: string; status: string; 
 export type Task = { id: string; title: string; status: string; priority: number; due_date: string | null; project_id: string | null };
 export type Usage = { local_requests: number; cloud_requests: number; premium_requests: number; agent_runs: number; tool_executions: number; tokens: number; estimated_cost: number };
 export type SystemInfo = { mode: string; env: string; models: { id: string; tier: string; is_local: boolean; available: boolean }[]; voice: { stt: { name: string; location: string }; tts: { name: string; location: string } }; github: string; usage: Usage };
-export type VoiceConfig = { engine?: "live" | "browser"; live_reason?: string | null; stt: { name: string; location: string }; tts: { name: string; location: string; voice: string }; language: string };
+export type VoiceConfig = { engine?: "live" | "api" | "browser"; fallback_engine?: "api" | "browser"; live_reason?: string | null; stt: { name: string; location: string }; tts: { name: string; location: string; voice: string }; language: string };
 
 const headers = (): Record<string, string> => {
   const t = localStorage.getItem("nodo_token");
@@ -151,6 +151,18 @@ export type NightStatus = {
   connectors: { vercel: string | null; github: string | null; notifier: string | null; prober: string }; demo: boolean;
 };
 export type SetupCheck = { name: string; status: "ok" | "missing" | "error" | "optional" | "warning"; detail: string; how: string };
+
+// ------------------------------------------------------------------ personal knowledge (docs/CONOSCENZA.md)
+export type KnowledgeSource = {
+  id: string; kind: string; label: string; status: string; note: string | null; running: boolean;
+  stats: { conversations?: number; chunks?: number; distilled?: number; facts?: number; skipped?: number; remaining?: number };
+  created_at: string | null; updated_at: string | null;
+};
+export type KnowledgeHit = { title: string; source: string; when: string | null; snippet: string; chunk_id: string; document_id: string };
+export type KnowledgeOverview = {
+  conversations: number; chunks: number; facts: number; sources: KnowledgeSource[];
+  recent_facts: { id: string; fact: string; about: string; layer: string; confidence: number; status: string }[];
+};
 
 export async function patch<T>(path: string, body: unknown): Promise<T> {
   const r = await fetch(path, { method: "PATCH", headers: headers(), body: JSON.stringify(body) });

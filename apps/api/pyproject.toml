@@ -14,6 +14,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "sse-starlette>=2.1",
     "rapidfuzz>=3.9",
+    "edge-tts>=7.0",                        # free neural TTS fallback when Gemini quota is gone
     "tzdata>=2024.1; sys_platform == 'win32'",  # time zones on Windows (night shift schedule)
 ]
 

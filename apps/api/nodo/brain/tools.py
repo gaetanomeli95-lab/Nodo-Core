@@ -91,6 +91,9 @@ class Toolbox:
                                   "repository.", _obj(site_arg), self.sites_status)
         self._add("check_sites", "Fa SUBITO un giro di controllo rapido dei siti (o di uno) e dice com'è andata. "
                                  "Richiede fino a un paio di minuti.", _obj(site_arg), self.check_sites)
+        self._add("sync_sites", "Importa o aggiorna i siti seguiti dai progetti Vercel collegati (come il pulsante "
+                                "«Importa da Vercel»). Usala quando chiede di importare/sincronizzare i siti o "
+                                "quali progetti hai su Vercel.", _obj({}), self.sync_sites)
         self._add("pending_decisions", "Le decisioni che aspettano l'ok di Gaetano (pubblicare correzioni o modifiche, "
                                        "rollback...), con anteprime.", _obj({}), self.pending_decisions)
         self._add("decide", "Esegue (approve=true) o rifiuta (approve=false) UNA decisione in attesa che hai già "
@@ -118,9 +121,33 @@ class Toolbox:
                   self.remember)
         self._add("recall", "Cerca nella memoria di NODO (fatti, preferenze, note su clienti e progetti).",
                   _obj({"query": _STR}, ["query"]), self.recall)
+        self._add("search_knowledge", "Cerca nelle vecchie conversazioni di Gaetano con ChatGPT e Claude che ha "
+                                      "importato in NODO (idee, progetti, decisioni, come ha fatto una cosa). "
+                                      "Usalo quando chiede «ricordi quando...», «cosa avevo deciso su...», o per "
+                                      "un contesto che non hai in memoria.",
+                  _obj({"query": {**_STR, "description": "parole chiave, non una frase intera"}},
+                       ["query"]), self.search_knowledge)
+        self._add("read_knowledge", "Legge per intero il passaggio di una vecchia conversazione trovato con "
+                                    "search_knowledge (chunk_id).", _obj({"chunk_id": _STR}, ["chunk_id"]),
+                  self.read_knowledge)
         self._add("save_draft", "Salva una bozza di contenuto (post, articolo, email...) per un cliente o progetto.",
                   _obj({"title": _STR, "body": _STR, "client": _STR, "project": _STR, "kind": _STR},
                        ["title", "body"]), self.save_draft)
+        self._add("web_search", "Cerca su internet (Google) e risponde con le fonti. Usalo per notizie, prezzi, "
+                                "documentazione, «cercami...», o qualunque cosa non sia già in memoria.",
+                  _obj({"query": {**_STR, "description": "cosa cercare, con parole chiave precise"}},
+                       ["query"]), self.web_search)
+        self._add("create_file", "Crea un file per Gaetano (testo, markdown, csv, html, svg, json...) e lo mette a "
+                                 "disposizione per scaricarlo. Usala quando chiede un documento, un riepilogo "
+                                 "scritto, una tabella, una pagina.",
+                  _obj({"name": {**_STR, "description": "nome file con estensione, es. report.md"},
+                        "content": {**_STR, "description": "contenuto completo del file"},
+                        "title": {**_STR, "description": "titolo breve (opzionale)"}}, ["name", "content"]),
+                  self.create_file)
+        self._add("generate_image", "Genera un'immagine da una descrizione (logo, illustrazione, bozza grafica) e "
+                                    "la salva tra i file. Usala quando chiede «crea/disegna/fammi un'immagine».",
+                  _obj({"description": {**_STR, "description": "descrizione dettagliata dell'immagine"}},
+                       ["description"]), self.generate_image)
 
     def specs(self) -> list[FunctionSpec]:
         return [t.spec for t in self.tools.values()]
@@ -205,6 +232,15 @@ class Toolbox:
         return view
 
     # ------------------------------------------------------------------ night shift / sites
+    async def sync_sites(self) -> dict:
+        """Import Vercel projects as monitored sites (same as the Siti page button)."""
+        if self.c is None or self.c.vercel is None:
+            return {"error": "Vercel non collegato: inserisci il token nella scheda Accessi."}
+        created = await self.c.night_shift(self.s).discover()
+        return {"new_sites": [x.name for x in created], "sites": [x.name for x in self._sites()],
+                "note": "importati i nuovi progetti da Vercel" if created
+                        else "nessun nuovo progetto: i siti erano già sincronizzati"}
+
     async def night_report(self) -> dict:
         from nodo.night import briefing as B
         b = B.latest_or_live(self.s, self.org, self.settings)
@@ -454,9 +490,31 @@ class Toolbox:
         q = query.lower()
         scored = sorted(((max(fuzz.token_set_ratio(q, f.content.lower()), fuzz.partial_ratio(q, f.content.lower())),
                           f) for f in facts), key=lambda x: -x[0])
-        hits = [{"fact": f.content, "about": f.subject_type, "recorded": self._clock(f.recorded_at)}
+        hits = [{"fact": f.content, "about": f.subject_type, "recorded": self._clock(f.recorded_at),
+                 "source": "vecchie conversazioni importate" if f.source_type == "document" else f.source_type}
                 for s, f in scored if s >= 60][:10]
-        return {"results": hits} if hits else {"results": [], "note": "non ho niente in memoria su questo"}
+        if hits:
+            return {"results": hits}
+        from nodo.knowledge.service import KnowledgeService
+        if KnowledgeService(self.s, self.org).overview()["chunks"]:
+            return {"results": [], "note": "nessun fatto in memoria: prova search_knowledge nelle vecchie conversazioni"}
+        return {"results": [], "note": "non ho niente in memoria su questo"}
+
+    async def search_knowledge(self, query: str) -> dict:
+        from nodo.knowledge.service import KnowledgeService
+        svc = KnowledgeService(self.s, self.org)
+        hits = svc.search(query, limit=6)
+        if hits:
+            return {"results": hits, "note": "estratti: con read_knowledge leggi il passaggio intero"}
+        if not svc.overview()["chunks"]:
+            return {"results": [], "note": "Gaetano non ha ancora importato conversazioni: può farlo dalla scheda "
+                                           "Memoria del pannello (export di ChatGPT o Claude)"}
+        return {"results": [], "note": "niente di pertinente nelle conversazioni importate: prova altre parole chiave"}
+
+    async def read_knowledge(self, chunk_id: str) -> dict:
+        from nodo.knowledge.service import KnowledgeService
+        text = KnowledgeService(self.s, self.org).chunk_text(chunk_id)
+        return {"text": text[:6000]} if text else {"error": "passaggio non trovato"}
 
     async def save_draft(self, title: str, body: str, client: str | None = None, project: str | None = None,
                          kind: str | None = None) -> dict:
@@ -473,6 +531,47 @@ class Toolbox:
         self.s.add(doc)
         self.s.flush()
         return {"saved": True, "where": "documenti (bozza)", "project": p.name if p else None, "title": doc.title}
+
+    # ------------------------------------------------------------------ web & files
+    async def web_search(self, query: str) -> dict:
+        """Grounded Google search through Gemini; without a key or quota it falls back to DuckDuckGo."""
+        from nodo.services.gemini import web_search as gs
+        res = await gs(self.settings.gemini_api_key or "", self.settings.gemini_model, query,
+                       self.settings.default_language)
+        if not res["answer"]:
+            return {"answer": None, "sources": res["sources"],
+                    "note": res.get("note") or "nessuna risposta: riformula la domanda"}
+        return {"answer": res["answer"], "sources": res["sources"],
+                "note": "risposta cercata sul web adesso: cita le fonti se le usi"}
+
+    async def create_file(self, name: str, content: str, title: str | None = None) -> dict:
+        """Write a text file into the user's files and register it for download."""
+        if self.c is None or self.c.files is None:
+            return {"error": "archivio file non disponibile"}
+        try:
+            p = self.c.files.save_text(name, content)
+        except ValueError as e:
+            return {"error": str(e)}
+        doc = self.c.files.register(self.s, self.org, p.name, title or p.name,
+                                    summary=f"file creato da NODO ({len(content)} caratteri)")
+        return {"created": doc.title, "url": doc.uri,
+                "note": "file pronto: il link si apre dal pannello o incollandolo nel browser"}
+
+    async def generate_image(self, description: str) -> dict:
+        """Generate an image from a description and save it among the user's files.
+        Gemini first; when the quota is gone (or no key) it uses free keyless pollinations.ai."""
+        if self.c is None or self.c.files is None:
+            return {"error": "archivio file non disponibile"}
+        from nodo.services.gemini import generate_image as gi
+        data, engine = await gi(self.settings.gemini_api_key or "",
+                                self.settings.gemini_image_model, description)
+        ext = ".png" if data[:4] == b"\x89PNG" else (".jpg" if data[:2] == b"\xff\xd8" else ".bin")
+        from datetime import datetime as _dt
+        p = self.c.files.save_bytes(f"immagine-{_dt.now():%Y%m%d-%H%M%S}{ext}", data)
+        doc = self.c.files.register(self.s, self.org, p.name, description[:200],
+                                    summary=f"immagine generata ({engine}): {description[:400]}")
+        return {"created": doc.title, "url": doc.uri, "kind": "image",
+                "note": f"immagine salvata ({engine}): il link si apre dal pannello o incollandolo nel browser"}
 
 
 def recent_history(s, conv_id: str, limit: int, exclude_request: str | None = None) -> list[dict]:
