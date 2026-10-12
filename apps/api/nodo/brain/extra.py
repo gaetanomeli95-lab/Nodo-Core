@@ -56,19 +56,26 @@ def _best(text: str, rows: list, key, floor: int = 70, partial: bool = False):
     return scored[0][1], None
 
 
-def public_url(url: str) -> str | None:
-    """Only http(s) addresses on the public internet: NODO must not be used to poke at the home network."""
+def url_check(url: str) -> tuple[str | None, str | None]:
+    """(clean url, None) for a public http(s) address, else (None, why). NODO must not poke at the home network."""
     u = urlparse(url if "//" in url else f"https://{url}")
     if u.scheme not in ("http", "https") or not u.hostname:
-        return None
+        return None, "indirizzo non valido"
     try:
-        for info in socket.getaddrinfo(u.hostname, None):
-            ip = ipaddress.ip_address(info[4][0])
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-                return None
-    except (OSError, ValueError):
-        return None
-    return u.geturl()
+        infos = [ipaddress.ip_address(u.hostname)]
+    except ValueError:
+        try:
+            infos = [ipaddress.ip_address(i[4][0]) for i in socket.getaddrinfo(u.hostname, None)]
+        except (OSError, ValueError):
+            return None, "non riesco a trovare questo indirizzo (controlla di averlo scritto giusto)"
+    for ip in infos:
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            return None, "indirizzo non pubblico: non lo apro"
+    return u.geturl(), None
+
+
+def public_url(url: str) -> str | None:
+    return url_check(url)[0]
 
 
 def html_to_text(raw: str) -> str:
@@ -442,9 +449,9 @@ class ExtraTools:
         return out
 
     async def check_url(self, url: str) -> dict:
-        safe = public_url(url)
+        safe, why = url_check(url)
         if safe is None:
-            return {"error": "indirizzo non valido o non pubblico"}
+            return {"error": why}
         if self.c is None or self.c.prober is None:
             return {"error": "controllo non disponibile in questa istanza"}
         r = await self.c.prober.probe(safe, browser=False)
@@ -454,9 +461,9 @@ class ExtraTools:
     # ------------------------------------------------------------------ web, files, drafts
     async def fetch_url(self, url: str) -> dict:
         import httpx
-        safe = public_url(url)
+        safe, why = url_check(url)
         if safe is None:
-            return {"error": "indirizzo non valido o non pubblico"}
+            return {"error": why}
         try:
             async with httpx.AsyncClient(timeout=15, follow_redirects=True, max_redirects=4,
                                          headers={"User-Agent": "NODO/1.0 (assistente personale)"}) as client:
