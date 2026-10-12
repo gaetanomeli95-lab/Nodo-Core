@@ -157,6 +157,7 @@ class ClaudeCodeProvider:
                 f.write(system)
             args = [self.executable, "-p", "--output-format", "json", "--model", self.model,
                     "--system-prompt-file", sp_path, "--tools", self.AGENT_TOOLS, "--permission-mode", "acceptEdits",
+                    "--allowedTools", "WebSearch,WebFetch,Read,Glob,Grep",   # web and reading need no confirmation
                     "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"]
             for _ in range(len(OPTIONAL_FLAGS) + 1):
                 try:
