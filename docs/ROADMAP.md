@@ -47,7 +47,10 @@ Seams: provider `is_local`, `max_sensitivity`, `PRIVATE` mode, `WakeWordEngine` 
 Seams: append-only `event_log`, `EventBus.subscribe`, Pulse panel computed from real tasks.
 Next: job runner (in-process first), Pulse Engine scoring (importance/urgency/relevance/confidence),
 automations (trigger → conditions → actions). Done: in-process job runner + morning briefing (night shift).
-Next: Log Drains for full runtime analytics, uptime history charts, more remediation playbooks.
+V05 (PR): **Pulse radar** deterministico da task, incidenti, approvazioni e notte, con fonti per ogni segnale,
+API read-only e handoff conversazionale da Presence. Nessuna verifica esterna simulata.
+Next: Log Drains per telemetria completa, sincronizzazione eventi, priorità configurabili,
+notifiche non invasive e playbook di rimedio supervisionati.
 
 ## Phase 7 — Distributed NODO
 Node registry, capability advertisement, workload placement (privacy/latency/cost), mobile client over the

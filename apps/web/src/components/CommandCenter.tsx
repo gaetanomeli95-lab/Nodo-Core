@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { get, streamCommand, type NodoEvent, type VoiceConfig, type VoiceEvent } from "../api";
 import { useVoiceSession } from "./Voice";
 import { Presence, type PresenceMode } from "./Presence";
+import { Pulse } from "./Pulse";
 
 type Turn = { who: "user" | "nodo"; text: string; done?: boolean };
 type Decision = { id: string; label: string; site?: string; preview?: string; pr?: string; sending?: boolean };
@@ -32,6 +33,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const [error, setError] = useState<string | null>(null);
   const [decision, setDecision] = useState<Decision | null>(null);
   const [surface, setSurface] = useState<Surface | null>(null);
+  const [pulseRevision, setPulseRevision] = useState(0);   // refresh the radar after each turn
   const conv = useRef(loadConv());
   const journal = useRef<HTMLDivElement>(null);
   const activeTools = useRef(new Set<string>());
@@ -50,6 +52,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const endReply = (e: Record<string, unknown>) => {
     rememberConv(e.conversation_id);
     setBusy(false);
+    setPulseRevision((n) => n + 1);
     if (typeof e.text === "string") setTurns((ts) => {
       const next: Turn = { who: "nodo", text: e.text as string, done: true };
       return ts.at(-1)?.who === "nodo" && !ts.at(-1)?.done ? [...ts.slice(0, -1), next] : [...ts, next];
@@ -97,10 +100,11 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   }, []);
   useEffect(() => { if (diary) journal.current?.scrollTo(0, journal.current.scrollHeight); }, [turns, diary]);
 
-  const send = async () => {
-    const text = input.trim();
+  const send = async (requested?: string) => {
+    const text = (requested ?? input).trim();
     if (!text || busy) return;
-    setInput(""); setBusy(true); setError(null);
+    if (requested === undefined) setInput("");   // investigating a Pulse item must not erase a drafted message
+    setBusy(true); setError(null);
     if (voice.engine !== "browser" && voice.connected) {   // live/api: typed text is answered by voice too
       await voice.sendText(text).catch((e: Error) => { setError(e.message); setBusy(false); }); return;
     }
@@ -161,6 +165,8 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
                    : <small>{STATUS[String(row.status)] || String(row.project || "")}</small>}</li>)}</ul>
         {!surface.summary && !surface.rows.length && <p>Non ci sono elementi da mostrare.</p>}
       </section>}
+      {!decision && !surface && mode === "rest" && <Pulse revision={pulseRevision} disabled={busy || !voice.connected}
+        onInvestigate={(prompt) => { void send(prompt); }} />}
       <div className="voice-controls">
         <button className={`conversation-button ${voice.liveOn ? "active" : ""}`} disabled={!voice.connected || voice.recovering} onClick={voice.toggleMic}>
           <svg width="18" height="20" viewBox="0 0 18 22" fill="none" aria-hidden="true"><rect x="6" y="1" width="6" height="12" rx="3" stroke="currentColor" strokeWidth="1.5" /><path d="M2 9v2a7 7 0 0 0 14 0V9M9 18v3M5 21h8" stroke="currentColor" strokeWidth="1.5" /></svg>

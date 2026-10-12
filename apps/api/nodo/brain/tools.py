@@ -430,9 +430,12 @@ class Toolbox:
         open_items = [i for i in b.items if i["status"] in ("open", "mitigated")]
         if b.pending:
             self._present(b.pending)
+        from nodo.pulse import build_pulse
+        pulse = build_pulse(self.s, self.org, self.settings)
         return {"today": today, "tasks": views[:10], "open_tasks_total": len(views),
                 "night": {"sites_checked": b.sites_checked, "open_problems": len(open_items),
-                          "pending_decisions": [self._decision_view(p) for p in b.pending]}}
+                          "pending_decisions": [self._decision_view(p) for p in b.pending]},
+                "pulse": pulse}  # shared grounded observations used by the presence UI
 
     async def create_task(self, title: str, project: str | None = None, due_date: str | None = None,
                           priority: int | None = None) -> dict:
