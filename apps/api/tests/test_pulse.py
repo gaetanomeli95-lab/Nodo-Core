@@ -102,3 +102,33 @@ def test_pulse_rest_endpoint_returns_read_only_radar(client):
     assert snapshot["read_only"] is True
     assert "headline" in snapshot and "items" in snapshot
     assert "counts" in snapshot and "generated_at" in snapshot
+
+
+def test_greeting_is_short_grounded_and_honest(db, seeded, settings):
+    from datetime import UTC, datetime
+
+    from nodo.greeting import build_greeting
+
+    g = build_greeting(db, seeded, settings, now=datetime(2026, 10, 13, 6, 30, tzinfo=UTC))
+    assert g["text"].startswith("Buongiorno Gaetano.") and g["text"].endswith("Da dove vuoi cominciare?")
+    assert g["part_of_day"] == "morning" and len(g["text"]) < 700
+    evening = build_greeting(db, seeded, settings, now=datetime(2026, 10, 13, 19, 0, tzinfo=UTC))
+    assert evening["text"].startswith("Buonasera")
+
+
+def test_greeting_endpoint(client):
+    r = client.get("/api/v1/greeting")
+    assert r.status_code == 200 and "Gaetano" in r.json()["text"]
+
+
+def test_greeting_is_saved_in_the_conversation(client):
+    from sqlalchemy import select
+
+    from nodo.db.models import Message
+    from nodo.db.session import session_scope
+
+    r = client.post("/api/v1/greeting", json={}).json()
+    assert r["conversation_id"] and r["text"].startswith(("Buongiorno", "Ciao", "Buon", "Buonasera"))
+    with session_scope() as s:
+        msgs = s.scalars(select(Message).where(Message.conversation_id == r["conversation_id"])).all()
+        assert [m.role for m in msgs] == ["nodo"] and msgs[0].content == r["text"]

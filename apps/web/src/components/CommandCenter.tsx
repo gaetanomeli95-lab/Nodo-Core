@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { get, streamCommand, type NodoEvent, type VoiceConfig, type VoiceEvent } from "../api";
+import { get, post, streamCommand, type NodoEvent, type VoiceConfig, type VoiceEvent } from "../api";
 import { useVoiceSession } from "./Voice";
 import { Presence, type PresenceMode } from "./Presence";
 import { Pulse } from "./Pulse";
@@ -12,6 +12,15 @@ const DOING: Record<string, string> = {
   pending_decisions: "Raccolgo le decisioni", decide: "Eseguo la tua decisione", request_site_change: "Preparo la modifica",
   projects: "Guardo i progetti", today_agenda: "Metto a fuoco le priorità", create_task: "Segno l'attività",
   complete_task: "Aggiorno l'attività", remember: "Aggiorno la memoria", recall: "Cerco nella memoria", save_draft: "Salvo la bozza",
+  clients: "Guardo i clienti", create_client: "Creo il cliente", create_project: "Creo il progetto",
+  update_project: "Aggiorno il progetto", list_tasks: "Rileggo le attività", update_task: "Aggiorno l'attività",
+  set_reminder: "Imposto il promemoria", list_reminders: "Guardo i promemoria", cancel_reminder: "Annullo il promemoria",
+  notify_me: "Ti scrivo su Telegram", forget: "Tolgo dalla memoria", list_site_files: "Guardo il codice del sito",
+  read_site_file: "Leggo un file del sito", site_commits: "Guardo gli ultimi aggiornamenti", site_deployments: "Guardo i deploy",
+  check_url: "Controllo l'indirizzo", fetch_url: "Leggo la pagina", web_search: "Cerco sul web", list_files: "Guardo i file",
+  read_file: "Apro il file", list_drafts: "Guardo le bozze", update_draft: "Aggiorno la bozza", start_work: "Avvio il lavoro",
+  nodo_health: "Controllo i miei accessi", sync_sites: "Importo i siti", create_file: "Preparo il file",
+  generate_image: "Disegno l'immagine", search_knowledge: "Cerco nelle vecchie conversazioni", read_knowledge: "Rileggo la conversazione",
 };
 const TITLES: Record<string, string> = { sites_status: "I tuoi siti", today_agenda: "Da qui si comincia",
   projects: "I progetti sul tavolo", night_report: "Mentre non c'eri", files: "File pronto" };
@@ -97,6 +106,36 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     get<{ role: string; content: string }[]>(`/api/v1/conversations/${conv.current}/messages`)
       .then((ms) => setTurns((ts) => ts.length ? ts : ms.slice(-30).filter((m) => ["user", "nodo"].includes(m.role))
         .map((m) => ({ who: m.role as Turn["who"], text: m.content, done: true })))).catch(() => {});
+  }, []);
+  // The first words of the day: once per day NODO opens the conversation by itself and reads it aloud
+  const greeted = useRef(false);
+  const spokenGreeting = useRef<string | null>(null);
+  const voiceRef = useRef(voice);
+  voiceRef.current = voice;
+  useEffect(() => {
+    if (greeted.current) return;
+    greeted.current = true;
+    const today = new Date().toLocaleDateString("sv-SE");
+    let last: string | null = null;
+    try { last = localStorage.getItem("nodo.greeted"); } catch { /* private mode */ }
+    if (last === today) return;
+    post<{ text: string; conversation_id: string }>("/api/v1/greeting", { conversation_id: conv.current })
+      .then((g) => {
+        try { localStorage.setItem("nodo.greeted", today); } catch { /* private mode */ }
+        rememberConv(g.conversation_id);
+        voiceRef.current.setConversation(g.conversation_id);
+        setTurns((ts) => [...ts, { who: "nodo", text: g.text, done: true }]);
+        const speakIt = () => {
+          if (spokenGreeting.current === g.text || voiceRef.current.microphoneOn) return;
+          spokenGreeting.current = g.text; voiceRef.current.speak(g.text);
+        };
+        // browsers only allow speech after a first touch of the page: do it right away or at the first click/key
+        if ((navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive) speakIt();
+        else {
+          const once = () => { window.removeEventListener("pointerdown", once); window.removeEventListener("keydown", once); speakIt(); };
+          window.addEventListener("pointerdown", once); window.addEventListener("keydown", once);
+        }
+      }).catch(() => {});
   }, []);
   useEffect(() => { if (diary) journal.current?.scrollTo(0, journal.current.scrollHeight); }, [turns, diary]);
 

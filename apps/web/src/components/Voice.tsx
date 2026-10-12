@@ -559,6 +559,9 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     sock.current?.send({ type: "transcript.final", text });
   };
 
+  /** NODO speaks a text of its own (the morning greeting) with the browser voice. */
+  const speak = (text: string) => { speechQueue.current.push(text); if (!speaking.current) browserTtsNext(); };
+
   const toggleMic = () => { pressStart(); if (engine === "browser") pressStop(); };
   const endConversation = () => {
     sock.current?.send({ type: "interrupt", reason: "microphone_off" });
@@ -585,7 +588,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   });
 
   return { state, connected, partial, engine, liveOn, audioPlaying, recovering, pressStart, pressStop,
-    interrupt, answer, sendText, toggleMic, endConversation, setConversation, microphoneOn: liveOn || capturing,
+    interrupt, answer, sendText, speak, toggleMic, endConversation, setConversation, microphoneOn: liveOn || capturing,
     sampleLevel: () => ({ input: inputLevel.current, output: pcm.current.level() }) };
 }
 
