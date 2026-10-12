@@ -324,6 +324,18 @@ class EventLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
+class Reminder(Base):
+    """«Ricordamelo domani alle 9»: delivered by the scheduler (Telegram + the panel) when it is due."""
+    __tablename__ = "reminders"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    text: Mapped[str] = mapped_column(String(500))
+    remind_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending")   # pending | sent | cancelled
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class VoiceTurnMetric(Base):
     """One row per completed voice turn (Phase 2M): per-stage timestamps plus computed latencies (ms).
     Timestamps are nullable — an interrupted/error turn may never reach later stages."""

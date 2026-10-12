@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from rapidfuzz import fuzz
 from sqlalchemy import select
 
+from nodo.brain.extra import ExtraTools
 from nodo.db.models import (
     Approval,
     Client,
@@ -71,7 +72,7 @@ class BrainTool:
     handler: Callable[..., Awaitable[dict]]
 
 
-class Toolbox:
+class Toolbox(ExtraTools):
     def __init__(self, core, conv, request_id: str, user_text: str, channel: str = "text"):
         self.core, self.conv, self.request_id, self.user_text, self.channel = core, conv, request_id, user_text, channel
         self.s, self.org, self.settings, self.c = core.s, core.org, core.settings, core.container
@@ -148,6 +149,7 @@ class Toolbox:
                                     "la salva tra i file. Usala quando chiede «crea/disegna/fammi un'immagine».",
                   _obj({"description": {**_STR, "description": "descrizione dettagliata dell'immagine"}},
                        ["description"]), self.generate_image)
+        self._register_extra()
 
     def specs(self) -> list[FunctionSpec]:
         return [t.spec for t in self.tools.values()]
@@ -432,7 +434,12 @@ class Toolbox:
             self._present(b.pending)
         from nodo.pulse import build_pulse
         pulse = build_pulse(self.s, self.org, self.settings)
+        from nodo.db.models import Reminder
+        rems = self.s.scalars(select(Reminder).where(Reminder.organization_id == self.org,
+                                                     Reminder.status == "pending")
+                              .order_by(Reminder.remind_at).limit(5)).all()
         return {"today": today, "tasks": views[:10], "open_tasks_total": len(views),
+                "reminders": [{"text": r.text, "when": self._clock(r.remind_at)} for r in rems],
                 "night": {"sites_checked": b.sites_checked, "open_problems": len(open_items),
                           "pending_decisions": [self._decision_view(p) for p in b.pending]},
                 "pulse": pulse}  # shared grounded observations used by the presence UI

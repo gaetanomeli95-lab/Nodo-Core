@@ -160,6 +160,10 @@ class NightScheduler:
             keepawake.hold()
         elif not inside:
             keepawake.release()
+        try:
+            await self.deliver_reminders(now)
+        except Exception:   # a reminder problem must never stop the night shift
+            log.exception("could not deliver reminders")
         jobs = decide(now, self.state(), self.settings, self.tz)
         for job in jobs:
             if job == "briefing":
@@ -167,6 +171,33 @@ class NightScheduler:
             else:
                 await self.run(job, trigger="schedule")
         return jobs
+
+    async def deliver_reminders(self, now: datetime | None = None) -> list[str]:
+        """Reminders that are due: Telegram (when connected) + a message in the panel's conversation."""
+        from nodo.db.models import Conversation, Message, Reminder
+        from nodo.db.session import session_scope
+        now = now or datetime.now(UTC)
+        sent: list[str] = []
+        with session_scope() as db:
+            due = db.scalars(select(Reminder).where(Reminder.status == "pending", Reminder.remind_at <= now)
+                             .order_by(Reminder.remind_at).limit(20)).all()
+            for r in due:
+                text = f"Promemoria: {r.text}"
+                notifier = self.c.notifier
+                if notifier is not None and getattr(notifier, "enabled", False):
+                    try:
+                        await notifier.send(f"⏰ {text}")
+                    except Exception:
+                        log.warning("reminder telegram send failed", exc_info=True)
+                conv = db.scalars(select(Conversation).where(Conversation.organization_id == r.organization_id)
+                                  .order_by(Conversation.updated_at.desc()).limit(1)).first()
+                if conv is not None:
+                    db.add(Message(conversation_id=conv.id, role="nodo", content=f"⏰ {text}",
+                                   request_id=f"reminder-{r.id[:8]}"))
+                r.status, r.sent_at = "sent", now
+                sent.append(r.text)
+            db.commit()
+        return sent
 
     async def run(self, kind: str, trigger: str = "manual", site_ids: list[str] | None = None) -> str | None:
         from nodo.db.session import session_scope

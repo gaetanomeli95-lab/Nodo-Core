@@ -114,6 +114,15 @@ Se ne configuri più di uno, NODO usa il migliore disponibile e passa al success
 | «segnati di chiamare il commercialista venerdì» / «fatto» | crea e chiude attività |
 | «ricordati che…» / «cosa sai di…?» | memoria a lungo termine |
 | «scrivimi una bozza di post per…» | scrive e salva la bozza |
+| «crea il cliente Bar Sole» / «apri un progetto per il loro sito, priorità alta» | crea clienti e progetti, li aggiorna (in pausa, finito, scadenza) |
+| «sposta la telefonata a venerdì» / «quella è bloccata, aspetto il cliente» | modifica attività: titolo, scadenza, priorità, stato |
+| «ricordami domani alle 9 di chiamare Carlo» | promemoria a un'ora precisa: arriva su Telegram e nel pannello |
+| «dimentica che…» | toglie un ricordo dalla memoria |
+| «cosa c'è nel file contatti del sito di X?» / «cosa è cambiato ultimamente?» | legge il codice e gli ultimi commit di un sito (sola lettura, mai i file con segreti) |
+| «perché l'ultimo deploy è fallito?» | deploy recenti su Vercel e fine del log di build |
+| «leggi questa pagina…» / «controlla questo indirizzo» | legge una pagina web pubblica o ne misura risposta e velocità |
+| «che bozze ho per Bar Sole?» / «segna approvata la bozza di Natale» | elenca e aggiorna bozze e contenuti |
+| «funziona tutto? cosa manca?» | controlla gli accessi di NODO (Vercel, GitHub, AI, Telegram, voce) |
 
 Ricorda la conversazione: puoi dire «e quella di ieri?», «pubblica quella di Prosperya», «perché?». Nel
 pannello il pulsante **Nuova** fa ricominciare da zero.
