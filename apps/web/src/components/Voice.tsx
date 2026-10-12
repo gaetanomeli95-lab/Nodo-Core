@@ -427,6 +427,10 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
 
   const pressStart = () => {
     if (!connected) return;
+    if (config?.stt.ready === false || config?.tts.ready === false) {
+      cbRef.current.onError("Motore vocale non installato: esegui installa-voce-locale.bat e riavvia NODO.");
+      return;
+    }
     if (engine !== "browser") { void liveButton(); return; }   // live and api: one click opens the conversation
     if (toggled.current) { toggled.current = false; finishListening(); return; }  // second click: send
     if (state === "SPEAKING" || state === "THINKING" || state === "ACTING") interrupt(); // barge-in
@@ -438,7 +442,9 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     setState("LISTENING");
     finalBuf.current = "";
     const SR = (window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition });
-    const Ctor = SR.SpeechRecognition || SR.webkitSpeechRecognition;
+    // Local STT must bypass Chrome's SpeechRecognition even when installed:
+    // otherwise audio may be uploaded to the browser vendor instead of Whisper.
+    const Ctor = config?.stt.location === "local" ? undefined : SR.SpeechRecognition || SR.webkitSpeechRecognition;
     if (Ctor) {
       const r = new Ctor();
       r.lang = config?.language === "it" ? "it-IT" : config?.language || "it-IT";
@@ -488,7 +494,10 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
       if (epoch !== micEpoch.current || !held.current && !toggled.current) {
         stream.getTracks().forEach((t) => t.stop()); return;
       }
-      const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      const format = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]
+        .find((candidate) => MediaRecorder.isTypeSupported(candidate));
+      const mr = new MediaRecorder(stream, format ? { mimeType: format } : undefined);
+      const recordedMime = mr.mimeType || format || "audio/webm";
       let chunks = Promise.resolve();
       mr.ondataavailable = (e) => {
         chunks = chunks.then(async () => {
@@ -496,7 +505,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
           const bytes = new Uint8Array(buf);
           let bin = "";
           for (const b of bytes) bin += String.fromCharCode(b);
-          sock.current?.send({ type: "audio.chunk", data: btoa(bin), mime: "audio/webm" });
+          sock.current?.send({ type: "audio.chunk", data: btoa(bin), mime: recordedMime });
         });
       };
       mr.onstop = () => { void chunks.then(() => sock.current?.send({ type: "speech.end" })); };

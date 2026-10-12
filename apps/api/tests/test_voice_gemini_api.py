@@ -117,7 +117,10 @@ def test_build_voice_auto_prefers_gemini_when_the_key_exists():
     assert isinstance(stt, BrowserSTT)   # an explicit choice is respected
 
 
-def test_build_voice_auto_chains_the_free_fallbacks():
+def test_build_voice_auto_chains_the_free_fallbacks(monkeypatch):
+    import sys
+    import types
+    monkeypatch.setitem(sys.modules, "edge_tts", types.ModuleType("edge_tts"))   # installed on the PC, maybe not here
     stt, tts = build_voice(Settings(gemini_api_key="k", groq_api_key="g",
                                     stt_provider="auto", tts_provider="auto"))
     assert isinstance(stt, ChainSTT) and [p.name for p in stt.providers] == ["gemini", "groq"]

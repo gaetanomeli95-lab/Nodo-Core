@@ -384,7 +384,10 @@ def build_voice(s: Settings) -> tuple[SpeechToTextProvider, TextToSpeechProvider
             return None
         return EdgeTTS()
 
-    if s.stt_provider == "openai" and s.openai_api_key and paid_ok:
+    if s.stt_provider == "local":           # offline Whisper on this PC (docs/VOICE_LOCAL.md)
+        from nodo.voice.local import LocalWhisper
+        stt = LocalWhisper(s.local_voice_dir, s.whisper_model, s.whisper_device, s.whisper_compute_type)
+    elif s.stt_provider == "openai" and s.openai_api_key and paid_ok:
         stt = OpenAISpeech(s.openai_api_key, s.openai_base_url, default_voice=s.tts_voice)
     elif s.stt_provider == "fake":
         stt = FakeSTT()
@@ -397,7 +400,10 @@ def build_voice(s: Settings) -> tuple[SpeechToTextProvider, TextToSpeechProvider
         stt = stts[0] if len(stts) == 1 else (ChainSTT(stts) if stts else BrowserSTT())
     else:
         stt = BrowserSTT()
-    if s.tts_provider == "openai" and s.openai_api_key and paid_ok:
+    if s.tts_provider == "local":
+        from nodo.voice.local import LocalPiper
+        tts = LocalPiper(s.local_voice_dir, s.piper_voice)
+    elif s.tts_provider == "openai" and s.openai_api_key and paid_ok:
         tts = OpenAISpeech(s.openai_api_key, s.openai_base_url, default_voice=s.tts_voice)
     elif s.tts_provider == "fake":
         tts = FakeTTS()

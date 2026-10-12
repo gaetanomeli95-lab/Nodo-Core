@@ -20,13 +20,15 @@ def config(c: Container = Depends(container)):
     from nodo.voice.live import missing_reason
     why = missing_reason(c.settings, c)
     fallback = "api" if getattr(c.stt, "accepts_pcm", False) and c.tts.location != "browser" else "browser"
+    stt_status = c.stt.status() if hasattr(c.stt, "status") else {"ready": True}   # local models installed?
+    tts_status = c.tts.status() if hasattr(c.tts, "status") else {"ready": True}
     return {"engine": fallback if why else "live", "live_reason": why, "fallback_engine": fallback,
             "stt": {"name": c.stt.name, "location": c.stt.location,
-                    "streaming": bool(getattr(c.stt, "streaming", False))},
+                    "streaming": bool(getattr(c.stt, "streaming", False)), **stt_status},
             "tts": {"name": c.tts.name, "location": c.tts.location,
-                    "voice": getattr(c.tts, "voice", None) or getattr(c.tts, "default_voice", None)
-                    or c.settings.tts_voice,
-                    "streaming": bool(getattr(c.tts, "streaming", False))},
+                    "voice": (c.settings.piper_voice if c.tts.location == "local" else None)
+                    or getattr(c.tts, "voice", None) or getattr(c.tts, "default_voice", None) or c.settings.tts_voice,
+                    "streaming": bool(getattr(c.tts, "streaming", False)), **tts_status},
             "language": c.settings.default_language, "push_to_talk": True, "wake_word": False,
             "streaming": True, "ws_path": "/api/v1/voice/stream",
             "states": [str(s) for s in VoiceState],

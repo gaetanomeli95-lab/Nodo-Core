@@ -77,11 +77,16 @@ class Settings(BaseSettings):
     knowledge_distill_max: int = 300            # newest conversations distilled per run (one model call each)
 
     # --- Voice ---
-    stt_provider: str = "auto"      # auto (gemini+groq chain with keys, else browser) | gemini | groq | browser | openai | fake
-    tts_provider: str = "auto"      # auto (gemini+edge chain, else browser) | gemini | edge | browser | openai | fake
+    stt_provider: str = "auto"      # auto (gemini+groq chain with keys, else browser) | gemini | groq | browser | local | openai | fake
+    tts_provider: str = "auto"      # auto (gemini+edge chain, else browser) | gemini | edge | browser | local | openai | fake
     gemini_tts_model: str = "gemini-3.8-flash-lite-tts"   # standard-API voice when Live is down (~2 s per sentence)
     gemini_image_model: str = "gemini-3.1-flash-image"    # text -> image for the generate_image tool
     tts_voice: str = "alloy"
+    local_voice_dir: str = ".local-voice"          # apps/api/.local-voice (not committed)
+    whisper_model: str = "base"                   # tiny | base | small (multilingual, Italian)
+    whisper_device: str = "cpu"                   # CPU works without NVIDIA drivers
+    whisper_compute_type: str = "int8"
+    piper_voice: str = "it_IT-paola-medium"       # offline voice model, installed explicitly
     # Real-time voice (Gemini Live API): talk to NODO like to a person — natural voice, ~1s, barge-in.
     # Needs the FREE Gemini key (aistudio.google.com). Without it NODO keeps the browser voice chain.
     voice_engine: str = "auto"        # auto (live when configured) | live (require it) | browser

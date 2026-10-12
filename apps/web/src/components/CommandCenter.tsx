@@ -167,8 +167,15 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       </section>}
       {!decision && !surface && mode === "rest" && <Pulse revision={pulseRevision} disabled={busy || !voice.connected}
         onInvestigate={(prompt) => { void send(prompt); }} />}
+      {(voiceConfig?.stt.ready === false || voiceConfig?.tts.ready === false) && (
+        <p className="voice-notice" role="status">
+          La voce locale non è ancora installata. Esegui installa-voce-locale.bat e riavvia NODO.
+        </p>
+      )}
       <div className="voice-controls">
-        <button className={`conversation-button ${voice.liveOn ? "active" : ""}`} disabled={!voice.connected || voice.recovering} onClick={voice.toggleMic}>
+        <button className={`conversation-button ${voice.liveOn ? "active" : ""}`}
+          disabled={!voice.connected || voice.recovering || voiceConfig?.stt.ready === false || voiceConfig?.tts.ready === false}
+          onClick={voice.toggleMic}>
           <svg width="18" height="20" viewBox="0 0 18 22" fill="none" aria-hidden="true"><rect x="6" y="1" width="6" height="12" rx="3" stroke="currentColor" strokeWidth="1.5" /><path d="M2 9v2a7 7 0 0 0 14 0V9M9 18v3M5 21h8" stroke="currentColor" strokeWidth="1.5" /></svg>
           {voice.liveOn ? "Microfono aperto" : voice.microphoneOn ? "Finito, invia" : "Parla con NODO"}</button>
         {(voice.audioPlaying || busy || activity) && <button className="quiet-button" onClick={() => voice.interrupt()}>Interrompi</button>}
@@ -178,7 +185,9 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       {writing && <form className="thought-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
         <input autoFocus aria-label="Scrivi a NODO" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Da dove cominciamo?" />
         <button disabled={!input.trim() || busy}>Invia ↗</button></form>}
-      <footer className="stage-footnote"><span>{voice.microphoneOn ? "MICROFONO ATTIVO" : "ATTIVA LA VOCE PER COMINCIARE"}</span><span>{voice.engine === "live" ? "Conversazione dal vivo" : voice.engine === "api" ? "Voce Gemini · pause di qualche secondo" : "Voce del browser"}</span></footer>
+      <footer className="stage-footnote"><span>{voice.microphoneOn ? "MICROFONO ATTIVO" : "ATTIVA LA VOCE PER COMINCIARE"}</span><span>{voice.engine === "live" ? "Conversazione dal vivo"
+        : voiceConfig?.stt.location === "local" && voiceConfig?.tts.location === "local" ? "Voce locale sul tuo PC · pause di qualche secondo"
+        : voice.engine === "api" ? "Voce Gemini · pause di qualche secondo" : "Voce del browser"}</span></footer>
     </div>
     {diary && <aside className="conversation-diary"><header><span className="eyebrow">DIARIO</span><button className="quiet-button" onClick={() => setDiary(false)}>Chiudi</button></header>
       <p className="diary-intro">Le parole restano qui. Il lavoro continua al centro.</p>
