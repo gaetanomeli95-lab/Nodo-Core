@@ -220,7 +220,7 @@ class VoiceRuntime:
         try:
             async with self._live_connect_lock:
                 if self._live is None:
-                    await asyncio.wait_for(self._start_live(), timeout=20)
+                    await asyncio.wait_for(self._start_live(), timeout=35)
             return True
         except Exception as e:
             log.warning("live voice engine failed to start: %s", live_engine.safe_error(e))
@@ -665,7 +665,7 @@ class VoiceRuntime:
                     if self._dead:
                         return
                     async with self._live_connect_lock:
-                        await asyncio.wait_for(self._start_live(model, handle), timeout=20)
+                        await asyncio.wait_for(self._start_live(model, handle), timeout=35)
                     await self._live_go(VoiceState.IDLE, VoiceState.LISTENING)
                     return
                 except Exception as e:

@@ -42,6 +42,7 @@ OnEvent = Callable[[dict], Awaitable[None]]
 # Quotas are enforced by Google per *project*, not per API key.
 # This is a process-local safeguard against repeatedly retrying a known exhausted
 # credential. It is NOT a quota reset timer or a way to bypass project limits.
+_CONNECT_TIMEOUT_S = 20            # a home connection can take its time to open the socket
 _QUOTA_COOLDOWN_S = 3600
 _quota = {"key": None, "until": 0.0}
 
@@ -197,7 +198,7 @@ class LiveBridge:
             try:
                 config = live_config(self.settings, system, tool_decls, handle)
                 self._cm = self._connect(self.settings.gemini_api_key or "test", model, config)
-                self._session = await asyncio.wait_for(self._cm.__aenter__(), timeout=8)
+                self._session = await asyncio.wait_for(self._cm.__aenter__(), timeout=_CONNECT_TIMEOUT_S)
                 self.model = model
                 self.resume_handle = handle
                 break
