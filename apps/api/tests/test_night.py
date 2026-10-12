@@ -17,6 +17,7 @@ from nodo.night.notify import FakeNotifier
 from nodo.night.scheduler import SchedulerState, decide, window_bounds
 from nodo.night.simulation import DEMO_BUG, DEMO_OWNER, SimHealth
 from nodo.providers.deterministic import FakeModelProvider
+from nodo.tools.github_repo import GitHubError
 
 
 def make_container(world, settings: Settings | None = None, with_coder: bool = True):
@@ -312,3 +313,60 @@ def test_bypass_secret_per_project():
     assert bypass_secret("ONE", s) == "ONE"
     assert bypass_secret("altro=A, pbcare-platform=B", s) == "B"
     assert bypass_secret("altro=A", s) is None and bypass_secret(None, s) is None
+
+
+# ------------------------------------------------------------------------------------------------ resilience
+async def test_slow_home_is_measured_again_before_warning(db, seeded, nc, world):
+    """A cold start (one slow hit) must not raise a 'Home lenta' warning if the next hits are fast."""
+    await baseline(db, nc)
+    real, seen = world.prober.probe, {}
+
+    async def flaky(url, **kw):
+        r = await real(url, **kw)
+        if url.rstrip("/").count("/") == 2:                     # a home page
+            seen[url] = seen.get(url, 0) + 1
+            if seen[url] == 1:
+                r.latency_ms = 6500
+        return r
+
+    world.prober.probe = flaky
+    run = await nc.night_shift(db).run_pass("light", "test")
+    assert run.status == "done", run.error
+    assert not [s for s in db.scalars(select(Incident)) if s.kind == "slow"]
+    assert any(n >= 2 for n in seen.values())
+
+
+async def test_fix_pr_is_retried_when_github_does_not_answer(db, seeded, nc, world):
+    await baseline(db, nc)
+    world.break_things()
+    real, fails = world.github.commit_files, {"n": 0}
+
+    async def timing_out(*a, **kw):
+        fails["n"] += 1
+        if fails["n"] <= 2:
+            raise GitHubError("ConnectTimeout")
+        return await real(*a, **kw)
+
+    world.github.commit_files = timing_out
+    await nc.night_shift(db).run_pass("night", "test")
+    fix = db.scalars(select(FixProposal)).one()
+    assert fails["n"] >= 3 and fix.pr_number and fix.status == "proposed"
+
+
+async def test_failed_fix_is_proposed_again_on_a_later_pass(db, seeded, world):
+    nc = make_container(world, Settings(night_auto_rollback=False))   # the site stays down: the incident stays open
+    await baseline(db, nc)
+    world.break_things()
+    real, state = world.github.commit_files, {"down": True}
+
+    async def sometimes(*a, **kw):
+        if state["down"]:
+            raise GitHubError("ConnectTimeout")
+        return await real(*a, **kw)
+
+    world.github.commit_files = sometimes
+    await nc.night_shift(db).run_pass("night", "test")
+    assert [p.status for p in db.scalars(select(FixProposal))] == ["failed"]
+    state["down"] = False
+    await nc.night_shift(db).run_pass("night", "test")
+    assert "proposed" in [p.status for p in db.scalars(select(FixProposal))]

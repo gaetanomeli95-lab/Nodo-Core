@@ -113,6 +113,7 @@ class Observation:
     ci_status: str | None = None
     errors: list[str] = field(default_factory=list)
     duration_ms: int = 0
+    first_latency_ms: int | None = None   # home time at the first hit, when a re-measure was needed
 
 
 def _dt(v: str | datetime | None) -> datetime | None:
@@ -322,6 +323,15 @@ class NightShift:
                 await asyncio.sleep(self.deps.retry_delay)
                 r = await self.deps.prober.probe(url, expect=page.get("expect"), browser=browser)
                 attempts = 2
+            if r.ok and page["path"] == "/" and r.latency_ms > self.settings.night_slow_ms:
+                first = r.latency_ms   # often a cold start: measure again and keep the best time
+                for _ in range(2):
+                    again = await self.deps.prober.probe(url, expect=page.get("expect"), browser=False)
+                    if again.ok and again.latency_ms < r.latency_ms:
+                        r.latency_ms = again.latency_ms
+                    if r.latency_ms <= self.settings.night_slow_ms:
+                        break
+                obs.first_latency_ms = first
             obs.probes.append((page, r, attempts))
         if full:
             obs.cert_days = await self.deps.prober.cert_days_left(site.url)
@@ -659,6 +669,7 @@ class NightShift:
         if not res.ok:
             self._action(site, inc, "rollback", "failed", f"Rollback non riuscito: {res.error}", details)
             return
+        self.s.commit()   # long wait (network/model): never hold the database meanwhile
         await asyncio.sleep(self.deps.verify_delay)
         check = await self.deps.prober.probe(_join_url(site.url, "/"))
         if not check.ok and not check.protected:
@@ -708,6 +719,7 @@ class NightShift:
             return
         new_id = res.output.get("id")
         details["new_deployment"] = new_id
+        self.s.commit()   # long wait (network/model): never hold the database meanwhile
         final = await self._wait_deployment(new_id, self.settings.night_preview_wait_seconds)
         if final and final.state == READY:
             inc.status, inc.resolved_at = "resolved", datetime.now(UTC)
@@ -772,9 +784,15 @@ class NightShift:
                                                     FixProposal.status == "proposed")).first():
             return
         for inc in eligible:
-            if self.s.scalars(select(FixProposal).where(FixProposal.incident_id == inc.id)).first():
+            props = self.s.scalars(select(FixProposal).where(FixProposal.incident_id == inc.id)).all()
+            if any(p.status != "failed" for p in props) or len(props) >= 3:
                 continue
-            if self._tried(inc, "fix_pr"):
+            tries = self.s.scalars(select(NightAction).where(NightAction.incident_id == inc.id,
+                                                             NightAction.action == "fix_pr")).all()
+            # a fix that failed only because GitHub/the network did not answer is attempted again (max 3)
+            if tries and not all(t.status == "failed" and _transient(t.summary) for t in tries):
+                continue
+            if len(tries) >= 3:
                 continue
             await self._propose_fix(site, obs, inc)
             return
@@ -829,6 +847,7 @@ class NightShift:
         ev = self._evidence(site, obs, inc)
         agent = FixAgent(self.deps.repo, self.fix_router, self.request_id)
         try:
+            self.s.commit()   # long wait (network/model): never hold the database meanwhile
             draft = await agent.draft(site, inc, ev, site.sensitivity)
         except Exception as e:
             self._action(site, inc, "fix_pr", "failed", f"Analisi del codice non riuscita: {str(e)[:200]}", {"key": "error"})
@@ -885,11 +904,19 @@ class NightShift:
                 + review_line
                 + f"Confidenza del modello: {draft.confidence} · modello: {draft.model}\n\n"
                   "> Non unire senza aver visto l'anteprima. Puoi approvare o rifiutare dal pannello di NODO.")
-        res = await self.tools.run("github", "open_fix_pr", {
-            "owner": site.repo_owner, "name": site.repo_name, "base_branch": site.default_branch, "branch": branch,
-            "files": draft.files, "message": f"{draft.title}\n\nProposta da NODO. {what}",
-            "title": f"[NODO] {draft.title}", "body": body}, request_id=self.request_id,
-            reason=f"{noun.capitalize()} proposta per {site.name}: {what}")
+        self.s.commit()
+        for attempt in range(3):   # GitHub timeouts happen: retry before giving up on a good fix
+            res = await self.tools.run("github", "open_fix_pr", {
+                "owner": site.repo_owner, "name": site.repo_name, "base_branch": site.default_branch,
+                "branch": branch if attempt == 0 else f"{branch}-{attempt + 1}",
+                "files": draft.files, "message": f"{draft.title}\n\nProposta da NODO. {what}",
+                "title": f"[NODO] {draft.title}", "body": body}, request_id=self.request_id,
+                reason=f"{noun.capitalize()} proposta per {site.name}: {what}")
+            if res.ok or res.status == "pending_approval" or not _transient(res.error or ""):
+                break
+            await asyncio.sleep(5 * (attempt + 1) if self.deps.retry_delay else 0)
+        if res.ok:
+            branch = (res.output or {}).get("branch") or branch
         prop = FixProposal(organization_id=self.org, site_id=site.id, incident_id=inc.id if inc else None,
                            run_id=self.run.id if self.run else None, title=draft.title, diagnosis=draft.diagnosis,
                            confidence=draft.confidence, files=draft.stats, diff=draft.diff, branch=branch,
@@ -1072,6 +1099,13 @@ def bypass_secret(raw: str | None, site: Site) -> str | None:
         if name.strip() in (site.vercel_project_name, site.vercel_project_id, site.name):
             return secret.strip()
     return None
+
+
+_TRANSIENT = re.compile(r"timeout|timed out|connect|reset|temporar|unavailable|50[234]|rate limit|429", re.I)
+
+
+def _transient(error: str) -> bool:
+    return bool(_TRANSIENT.search(error or ""))
 
 
 def _short_path(url: str) -> str:
