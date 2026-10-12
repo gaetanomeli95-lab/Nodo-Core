@@ -6,6 +6,8 @@ import asyncio
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from nodo.db.models import Approval
 
 WS = "/api/v1/voice/stream"
@@ -634,3 +636,26 @@ async def test_stopping_finished_playback_does_not_mute_the_next_reply(container
     await runtime._on_live_event({"kind": "audio", "data": b"\x00\x00"})
     assert any(e["type"] == "tts.chunk" for e in events)
     await runtime.close()
+
+
+async def test_persisting_a_live_turn_waits_out_a_locked_database():
+    """The night shift can hold the SQLite write lock for a moment: the voice retries instead of losing the turn."""
+    from sqlalchemy.exc import OperationalError
+
+    from nodo.voice.runtime import _retry_locked
+
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise OperationalError("COMMIT", {}, Exception("database is locked"))
+
+    await _retry_locked(flaky)
+    assert calls["n"] == 3
+
+    def broken():
+        raise OperationalError("COMMIT", {}, Exception("no such table: messages"))
+
+    with pytest.raises(OperationalError):
+        await _retry_locked(broken)

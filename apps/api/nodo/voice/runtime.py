@@ -22,6 +22,9 @@ from contextlib import suppress
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import text as text_sql
+from sqlalchemy.exc import OperationalError
+
 from nodo.app import Container, ensure_workspace
 from nodo.core.events import EventBus
 from nodo.db.models import Approval, Conversation, Message, VoiceTurnMetric
@@ -40,6 +43,18 @@ SessionFactory = Callable[[], Any]  # context manager yielding a SQLAlchemy Sess
 
 class InterruptRequested(Exception):
     """Internal control flow: the current turn generation was superseded by an interrupt."""
+
+
+async def _retry_locked(fn: Callable[[], Any], attempts: int = 8) -> None:
+    """Run a short synchronous database write; if SQLite says 'locked', yield to the event loop and retry."""
+    for n in range(attempts):
+        try:
+            fn()
+            return
+        except OperationalError as e:
+            if "locked" not in str(e).lower() or n == attempts - 1:
+                raise
+            await asyncio.sleep(min(2.0, 0.15 * 2 ** n))
 
 
 _VOCATIVE = re.compile(r"^\s*(nodo|node|hey nodo|ehi nodo)[,.\s]+", re.IGNORECASE)
@@ -502,6 +517,12 @@ class VoiceRuntime:
 
     async def _on_live_event(self, ev: dict) -> None:
         """Normalized Live event -> protocol events for the panel (+ tool execution on this side)."""
+        try:
+            await self._on_live_event_inner(ev)
+        except InterruptRequested:
+            pass            # the panel is gone or the turn was superseded: nothing more to send
+
+    async def _on_live_event_inner(self, ev: dict) -> None:
         vs, kind = self.vs, ev["kind"]
         if self._dead:
             return
@@ -589,6 +610,8 @@ class VoiceRuntime:
                     await self._live_tool_calls([call], bridge)
         except asyncio.CancelledError:
             raise
+        except InterruptRequested:
+            log.debug("live tool finished after the panel went away")   # the browser closed: nothing to tell
         except live_engine.LiveDropped as e:
             if self._live is bridge:
                 await self._live_dropped(str(e))
@@ -732,13 +755,22 @@ class VoiceRuntime:
         vs.mark("model_done")
         text = "".join(self._out_text).strip()
         if vs.conversation_id and (self._in_text.strip() or text):
-            try:
+            rows = [(role, content) for role, content in (("user", self._in_text.strip()), ("nodo", text)) if content]
+            conversation_id, request_id = vs.conversation_id, f"live-{vs.id[:8]}-{vs.turn_number}"
+
+            def save() -> None:
                 with self._db() as sdb:
-                    for role, content in (("user", self._in_text.strip()), ("nodo", text)):
-                        if content:
-                            sdb.add(Message(conversation_id=vs.conversation_id, role=role, content=content,
-                                            request_id=f"live-{vs.id[:8]}-{vs.turn_number}"))
+                    # the night shift shares this database and this thread: never wait on its lock (it could not
+                    # release it while we block), fail fast and try again after yielding to the event loop
+                    if sdb.get_bind().dialect.name == "sqlite":
+                        sdb.execute(text_sql("PRAGMA busy_timeout=200"))
+                    for role, content in rows:
+                        sdb.add(Message(conversation_id=conversation_id, role=role, content=content,
+                                        request_id=request_id))
                     sdb.commit()
+
+            try:
+                await _retry_locked(save)
             except Exception:
                 log.exception("could not persist Live conversation turn")
                 await self._send("error", where="live-memory", message="Non sono riuscito a salvare questo turno nel diario")
