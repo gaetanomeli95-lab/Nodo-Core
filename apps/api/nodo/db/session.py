@@ -71,3 +71,23 @@ def get_db() -> Iterator[Session]:
     """FastAPI dependency."""
     with session_scope() as s:
         yield s
+
+
+def backup_sqlite(label: str) -> str | None:
+    """Consistent copy of a file SQLite database next to it (nodo.db.backup-<label>-<date>). None if not SQLite."""
+    import sqlite3
+    from datetime import datetime
+    engine = get_engine()
+    path = engine.url.database
+    if engine.url.get_backend_name() != "sqlite" or not path or path == ":memory:":
+        return None
+    dest = f"{path}.backup-{label}-{datetime.now():%Y%m%d-%H%M%S}"
+    raw = engine.raw_connection()
+    try:
+        target = sqlite3.connect(dest)
+        with target:
+            raw.driver_connection.backup(target)
+        target.close()
+    finally:
+        raw.close()
+    return dest

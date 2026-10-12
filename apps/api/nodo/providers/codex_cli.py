@@ -71,7 +71,7 @@ class CodexCliProvider:
     def models(self) -> list[ModelDescriptor]:
         return [ModelDescriptor(provider=self.name, model=self.model or "chatgpt", reasoning=5, coding=5,
                                 tool_calling=True, context_window=200_000, latency_class="high", tier="free",
-                                is_local=False, max_sensitivity=Sensitivity.CONFIDENTIAL)]
+                                is_local=False, max_sensitivity=Sensitivity.CLIENT_PRIVATE)]  # your own account: OK for client data
 
     def _env(self) -> dict:
         env = dict(os.environ)

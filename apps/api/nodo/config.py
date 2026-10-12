@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     default_language: str = "it"
     seed_demo_data: bool = False
+    remove_demo_data: bool = True           # at startup, remove the fictional sample projects (database backed up first)
 
     # --- Model providers (all optional; absence simply removes the provider) ---
     ollama_base_url: str | None = None

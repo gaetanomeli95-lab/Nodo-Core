@@ -113,6 +113,61 @@ def seed_demo(db: Session) -> dict[str, str]:
     return {"status": "seeded", "organization_id": org.id, "projects": str(5)}
 
 
+# ---------------------------------------------------------------------------------------------- removal
+DEMO_PROJECTS = {"Prosperya CRM": "CRM con core finanziario e fiscale per Prosperya.",
+                 "PB CARe Piattaforma": "Piattaforma gestionale PB CARe.",
+                 "SoftComfort Social": "Piano contenuti social SoftComfort.",
+                 "CF Materassi Sito": "Sito vetrina CF Materassi."}
+DEMO_CLIENTS = {"Prosperya": "fintech / consulenza", "PB CARe": "sanità privata",
+                "SoftComfort": "arredamento / materassi", "CF Materassi": "retail materassi"}
+DEMO_NODO_TASK = "Implementare fase 2 (voce streaming)"
+
+
+def remove_demo(db: Session) -> dict[str, int]:
+    """Remove the fictional sample data seeded above, recognised by exact name AND seed description/sector, so
+    nothing you created yourself is touched. Your sites, conversations, approvals and night history stay.
+    The real "Nodo Core" project (its GitHub repository is real) is kept, without its sample task."""
+    from nodo.db.models import Document, MemoryFact, Relationship, Site
+    removed = {"projects": 0, "clients": 0, "tasks": 0}
+    projects = [p for p in db.scalars(select(Project).where(Project.name.in_(list(DEMO_PROJECTS))))
+                if (p.description or "") == DEMO_PROJECTS[p.name]]
+    ids = [p.id for p in projects]
+    if ids:
+        removed["tasks"] += db.query(Task).filter(Task.project_id.in_(ids)).delete(synchronize_session=False)
+        db.query(Decision).filter(Decision.project_id.in_(ids)).delete(synchronize_session=False)
+        db.query(Repository).filter(Repository.project_id.in_(ids)).delete(synchronize_session=False)
+        db.query(ContentItem).filter(ContentItem.project_id.in_(ids)).delete(synchronize_session=False)
+        db.query(MemoryFact).filter(MemoryFact.subject_type == "project",
+                                    MemoryFact.subject_id.in_(ids)).delete(synchronize_session=False)
+        db.query(Relationship).filter((Relationship.from_id.in_(ids)) | (Relationship.to_id.in_(ids))) \
+            .delete(synchronize_session=False)
+        for model in (Site, Document):
+            for row in db.scalars(select(model).where(model.project_id.in_(ids))):
+                row.project_id = None   # your real sites stay; they were only linked by name to a sample project
+        for p in projects:
+            db.delete(p)
+        removed["projects"] = len(projects)
+    db.flush()
+    for c in db.scalars(select(Client).where(Client.name.in_(list(DEMO_CLIENTS)))):
+        if c.sector != DEMO_CLIENTS[c.name] or db.scalars(select(Project.id).where(Project.client_id == c.id)).first():
+            continue   # changed by you or still used: keep it
+        db.query(ContentItem).filter(ContentItem.client_id == c.id).delete(synchronize_session=False)
+        db.query(MemoryFact).filter(MemoryFact.subject_type == "client",
+                                    MemoryFact.subject_id == c.id).delete(synchronize_session=False)
+        db.query(Relationship).filter((Relationship.from_id == c.id) | (Relationship.to_id == c.id)) \
+            .delete(synchronize_session=False)
+        db.delete(c)
+        removed["clients"] += 1
+    removed["tasks"] += db.query(Task).filter(Task.title == DEMO_NODO_TASK,
+                                              Task.status == TaskStatus.TODO).delete(synchronize_session=False)
+    db.flush()
+    return removed
+
+
+def has_demo(db: Session) -> bool:
+    return any((p.description or "") == DEMO_PROJECTS[p.name]
+               for p in db.scalars(select(Project).where(Project.name.in_(list(DEMO_PROJECTS)))))
+
 if __name__ == "__main__":
     from nodo.db.models import Base
     from nodo.db.session import get_engine, session_scope
