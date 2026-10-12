@@ -68,6 +68,9 @@ correzioni e risponde con regole fisse invece di dialogare.
 
 ## 4. Telegram (facoltativo, consigliato): il briefing sul telefono
 
+**Modo facile:** crea il bot (punti 1-2 qui sotto), poi doppio click su **`attiva-telegram.bat`**: incolli il token,
+scrivi «ciao» al bot e NODO trova da solo il chat id e scrive le righe nel `.env`. Poi riavvia NODO.
+
 1. Su Telegram cerca **@BotFather** → `/newbot` → scegli un nome (es. `NODO di Gaetano`) e un username che
    finisca con `bot`.
 2. BotFather ti dà un token:
