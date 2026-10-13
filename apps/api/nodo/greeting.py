@@ -57,12 +57,16 @@ def build_greeting(s: Session, org: str, settings, *, now: datetime | None = Non
                      "il tuo ok.")
 
     today = local.date()
+
+    def _aware(d: datetime) -> datetime:                 # SQLite returns naive datetimes: they are stored UTC
+        return d if d.tzinfo else d.replace(tzinfo=UTC)
+
     reminders = [r for r in s.scalars(select(Reminder).where(Reminder.organization_id == org,
                                                              Reminder.status == "pending")
                                       .order_by(Reminder.remind_at))
-                 if r.remind_at.astimezone(tz).date() == today]
+                 if _aware(r.remind_at).astimezone(tz).date() == today]
     if reminders:
-        lines.append("Oggi ti ricordo: " + _names([f"{r.text} alle {r.remind_at.astimezone(tz):%H:%M}"
+        lines.append("Oggi ti ricordo: " + _names([f"{r.text} alle {_aware(r.remind_at).astimezone(tz):%H:%M}"
                                                     for r in reminders]) + ".")
 
     names = {p.id: p.name for p in s.scalars(select(Project).where(Project.organization_id == org))}

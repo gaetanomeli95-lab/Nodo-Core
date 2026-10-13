@@ -292,5 +292,6 @@ async def fetch_events(url: str, days: int, tz, *, start: datetime | None = None
             r = await c.get(url.replace("webcal://", "https://"))
     else:
         r = await client.get(url.replace("webcal://", "https://"))
-    r.raise_for_status()
+    if r.status_code >= 400:   # raise_for_status would print the secret calendar link into logs
+        raise ValueError(f"calendario non raggiungibile ({r.status_code})")
     return parse_events(r.text, lo, hi, tz)

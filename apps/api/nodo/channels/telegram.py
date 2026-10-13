@@ -119,7 +119,8 @@ class TelegramApi:
         info = await self.call("getFile", file_id=file_id)
         async with httpx.AsyncClient(timeout=60, transport=self.transport) as c:
             r = await c.get(f"{self.base}/file/bot{self.token}/{info['file_path']}")
-        r.raise_for_status()
+        if r.status_code >= 400:   # raise_for_status would print the URL (and the token) into logs
+            raise TelegramError(f"download: {r.status_code}")
         return r.content
 
 
