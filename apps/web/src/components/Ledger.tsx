@@ -105,7 +105,7 @@ export function LedgerView() {
     {stats && stats.series.some((d) => d.in || d.out) && <section className="card ledger-trend">
       <MoneyChart stats={stats} />
       <div className="trend-side">
-        <div><small>Mese · incassato</small><b>{fmt(stats.totals.incassato)}</b></div>
+        <div><small>30 giorni · incassato</small><b>{fmt(stats.totals.incassato)}</b></div>
         <div><small>Pezzi venduti</small><b>{stats.totals.pezzi}</b></div>
         {!!stats.best_items.length && <div><small>I più venduti</small>
           <ol>{stats.best_items.slice(0, 4).map((b) => <li key={b.item}><span>{b.item}</span><b>{b.pieces}</b></li>)}</ol></div>}

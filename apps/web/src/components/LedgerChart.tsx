@@ -15,6 +15,7 @@ export function MoneyChart({ stats }: { stats: LedgerStats }) {
     return Math.ceil(m / step) * step;
   }, [s]);
   const slot = (W - padL) / s.length;
+  const every = Math.ceil(s.length / 8);
   const bw = Math.max(2, Math.min(10, slot / 2 - 2));
   const y = (v: number) => padT + (H - padT - padB) * (1 - v / max);
   const ticks = [0, max / 2, max];
@@ -35,7 +36,7 @@ export function MoneyChart({ stats }: { stats: LedgerStats }) {
             <rect x={padL + i * slot} y={padT} width={slot} height={H - padT - padB} className={`hit ${hover === i ? "on" : ""}`} />
             {d.in > 0 && <path className="bar in" d={bar(x0 - bw - 1, y(d.in), bw, y(0) - y(d.in))} />}
             {d.out > 0 && <path className="bar out" d={bar(x0 + 1, y(d.out), bw, y(0) - y(d.out))} />}
-            {(i % Math.ceil(s.length / 8) === 0 || i === s.length - 1) &&
+            {(i % every === 0 || (i === s.length - 1 && i % every >= every / 2)) &&
               <text x={x0} y={H - 6} textAnchor="middle" className="tick">{short(d.day)}</text>}
           </g>;
         })}
