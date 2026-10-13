@@ -15,6 +15,8 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    if "reminders" in sa.inspect(op.get_bind()).get_table_names():   # already made by the dev start-up create_all
+        return
     op.create_table(
         "reminders",
         sa.Column("id", sa.String(length=36), primary_key=True),
