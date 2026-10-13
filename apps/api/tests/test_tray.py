@@ -62,3 +62,35 @@ def test_a_second_launch_only_opens_the_panel(monkeypatch):
     monkeypatch.setattr(tray, "Supervisor", lambda *a, **k: (_ for _ in ()).throw(AssertionError("second server")))
     assert tray.main(["--port", "8123"]) == 0 and opened == [8123]
     assert tray.main(["--port", "8123", "--no-browser"]) == 0 and opened == [8123]
+
+
+def test_a_second_launch_while_starting_does_not_spawn_a_server(monkeypatch):
+    """Port already bound but /health not answering yet (NODO still starting): no second supervisor."""
+    monkeypatch.setattr(tray, "healthy", lambda port, timeout=1.5: False)
+    monkeypatch.setattr(tray, "port_busy", lambda port, timeout=1.0: True)
+    monkeypatch.setattr(tray, "open_panel", lambda port: None)
+    monkeypatch.setattr(tray, "Supervisor", lambda *a, **k: (_ for _ in ()).throw(AssertionError("second server")))
+    assert tray.main(["--port", "8123"]) == 0
+
+
+def test_a_free_port_starts_the_supervisor(monkeypatch):
+    monkeypatch.setattr(tray, "healthy", lambda port, timeout=1.5: False)
+    monkeypatch.setattr(tray, "port_busy", lambda port, timeout=1.0: False)
+    made = []
+
+    class FakeSup:
+        def __init__(self, cmd, cwd, log_path, port, **kw):
+            self.port = port
+            self.calls = []
+            made.append(self)
+
+        def start(self):
+            self.calls.append("start")
+
+        def stop(self):
+            self.calls.append("stop")
+
+    monkeypatch.setattr(tray, "Supervisor", FakeSup)
+    monkeypatch.setattr(tray, "run_tray", lambda sup, port, open_first: None)
+    assert tray.main(["--port", "8123", "--no-browser"]) == 0
+    assert len(made) == 1 and made[0].port == 8123 and made[0].calls == ["start", "stop"]

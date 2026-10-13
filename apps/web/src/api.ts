@@ -222,3 +222,29 @@ export function timeAgo(iso: string | null | undefined): string {
 export function clock(iso: string | null | undefined): string {
   return iso ? new Date(iso).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }) : "—";
 }
+
+/** Downloads a NODO file (works with or without the API token: a plain link would miss the header). */
+export async function downloadFile(url: string, name?: string): Promise<void> {
+  const t = localStorage.getItem("nodo_token");
+  const r = await fetch(url, { headers: t ? { Authorization: `Bearer ${t}` } : {} });
+  if (!r.ok) throw new Error(`download: ${r.status}`);
+  const blob = await r.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name || decodeURIComponent(url.split("/").pop() || "file");
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+export type LedgerRow = {
+  id: string; day: string; kind: "vendita" | "sostituzione" | "spesa" | "nota"; item: string; size: string; qty: number;
+  unit_price: number | null; amount: number | null; counterpart: string | null; payment: string; paid_on: string | null;
+  status: string; note: string | null; sentence: string;
+};
+export type LedgerReport = {
+  business: string; today: string; from: string; to: string; entries: LedgerRow[]; text: string;
+  totals: { incassato: number; da_incassare_sospeso: number; uscite: number; saldo_del_periodo: number };
+  goods_out: { item: string; size: string; pieces: number }[];
+};
+export type LedgerOpen = { business: string; sospesi: LedgerRow[]; totale_sospeso: number; da_fare: LedgerRow[] };
+export type NodoFile = { title: string; uri: string; created_at: string };

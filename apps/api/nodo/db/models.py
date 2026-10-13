@@ -336,6 +336,28 @@ class Reminder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class LedgerEntry(Base, TimestampMixin):
+    """The shop register (CF Materassi): every sale, replacement, expense and payment, with model, size, price and
+    customer. Totals and recaps are computed from these rows by code (nodo/ledger.py), never by a model."""
+    __tablename__ = "ledger_entries"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    business: Mapped[str] = mapped_column(String(120), default="")
+    day: Mapped[str] = mapped_column(String(10), index=True)            # local business day, YYYY-MM-DD
+    kind: Mapped[str] = mapped_column(String(20), index=True)           # vendita | sostituzione | spesa | nota
+    item: Mapped[str] = mapped_column(String(200), default="")          # «materasso Morpheus Memory due strati»
+    size: Mapped[str | None] = mapped_column(String(40))                # «160x190»
+    qty: Mapped[int] = mapped_column(Integer, default=1)
+    unit_price: Mapped[float | None] = mapped_column(Float)
+    amount: Mapped[float | None] = mapped_column(Float)                 # total of the row (qty x unit price)
+    counterpart: Mapped[str | None] = mapped_column(String(200))        # customer, supplier, who was paid
+    payment: Mapped[str] = mapped_column(String(16), default="pagato")  # pagato | sospeso | nessuno
+    paid_on: Mapped[str | None] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(16), default="fatto")    # da_fare | fatto | annullato
+    note: Mapped[str | None] = mapped_column(Text)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class VoiceTurnMetric(Base):
     """One row per completed voice turn (Phase 2M): per-stage timestamps plus computed latencies (ms).
     Timestamps are nullable — an interrupted/error turn may never reach later stages."""

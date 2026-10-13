@@ -46,7 +46,7 @@ class PathIn(BaseModel):
     distill: bool = True
 
 
-def _ingest(data: bytes, filename: str, do_distill: bool, db: Session, org: str, c: Container) -> dict:
+def _ingest(data: bytes | Path, filename: str, do_distill: bool, db: Session, org: str, c: Container) -> dict:
     try:
         convs = read_export(data, filename)
     except UnknownExport as e:
@@ -79,7 +79,7 @@ async def import_path(body: PathIn, db: Session = Depends(get_db), org: str = De
     p = Path(body.path.strip().strip('"'))
     if not p.is_file():
         raise HTTPException(404, f"file non trovato: {p}")
-    return _ingest(p.read_bytes(), p.name, body.distill, db, org, c)
+    return _ingest(p, p.name, body.distill, db, org, c)   # opened in place: exports can be several GB
 
 
 @router.get("/sources")

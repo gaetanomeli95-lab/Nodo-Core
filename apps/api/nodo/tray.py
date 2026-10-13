@@ -37,6 +37,16 @@ def healthy(port: int, timeout: float = 1.5) -> bool:
         return False
 
 
+def port_busy(port: int, timeout: float = 1.0) -> bool:
+    """Something already holds the port (a NODO still starting included): a second supervisor would fight it."""
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 class Supervisor:
     """Runs the server as a child process and keeps it alive."""
 
@@ -226,6 +236,12 @@ def main(argv: list[str] | None = None) -> int:
         save_ico(Path(args.make_icon))
         return 0
     if healthy(args.port):                     # already running: just show it
+        if not args.no_browser:
+            open_panel(args.port)
+        return 0
+    if port_busy(args.port):                   # starting up but not answering yet: never spawn a second server
+        print(f"La porta {args.port} è occupata: NODO sta probabilmente ancora accendendosi (oppure lo occupa "
+              "un altro programma).")
         if not args.no_browser:
             open_panel(args.port)
         return 0
