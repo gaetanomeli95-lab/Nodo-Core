@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 from rapidfuzz import fuzz
 from sqlalchemy import select
 
+from nodo.brain.ledger_tools import LedgerTools  # noqa: E402
 from nodo.db.models import (
     Client,
     ContentItem,
@@ -88,10 +89,13 @@ def html_to_text(raw: str) -> str:
     return re.sub(r"\n\s*\n+", "\n\n", text).strip()
 
 
-class ExtraTools:
+class ExtraTools(LedgerTools):
     """Mixed into Toolbox: `_register_extra()` is called at the end of `_register()`."""
 
     def _register_extra(self) -> None:
+        self._register_ledger()
+        self._add("now", "Data e ora ESATTE di adesso (ora italiana). Usalo prima di dire o segnare un orario.",
+                  _obj({}), self.now)
         # ---- clients & projects
         self._add("clients", "Elenco dei clienti, oppure la scheda di uno (progetti, contenuti, note, siti).",
                   _obj({"name": {**_STR, "description": "cliente (opzionale)"}}), self.clients)
@@ -501,6 +505,14 @@ class ExtraTools:
         if self.c is None or self.c.files is None:
             return {"error": "archivio file non disponibile"}
         return {"files": self.c.files.list(self.s, self.org)[:30]}
+
+    async def now(self) -> dict:
+        n = datetime.now(self._tz())
+        days = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
+        months = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre",
+                  "ottobre", "novembre", "dicembre"]
+        return {"now": f"{days[n.weekday()]} {n.day} {months[n.month - 1]} {n.year}, ore {n:%H:%M}",
+                "iso": n.isoformat(timespec="minutes")}
 
     async def calendar_events(self, days: int = 7) -> dict:
         url = self.settings.calendar_ics_url

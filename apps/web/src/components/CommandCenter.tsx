@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { get, post, streamCommand, type NodoEvent, type VoiceConfig, type VoiceEvent } from "../api";
+import { downloadFile, get, post, streamCommand, type NodoEvent, type VoiceConfig, type VoiceEvent } from "../api";
 import { useVoiceSession } from "./Voice";
 import { Presence, type PresenceMode } from "./Presence";
 import { Pulse } from "./Pulse";
@@ -18,14 +18,25 @@ const DOING: Record<string, string> = {
   notify_me: "Ti scrivo su Telegram", forget: "Tolgo dalla memoria", list_site_files: "Guardo il codice del sito",
   read_site_file: "Leggo un file del sito", site_commits: "Guardo gli ultimi aggiornamenti", site_deployments: "Guardo i deploy",
   check_url: "Controllo l'indirizzo", fetch_url: "Leggo la pagina", web_search: "Cerco sul web", list_files: "Guardo i file",
+  ledger_add: "Segno nel registro", ledger_update: "Correggo il registro", ledger_report: "Faccio i conti",
+  ledger_open: "Guardo sospesi e consegne", create_document: "Preparo il documento", now: "Guardo l'ora",
+  calendar_events: "Guardo il calendario", ssl_status: "Controllo i certificati",
   read_file: "Apro il file", list_drafts: "Guardo le bozze", update_draft: "Aggiorno la bozza", start_work: "Avvio il lavoro",
   nodo_health: "Controllo i miei accessi", sync_sites: "Importo i siti", create_file: "Preparo il file",
   generate_image: "Disegno l'immagine", search_knowledge: "Cerco nelle vecchie conversazioni", read_knowledge: "Rileggo la conversazione",
 };
 const TITLES: Record<string, string> = { sites_status: "I tuoi siti", today_agenda: "Da qui si comincia",
-  projects: "I progetti sul tavolo", night_report: "Mentre non c'eri", files: "File pronto" };
+  projects: "I progetti sul tavolo", night_report: "Mentre non c'eri", files: "File pronto",
+  ledger: "Il registro", ledger_add: "Segnato nel registro", ledger_open: "Ancora aperto" };
 const STATUS: Record<string, string> = { ok: "Regolare", warning: "Da controllare", critical: "Richiede attenzione",
   unknown: "Da verificare", open: "Da fare", in_progress: "In corso", blocked: "In attesa", active: "Attivo", done: "Completato" };
+const FILE_LINK = /(\/api\/v1\/files\/[\w.%-]+)/g;
+/** NODO's replies mention files as /api/v1/files/<name>: show them as download buttons. */
+function Linkified({ text, onError }: { text: string; onError: (m: string) => void }) {
+  const parts = text.split(FILE_LINK);
+  return <>{parts.map((p, i) => i % 2 ? <button key={i} className="file-chip" onClick={() => downloadFile(p).catch((e) => onError((e as Error).message))}>
+    ↓ {decodeURIComponent(p.split("/").pop() || "file")}</button> : <span key={i}>{p}</span>)}</>;
+}
 const loadConv = () => { try { return localStorage.getItem("nodo.conversation"); } catch { return null; } };
 const safeUrl = (s?: string) => { try { const u = new URL(s || ""); return /^https?:$/.test(u.protocol) ? u.href : undefined; } catch { return undefined; } };
 
@@ -158,6 +169,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         }
         if (e.type === "step") setActivity(e.status === "running" ? DOING[String(e.step).replace("tool:", "")] || "Ci lavoro" : null);
         if (e.type === "error") setError(String(e.message));
+        if (e.type === "ui.present") setSurface({ view: String(e.view), rows: (e.rows as Surface["rows"]) || [], summary: String(e.summary || "") });
       });
       onRequestDone();
     } catch (e) { setError((e as Error).message); }
@@ -200,8 +212,9 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         <h3>{TITLES[surface.view] || "Il punto della situazione"}</h3>
         {surface.summary && <p>{surface.summary}</p>}
         <ul>{surface.rows.map((row, i) => <li key={i}><span>{String(row.title || row.name || "")}</span>
-          {row.url ? <a href={String(row.url)} target="_blank" rel="noreferrer">Apri ↗</a>
-                   : <small>{STATUS[String(row.status)] || String(row.project || "")}</small>}</li>)}</ul>
+          {row.download && row.url ? <button className="primary" onClick={() => downloadFile(String(row.url)).catch((e) => setError((e as Error).message))}>Scarica ↓</button>
+            : row.url ? <a href={String(row.url)} target="_blank" rel="noreferrer">Apri ↗</a>
+                   : <small>{row.amount != null ? `${row.amount} €` : STATUS[String(row.status)] || String(row.project || row.day || "")}</small>}</li>)}</ul>
         {!surface.summary && !surface.rows.length && <p>Non ci sono elementi da mostrare.</p>}
       </section>}
       {!decision && !surface && mode === "rest" && <Pulse revision={pulseRevision} disabled={busy || !voice.connected}
@@ -233,7 +246,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       {!!turns.length && <button className="quiet-button" disabled={!voice.connected || busy || !!decision || !!activity || voice.audioPlaying || voice.microphoneOn}
         onClick={() => voice.setConversation(null)}>Nuova conversazione</button>}
       <div className="diary-entries" ref={journal}>{!turns.length && <p className="muted">La conversazione deve ancora cominciare.</p>}
-        {turns.map((t, i) => <article key={i}><small>{t.who === "user" ? "TU" : "NODO"}</small><p>{t.text}</p></article>)}
+        {turns.map((t, i) => <article key={i}><small>{t.who === "user" ? "TU" : "NODO"}</small><p><Linkified text={t.text} onError={setError} /></p></article>)}
         {voice.partial && <article className="partial-entry"><small>TI STO ASCOLTANDO</small><p>{voice.partial}</p></article>}</div>
     </aside>}
   </section>;

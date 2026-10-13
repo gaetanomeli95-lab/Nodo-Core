@@ -27,6 +27,38 @@ def _names(items: list[str], limit: int = 3) -> str:
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " e " + items[-1] if items else ""
 
 
+def _shop_lines(s: Session, org: str, settings, today) -> list[str]:
+    """The shop first: yesterday in numbers, what is still to deliver, who still has to pay."""
+    from datetime import timedelta
+
+    from nodo.ledger import Ledger, euro, sentence
+    biz = settings.ledger_business or "il negozio"
+    led = Ledger(s, org, biz, today=today)
+    out: list[str] = []
+    # the last day with entries before today (Monday: Saturday), not necessarily «ieri»
+    last = [r.day for r in led.entries(today - timedelta(days=7), today - timedelta(days=1))]
+    if last:
+        day = max(last)
+        from datetime import date as _date
+        rep = led.report(_date.fromisoformat(day), _date.fromisoformat(day))
+        n_sold = sum(e["qty"] for e in rep["entries"] if e["kind"] == "vendita" and e["status"] == "fatto")
+        when = "Ieri" if (today - _date.fromisoformat(day)).days == 1 else f"Il {_date.fromisoformat(day).day}"
+        t = rep["totals"]
+        part = f"{when} a {biz}: {n_sold} {'pezzo venduto' if n_sold == 1 else 'pezzi venduti'}, " \
+               f"incassati {euro(t['incassato'])}, uscite {euro(t['uscite'])}"
+        out.append(part + (f", sospesi {euro(t['da_incassare_sospeso'])}." if t["da_incassare_sospeso"] else "."))
+    todo = [r for r in led.pending_work() if r.day <= today.isoformat()]
+    if todo:
+        out.append("Oggi da fare: " + "; ".join(sentence(r).replace(" [da consegnare/da fare]", "")
+                                                for r in todo[:4]) + ".")
+    open_pay = led.open_payments()
+    if open_pay:
+        tot = sum(r.amount or 0 for r in open_pay)
+        out.append(f"Aspetti ancora {euro(tot)} da " + _names(sorted({r.counterpart or 'un cliente'
+                                                                          for r in open_pay})) + ".")
+    return out
+
+
 def build_greeting(s: Session, org: str, settings, *, now: datetime | None = None) -> dict:
     now = now or datetime.now(UTC)
     tz = tzinfo(settings.timezone)
@@ -35,6 +67,7 @@ def build_greeting(s: Session, org: str, settings, *, now: datetime | None = Non
     pulse = build_pulse(s, org, settings, now=now)
     counts, night = pulse["counts"], pulse["night"]
     lines = [f"{hello} {settings.owner_name}."]
+    lines += _shop_lines(s, org, settings, local.date())
 
     sites = s.scalars(select(Site).where(Site.organization_id == org, Site.active.is_(True))).all()
     broken = s.scalars(select(Incident).where(Incident.organization_id == org,
