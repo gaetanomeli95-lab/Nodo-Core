@@ -13,12 +13,14 @@ seguendo **[docs/ACCESSI.md](docs/ACCESSI.md)** (Vercel, GitHub, Claude e, se vu
 e riapri NODO. Nella scheda **Accessi** vedi subito cosa funziona. Nella scheda **Siti** premi
 **Importa da Vercel**.
 
-## 3. Lascialo lavorare
-Tieni NODO acceso (e il PC sveglio): all'1:00 parte il turno di notte, alle 7:30 trovi il briefing.
-Per avviarlo da solo quando accedi a Windows:
-```
-powershell -ExecutionPolicy Bypass -File scripts\avvio-automatico.ps1
-```
+## 3. Lascialo lavorare (come una vera app)
+Doppio click su **`crea-app-nodo.bat`**: crea la scorciatoia **NODO** sul Desktop e nel menu Start e lo fa partire da
+solo ad ogni accesso a Windows, **senza finestre nere**: resta solo un'icona **N** vicino all'orologio
+(verde = acceso, arancione = si sta accendendo, rossa = fermo; se cade riparte da solo). Con un clic sull'icona
+lo apri come finestra app, dal menu lo riavvii o lo spegni. Il PC deve restare sveglio di notte: all'1:00 parte il
+turno di notte, alle 7:30 trovi il briefing.
+Se vuoi anche un vero **`NODO.exe`** da fissare alla barra delle applicazioni: doppio click su **`costruisci-exe.bat`**.
+(Per togliere tutto: `powershell -ExecutionPolicy Bypass -File scripts\crea-app.ps1 -Rimuovi`.)
 
 ## 4. Accendi il cervello (con il tuo abbonamento Claude)
 Installa Claude Code e fai l'accesso con il tuo account Claude Pro: due comandi, spiegati in

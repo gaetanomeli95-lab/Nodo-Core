@@ -3,14 +3,14 @@
 
   Uso:   doppio click su avvia-nodo.bat      (normale)
          doppio click su demo-nodo.bat       (demo simulata, nessun accesso necessario)
-  Opzioni: -Demo  -NoBrowser  -Port 8000  -SkipBuild
+  Opzioni: -Demo  -NoBrowser  -Port 8000  -SkipBuild  -PrepareOnly (prepara tutto e basta)  -Tray (icona vicino all'orologio, senza finestra)
 
   Cosa fa, solo la prima volta o quando serve:
     1. trova Python 3.12+  2. crea apps\api\.venv e installa NODO  3. installa Chromium per i controlli
     4. crea apps\api\.env da .env.example  5. aggiorna il database  6. costruisce il pannello web
   Poi avvia NODO. Il turno di notte parte da solo finche' questa finestra resta aperta.
 #>
-param([switch]$Demo, [switch]$NoBrowser, [int]$Port = 8000, [switch]$SkipBuild)
+param([switch]$Demo, [switch]$NoBrowser, [int]$Port = 8000, [switch]$SkipBuild, [switch]$PrepareOnly, [switch]$Tray)
 
 $ErrorActionPreference = "Continue"  # native tools write warnings on stderr: check $LASTEXITCODE instead
 $Root = Split-Path -Parent $PSScriptRoot
@@ -51,8 +51,9 @@ if (-not (Test-Path $stamp) -or ((Get-Item $pyproject).LastWriteTime -gt (Get-It
   Say "Installo le dipendenze di NODO (qualche minuto la prima volta)..."
   & $Py -m pip install --upgrade pip --quiet
   Push-Location $Api
-  & $Py -m pip install -e ".[browser,live]" --quiet
-  if ($LASTEXITCODE -ne 0) { Warn "Installo senza i controlli via browser..."; & $Py -m pip install -e . --quiet }
+  & $Py -m pip install -e ".[browser,live,tray]" --quiet
+  if ($LASTEXITCODE -ne 0) { Warn "Installo senza i controlli via browser..."; & $Py -m pip install -e ".[live,tray]" --quiet }
+  if ($LASTEXITCODE -ne 0) { Warn "Installo solo il minimo..."; & $Py -m pip install -e . --quiet }
   Pop-Location
   # 3. Chromium for the browser checks (optional, ~150 MB)
   & $Py -c "import playwright" 2>$null
@@ -105,8 +106,13 @@ if (-not $SkipBuild) {
   }
 }
 
+if ($PrepareOnly) { Say "Tutto pronto."; exit 0 }
+
 # start: an older NODO still running (also one started in background by a coding agent) keeps the port busy
 # and the new version would not start. Stop it first.
+# se NODO gira gia' come app (icona vicino all'orologio), chiudi prima l'app: altrimenti rilancerebbe il server
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'nodo\.tray' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 $busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
 if ($busy) {
   foreach ($procId in ($busy | Select-Object -ExpandProperty OwningProcess -Unique)) {
@@ -123,6 +129,15 @@ if ($busy) {
   }
 }
 $url = "http://127.0.0.1:$Port"
+if ($Tray) {
+  # app vera: nessuna finestra nera, icona vicino all'orologio (verde = acceso), riparte da sola se cade
+  $pyw = Join-Path $Venv "Scripts\pythonw.exe"
+  $trayArgs = @("-m", "nodo.tray", "--port", "$Port")
+  if ($NoBrowser) { $trayArgs += "--no-browser" }
+  Start-Process -FilePath $pyw -ArgumentList $trayArgs -WorkingDirectory $Api
+  Say "NODO e' acceso: cerca l'icona N vicino all'orologio (da li' puoi aprirlo o spegnerlo)."
+  exit 0
+}
 Say "NODO e' acceso su $url  (chiudi questa finestra per spegnerlo)"
 if (-not $NoBrowser) { Start-Job -ScriptBlock { param($u) Start-Sleep 4; Start-Process $u } -ArgumentList $url | Out-Null }
 Push-Location $Api
