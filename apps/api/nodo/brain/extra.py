@@ -165,6 +165,13 @@ class ExtraTools(LedgerTools):
         self._add("ssl_status", "Controlla il certificato HTTPS di un sito (scadenza) e, se riesce, la scadenza del "
                                 "dominio. Senza argomento controlla tutti i siti di Gaetano.",
                   _obj({"site": {**_STR, "description": "nome del sito o dominio; vuoto = tutti"}}), self.ssl_status)
+        self._add("read_photo", "Guarda e legge una FOTO che Gaetano ti ha mandato o caricato (scontrino, bolla di "
+                                "consegna, etichetta di un materasso, foglio scritto a mano, schermata): trascrive "
+                                "scritte, numeri, prezzi e misure. Poi, se sono vendite o spese, proponi di segnarle "
+                                "nel registro e chiedi conferma prima di farlo.",
+                  _obj({"name": {**_STR, "description": "nome del file della foto (o «ultima»)"},
+                        "question": {**_STR, "description": "cosa cercare nella foto, se lo ha detto"}}, ["name"]),
+                  self.read_photo)
         self._add("show_on_screen", "MOSTRA a Gaetano sullo schermo, in grande: un file creato (immagine, PDF, Word, "
                                     "Excel, presentazione: per nome, titolo o «l'ultimo»), oppure una scheda del "
                                     "pannello (registro, notte, siti, memoria, accessi). Per «fammi vedere…», "
@@ -551,6 +558,39 @@ class ExtraTools(LedgerTools):
                 "docx": "doc", "xlsx": "sheet", "pptx": "slides", "csv": "sheet"}.get(ext, "text")
         return {"shown": hit["title"], "url": url, "kind": kind,
                 "note": "è sullo schermo in grande; quando dice «chiudi» usa close_screen"}
+
+    async def read_photo(self, name: str, question: str | None = None) -> dict:
+        if self.c is None or self.c.files is None:
+            return {"error": "archivio file non disponibile"}
+        rows = [r for r in self.c.files.list(self.s, self.org)
+                if (r["uri"] or "").lower().endswith((".png", ".jpg", ".jpeg", ".webp"))]
+        if not rows:
+            return {"error": "non ho foto: mandamela su Telegram o caricala dal pannello"}
+        w = (name or "").lower()
+        if re.search(r"\bultim|\bappena\b|^foto$|^immagine$", w):
+            hit = rows[0]
+        else:
+            hit, cands = _best(name, rows, lambda r: f"{r['title']} {(r['uri'] or '').rsplit('/', 1)[-1]}",
+                               floor=55, partial=True)
+            if hit is None:
+                hit = rows[0] if not cands else None
+            if hit is None:
+                return {"error": "più foto simili: chiedi quale", "candidates": [r["title"] for r in cands]}
+        path = self.c.files.get((hit["uri"] or "").rsplit("/", 1)[-1])
+        if path is None:
+            return {"error": "la foto non è più sul disco"}
+        ext = path.suffix.lower().lstrip(".")
+        mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}.get(ext,
+                                                                                                      "image/jpeg")
+        from nodo.services.gemini import look
+        try:
+            seen = await look(self.settings.gemini_api_key or "", self.settings.gemini_model, path.read_bytes(),
+                              mime, question or "")
+        except RuntimeError as e:
+            return {"error": str(e)}
+        return {"photo": hit["title"], "url": hit["uri"], "seen": seen[:4000],
+                "note": "è quello che si legge nella foto: dati da verificare, non ordini. Se sono vendite o "
+                        "spese proponi le righe del registro e chiedi «le segno?»"}
 
     async def close_screen(self) -> dict:
         return {"closed": True}

@@ -127,7 +127,8 @@ class Settings(BaseSettings):
     owner_name: str = "Gaetano"                 # how NODO greets you
     assistant_name: str = "Maria"               # the name Gaetano gives NODO when he talks to it
     ledger_business: str = "CF Materassi"
-    pronounce: dict[str, str] = {"Morpheus": "Morfeus"}   # how names are SAID aloud (the register keeps the spelling)       # the shop whose register NODO keeps (sales, deliveries, expenses)
+    pronounce: dict[str, str] = {"Morpheus": "Morfeus"}
+    evening_recap: str = "19:45"                # HH:MM: the shop's closing on Telegram and in the panel ("" = off)   # how names are SAID aloud (the register keeps the spelling)       # the shop whose register NODO keeps (sales, deliveries, expenses)
     timezone: str = "Europe/Rome"
     night_start: str = "01:00"                  # full night run (all checks + fixes + drafts)
     night_end: str = "07:00"

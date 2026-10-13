@@ -248,3 +248,11 @@ export type LedgerReport = {
 };
 export type LedgerOpen = { business: string; sospesi: LedgerRow[]; totale_sospeso: number; da_fare: LedgerRow[] };
 export type NodoFile = { title: string; uri: string; created_at: string };
+export type LedgerStats = {
+  business: string; from: string; to: string; days: number;
+  series: { day: string; in: number; out: number; pieces: number }[];
+  totals: { incassato: number; uscite: number; saldo: number; pezzi: number; da_incassare: number };
+  best_items: { item: string; pieces: number; revenue: number }[];
+  best_customers: { name: string; revenue: number }[];
+  oldest_open: { who: string; amount: number | null; since: string }[];
+};

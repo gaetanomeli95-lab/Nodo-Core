@@ -1,6 +1,7 @@
 """The shop register: Gaetano's real 12-13 October at CF Materassi, replayed. Sums and recaps by code."""
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 
 import pytest
@@ -274,3 +275,97 @@ def test_preview_of_a_spreadsheet(client, tmp_path):
     out = client.get("/api/v1/files/prova.xlsx/preview").json()
     assert "Rete | 100" in out["text"]
     assert client.get("/api/v1/files/nessuno.pdf/preview").status_code == 404
+
+
+async def test_reading_a_photo_with_gemini_eyes(box, tmp_path, monkeypatch):  # noqa: F811
+    from nodo.services import gemini
+    from nodo.services.files import FileStore
+    box.c.files = FileStore(tmp_path / "files")
+    assert "error" in await box.call("read_photo", {"name": "ultima"})
+    p = box.c.files.save_bytes("bolla.jpg", b"\xff\xd8x")
+    box.c.files.register(box.s, box.org, p.name, "Bolla Softcomfort")
+    seen = {}
+
+    async def fake_look(key, model, image, mime, question, transport=None):
+        seen.update(image=image, mime=mime, q=question)
+        return "Bolla n. 12: 3 materassi Arianna H20 160x190, Softcomfort"
+    monkeypatch.setattr(gemini, "look", fake_look)
+    out = await box.call("read_photo", {"name": "ultima", "question": "che modelli ci sono?"})
+    assert "Arianna H20 160x190" in out["seen"] and seen["mime"] == "image/jpeg" and seen["image"] == b"\xff\xd8x"
+    assert "le segno?" in out["note"]
+
+
+async def test_gemini_look_sends_the_image_and_reads_the_answer():
+    import base64
+
+    import httpx
+
+    from nodo.services.gemini import look
+
+    def handler(request):
+        body = json.loads(request.content)
+        part = body["contents"][0]["parts"][0]["inline_data"]
+        assert part["mime_type"] == "image/png" and base64.b64decode(part["data"]) == b"PNG"
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "Scontrino: 40 euro"}]}}]})
+    out = await look("k", "m", b"PNG", "image/png", "quanto?", transport=httpx.MockTransport(handler))
+    assert out == "Scontrino: 40 euro"
+    with pytest.raises(RuntimeError):
+        await look("", "m", b"PNG", "image/png", "")
+
+
+def test_upload_from_the_panel(client):
+    r = client.post("/api/v1/files/upload", files={"file": ("scontrino.jpg", b"\xff\xd8x", "image/jpeg")})
+    assert r.status_code == 200 and r.json()["url"].endswith(".jpg")
+    assert client.post("/api/v1/files/upload", files={"file": ("virus.exe", b"MZ", "application/x")}).status_code == 400
+    assert any(f["title"] == "scontrino.jpg" for f in client.get("/api/v1/files").json()["files"])
+
+
+async def test_the_shop_in_numbers(box, db):  # noqa: F811
+    await box.call("ledger_add", {"entries": [
+        {"kind": "vendita", "item": "materasso Arianna H20", "size": "160x190", "qty": 3, "unit_price": 110,
+         "counterpart": "Softcomfort", "payment": "sospeso"},
+        {"kind": "vendita", "item": "materasso Arianna H20", "size": "160x190", "amount": 120, "counterpart": "Rossi",
+         "payment": "pagato", "day": "ieri"},
+        {"kind": "spesa", "item": "palestra", "amount": 65}]})
+    st = await box.call("ledger_stats", {"days": 7})
+    assert st["totals"] == {"incassato": 120.0, "uscite": 65.0, "saldo": 55.0, "pezzi": 4, "da_incassare": 330.0}
+    assert st["best_items"][0]["pieces"] == 4 and "Il più venduto è materasso Arianna H20" in st["say"]
+    assert st["oldest_open"][0]["who"] == "Softcomfort"
+
+
+def test_stats_api_has_one_point_per_day(client):
+    s = client.get("/api/v1/ledger/stats", params={"days": 30}).json()
+    assert len(s["series"]) == 30 and s["series"][-1]["day"] == s["to"]
+
+
+async def test_evening_recap_goes_to_telegram_and_the_panel(db, seeded, world):
+    from nodo.config import Settings
+    from nodo.db.models import Conversation, Message
+    from nodo.night.notify import FakeNotifier
+    from nodo.night.scheduler import NightScheduler
+    c = build_container_for(world)
+    sched = NightScheduler(c)
+    day = date(2026, 10, 13)
+    assert await sched.evening_recap(day) is None                       # nothing in the register: silence
+    db.add(Conversation(organization_id=seeded, channel="text", active_context={}))
+    led = Ledger(db, seeded, "CF Materassi", today=day)
+    led.add(kind="vendita", item="rete con tavola", size="160x190", amount=100, counterpart="Softcomfort")
+    led.add(kind="vendita", item="materasso Arianna", counterpart="Bianchi")         # no price: a doubt
+    db.commit()
+    msg = await sched.evening_recap(day)
+    assert "Chiusura di oggi a CF Materassi" in msg and "rete con tavola matrimoniale" in msg
+    assert "Da controllare" in msg and "manca il prezzo" in msg
+    assert any("Chiusura di oggi" in m for m in c.notifier.sent)
+    db.expire_all()
+    assert any("🧾" in m.content for m in db.scalars(select(Message)))
+    assert isinstance(Settings().evening_recap, str)
+    assert FakeNotifier
+
+
+def build_container_for(world):
+    from nodo.app import build_container
+    from nodo.config import Settings
+    from nodo.night.notify import FakeNotifier
+    from nodo.providers.deterministic import FakeModelProvider
+    return build_container(Settings(), providers=[FakeModelProvider()], vercel=world.vercel, repo=world.github,
+                           prober=world.prober, notifier=FakeNotifier())

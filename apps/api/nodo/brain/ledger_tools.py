@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from nodo.ledger import KINDS, Ledger, check_entry, day_check, euro, parse_day, price_history, sentence, view
+from nodo.ledger import KINDS, Ledger, check_entry, day_check, euro, parse_day, price_history, sentence, stats, view
 
 _STR = {"type": "string"}
 _NUM = {"type": "number"}
@@ -85,6 +85,11 @@ class LedgerTools:
                       "day": {**_STR, "description": "oggi (default) o un altro giorno"},
                       "cash_counted": {**_NUM, "description": "quanto ha contato in cassa, se te lo dice"}}},
                   self.ledger_close_day)
+        self._add("ledger_stats", f"{biz} in numeri sugli ultimi giorni (default 30): incassato, uscite, saldo, pezzi "
+                                  "venduti, modelli più venduti, clienti migliori, chi deve pagare da più tempo. Per "
+                                  "«com'è andato il mese / la settimana?», «cosa vendiamo di più?».",
+                  {"type": "object", "properties": {"days": {"type": "integer", "description": "7, 30, 90…"}}},
+                  self.ledger_stats)
         self._add("ledger_open", f"Cosa resta aperto nel registro di {biz}: pagamenti sospesi (chi deve ancora "
                                  "pagare e quanto) e consegne/lavori da fare.", {"type": "object", "properties": {}},
                   self.ledger_open)
@@ -218,6 +223,19 @@ class LedgerTools:
         res["say"] = " ".join(lines)
         res["note"] = "Dì «say», poi chiedi le righe dubbie una alla volta e correggi con ledger_update."
         return res
+
+    async def ledger_stats(self, days: int = 30) -> dict:
+        st = stats(self._ledger(), days)
+        t = st["totals"]
+        best = st["best_items"][0]["item"] if st["best_items"] else None
+        say = (f"Negli ultimi {st['days']} giorni hai incassato {euro(t['incassato'])} e speso {euro(t['uscite'])}: "
+               f"saldo {euro(t['saldo'])}, {t['pezzi']} pezzi venduti.")
+        if best:
+            say += f" Il più venduto è {best}."
+        if t["da_incassare"]:
+            say += f" Aspetti ancora {euro(t['da_incassare'])}."
+        st.pop("series")
+        return {**st, "say": say, "note": "i grafici sono nella scheda Registro; puoi mostrarla con show_on_screen"}
 
     async def ledger_open(self) -> dict:
         led = self._ledger()

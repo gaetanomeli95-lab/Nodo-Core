@@ -188,9 +188,50 @@ class NightScheduler:
             with session_scope() as db:
                 await learn_once(self.c, db, now)
         today = now.astimezone(self.tz).date()
+        local = now.astimezone(self.tz)
+        if self.settings.evening_recap and getattr(self, "_last_evening", None) != today \
+                and local.strftime("%H:%M") >= self.settings.evening_recap:
+            self._last_evening = today
+            await self.evening_recap(today)
         if getattr(self, "_last_watch", None) != today and now.astimezone(self.tz).hour >= 8:
             self._last_watch = today
             await self.watch_expiry()
+
+    async def evening_recap(self, day) -> str | None:
+        """End of the working day: the shop's closing (money, doubts, deliveries, who must pay) on Telegram and in the
+        panel - only on days with something in the register."""
+        from nodo.db.models import Conversation, LedgerEntry, Message
+        from nodo.db.session import session_scope
+        from nodo.ledger import Ledger, day_check
+        from nodo.ledger_voice import spoken_recap
+        with session_scope() as db:
+            org_rows = db.scalars(select(LedgerEntry.organization_id).where(LedgerEntry.day == day.isoformat())
+                                  .distinct()).all()
+            if not org_rows:
+                return None
+            led = Ledger(db, org_rows[0], self.settings.ledger_business, today=day)
+            res = day_check(led, day)
+            rep = led.report(day, day)
+            text = spoken_recap(led.entries(day, day), led.settled_in(day, day), rep["totals"], day, day, day,
+                                self.settings.owner_name, None)
+            parts = [f"Chiusura di oggi a {self.settings.ledger_business}. {text}"]
+            if res["doubts"]:
+                parts.append("Da controllare: " + "; ".join(res["doubts"][:5]) + ".")
+            if res["late_deliveries"]:
+                parts.append("Consegne rimaste indietro: " + "; ".join(res["late_deliveries"][:5]) + ".")
+            msg = "\n\n".join(parts)
+            notifier = self.c.notifier
+            if notifier is not None and getattr(notifier, "enabled", False):
+                try:
+                    await notifier.send(f"🧾 {msg}")
+                except Exception:
+                    log.warning("evening recap telegram send failed", exc_info=True)
+            conv = db.scalars(select(Conversation).order_by(Conversation.updated_at.desc()).limit(1)).first()
+            if conv is not None:
+                db.add(Message(conversation_id=conv.id, role="nodo", content=f"🧾 {msg}",
+                               request_id=f"evening-{day.isoformat()}"))
+            db.commit()
+            return msg
 
     async def watch_expiry(self, thresholds=(21, 14, 7, 3, 2, 1, 0)) -> list[str]:
         """Warns (Telegram + panel) when a site's HTTPS certificate is close to expiring or no longer valid."""

@@ -1,7 +1,7 @@
 """Files NODO created for you: list and download."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -14,6 +14,28 @@ router = APIRouter(prefix="/api/v1/files", dependencies=[Depends(auth)])
 @router.get("")
 def list_files(c: Container = Depends(container), db: Session = Depends(get_db), org: str = Depends(org_id)):
     return {"files": c.files.list(db, org)}
+
+
+_UPLOAD_KINDS = {"png", "jpg", "jpeg", "webp", "pdf", "docx", "xlsx", "pptx", "csv", "txt", "md"}
+
+
+@router.post("/upload")
+async def upload(file: UploadFile = File(...), c: Container = Depends(container), db: Session = Depends(get_db),
+                 org: str = Depends(org_id)):
+    """A photo or a document dropped on the panel: kept among NODO's files so the brain can read or show it."""
+    from datetime import datetime
+    raw = (file.filename or "file").rsplit("/", 1)[-1]
+    ext = raw.rsplit(".", 1)[-1].lower() if "." in raw else ""
+    if ext not in _UPLOAD_KINDS:
+        raise HTTPException(400, "tipo di file non supportato: foto, PDF, Word, Excel, PowerPoint o testo")
+    data = await file.read(15_000_001)
+    if len(data) > 15_000_000:
+        raise HTTPException(413, "file troppo grande (massimo 15 MB)")
+    stem = raw.rsplit(".", 1)[0][:60] or "file"
+    p = c.files.save_bytes(f"{stem}-{datetime.now():%H%M%S}.{'jpg' if ext == 'jpeg' else ext}", data)
+    doc = c.files.register(db, org, p.name, raw[:200], summary="caricato dal pannello")
+    db.commit()
+    return {"name": p.name, "title": doc.title, "url": doc.uri}
 
 
 @router.get("/{name}/preview")

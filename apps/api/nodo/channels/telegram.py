@@ -221,6 +221,10 @@ class TelegramChannel:
         if voice := (msg.get("voice") or msg.get("audio")):
             await self.handle_voice(voice)
             return
+        doc = msg.get("document") or {}
+        if msg.get("photo") or (doc.get("mime_type") or "").startswith("image/"):
+            await self.handle_photo(msg)
+            return
         if text := (msg.get("text") or "").strip():
             await self.handle_text(text)
 
@@ -237,6 +241,35 @@ class TelegramChannel:
             return
         await self.say(f"Ho capito: «{tr.text.strip()}»")
         await self.handle_text(tr.text.strip())
+
+    async def handle_photo(self, msg: dict) -> None:
+        """A photo from the phone (receipt, delivery note, label): saved among NODO's files, then read by the brain."""
+        from datetime import datetime as _dt
+
+        from nodo.db.session import session_scope
+        if self.c.files is None:
+            await self.say("Non riesco a salvare le foto in questa istanza.")
+            return
+        if msg.get("photo"):
+            best = max(msg["photo"], key=lambda p: p.get("file_size") or p.get("width", 0))
+            file_id, ext = best["file_id"], "jpg"
+        else:
+            file_id = msg["document"]["file_id"]
+            ext = {"image/png": "png", "image/webp": "webp"}.get(msg["document"].get("mime_type"), "jpg")
+        try:
+            data = await self.api.download(file_id)
+        except TelegramError:
+            await self.say("Non sono riuscita a scaricare la foto, riprovi?")
+            return
+        name = f"foto-{_dt.now():%Y%m%d-%H%M%S}.{ext}"
+        p = self.c.files.save_bytes(name, data)
+        caption = (msg.get("caption") or "").strip()
+        with session_scope() as db:
+            core = self.c.core(db)
+            self.c.files.register(db, core.org, p.name, caption[:120] or f"Foto da Telegram {_dt.now():%d/%m %H:%M}",
+                                  summary="foto mandata da Telegram")
+            db.commit()
+        await self.ask_nodo(f"[Ti ho mandato una foto: {p.name}] " + (caption or "Guardala e dimmi cosa c'è."))
 
     async def handle_text(self, text: str) -> None:
         low = text.lower()

@@ -152,3 +152,31 @@ async def pollinations(prompt: str, transport: httpx.AsyncBaseTransport | None =
     if r.status_code >= 400 or len(r.content) < 5000:
         raise RuntimeError(f"pollinations: HTTP {r.status_code}")
     return r.content
+
+
+async def look(api_key: str, model: str, image: bytes, mime: str, question: str,
+               transport: httpx.AsyncBaseTransport | None = None) -> str:
+    """Eyes: describes / transcribes a photo (receipt, delivery note, label, screenshot) in Italian.
+    Same model ladder as search; returns plain text."""
+    if not api_key:
+        raise RuntimeError("per leggere le foto serve la chiave Gemini (gratuita su aistudio.google.com)")
+    prompt = (question.strip() or "Descrivi cosa c'è nell'immagine.") + (
+        "\n\nRispondi in italiano. Se ci sono scritte, numeri, prezzi, misure, nomi o date, trascrivili esattamente "
+        "come sono. Se qualcosa non si legge bene dillo, non inventare.")
+    body = {"contents": [{"parts": [{"inline_data": {"mime_type": mime, "data": base64.b64encode(image).decode()}},
+                                    {"text": prompt}]}],
+            "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1500,
+                                 "thinkingConfig": {"thinkingLevel": "minimal"}}}
+    errors = []
+    for m in [model, *[x for x in _SEARCH_LADDER if x != model]]:
+        try:
+            data = await _generate(api_key, m, body, transport=transport)
+        except RuntimeError as e:
+            errors.append(str(e))
+            if _retryable(e):
+                continue
+            raise
+        text = "".join(p.get("text", "") for p in _parts(data)).strip()
+        if text:
+            return text
+    raise RuntimeError("non riesco a leggere la foto adesso: " + (errors[-1][:160] if errors else "nessuna risposta"))

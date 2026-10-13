@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from nodo.db.models import Document
 
 TEXT_KINDS = {"md", "txt", "csv", "json", "html", "svg", "xml", "py", "css", "js", "yaml", "log"}
-BINARY_KINDS = {"png", "jpg", "webp", "pdf", "docx", "xlsx", "pptx"}
+BINARY_KINDS = {"png", "jpg", "jpeg", "webp", "gif", "pdf", "docx", "xlsx", "pptx"}
 
 _SAFE = re.compile(r"[^a-z0-9._-]+")
 

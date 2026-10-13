@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { downloadFile, get, type LedgerOpen, type LedgerReport, type LedgerRow, type NodoFile } from "../api";
+import { downloadFile, get, type LedgerOpen, type LedgerReport, type LedgerRow, type LedgerStats, type NodoFile } from "../api";
+import { MoneyChart } from "./LedgerChart";
 
 const KIND: Record<string, [string, string]> = {
   vendita: ["Vendite", "sale"], sostituzione: ["Sostituzioni in garanzia", "swap"], spesa: ["Uscite", "out"], nota: ["Note", "note"],
@@ -55,6 +56,7 @@ export function LedgerView() {
   const [rep, setRep] = useState<LedgerReport | null>(null);
   const [open, setOpen] = useState<LedgerOpen | null>(null);
   const [files, setFiles] = useState<NodoFile[]>([]);
+  const [stats, setStats] = useState<LedgerStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -66,6 +68,7 @@ export function LedgerView() {
     }).catch((e) => setError((e as Error).message));
     get<LedgerOpen>("/api/v1/ledger/open").then(setOpen).catch(() => {});
     get<{ files: NodoFile[] }>("/api/v1/files").then((f) => setFiles(f.files.slice(0, 12))).catch(() => {});
+    get<LedgerStats>("/api/v1/ledger/stats?days=30").then(setStats).catch(() => {});
   }, [day, span]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { const t = setInterval(load, 20_000); return () => clearInterval(t); }, [load]);
@@ -98,6 +101,16 @@ export function LedgerView() {
       <div className={`kpi bal ${(t?.saldo_del_periodo || 0) < 0 ? "neg" : ""}`}><small>Saldo</small><strong><Counter value={t?.saldo_del_periodo || 0} /></strong></div>
       <div className="kpi wait"><small>Da incassare</small><strong><Counter value={t?.da_incassare_sospeso || 0} /></strong></div>
     </section>
+
+    {stats && stats.series.some((d) => d.in || d.out) && <section className="card ledger-trend">
+      <MoneyChart stats={stats} />
+      <div className="trend-side">
+        <div><small>Mese · incassato</small><b>{fmt(stats.totals.incassato)}</b></div>
+        <div><small>Pezzi venduti</small><b>{stats.totals.pezzi}</b></div>
+        {!!stats.best_items.length && <div><small>I più venduti</small>
+          <ol>{stats.best_items.slice(0, 4).map((b) => <li key={b.item}><span>{b.item}</span><b>{b.pieces}</b></li>)}</ol></div>}
+      </div>
+    </section>}
 
     <div className="ledger-grid">
       <section className="card ledger-days">

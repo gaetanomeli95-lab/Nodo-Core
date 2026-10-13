@@ -484,3 +484,50 @@ def archive_shop_notes(db: Session) -> int:
             n += 1
     db.flush()
     return n
+
+
+def stats(led: Ledger, days: int = 30) -> dict:
+    """The shop in numbers over the last `days`: money per day, best sellers, best customers, open credits."""
+    days = max(7, min(int(days or 30), 366))
+    start, end = led.today - timedelta(days=days - 1), led.today
+    rows = led.entries(start, end)
+    per_day: dict[str, dict] = {(start + timedelta(days=i)).isoformat(): {"in": 0.0, "out": 0.0, "pieces": 0}
+                                for i in range(days)}
+    for r in rows:
+        d = per_day.get(r.day)
+        if d is None or r.status == "da_fare":
+            continue
+        if r.kind == "vendita":
+            d["pieces"] += r.qty
+            if r.payment == "pagato":
+                d["in"] += r.amount or 0
+        elif r.kind == "spesa":
+            d["out"] += r.amount or 0
+    for r in led.settled_in(start, end):           # older sales paid in the period count the day they were paid
+        if r.paid_on in per_day:
+            per_day[r.paid_on]["in"] += r.amount or 0
+    items: dict[str, dict] = {}
+    customers: dict[str, float] = {}
+    for r in rows:
+        if r.kind != "vendita" or r.status == "da_fare":
+            continue
+        key = f"{r.item} {size_label(r.size)}".strip()
+        it = items.setdefault(key, {"item": key, "pieces": 0, "revenue": 0.0})
+        it["pieces"] += r.qty
+        it["revenue"] += r.amount or 0
+        if r.counterpart:
+            customers[r.counterpart] = customers.get(r.counterpart, 0) + (r.amount or 0)
+    tot_in = sum(d["in"] for d in per_day.values())
+    tot_out = sum(d["out"] for d in per_day.values())
+    open_pay = led.open_payments()
+    return {"from": start.isoformat(), "to": end.isoformat(), "days": days,
+            "series": [{"day": k, "in": round(v["in"], 2), "out": round(v["out"], 2), "pieces": v["pieces"]}
+                       for k, v in per_day.items()],
+            "totals": {"incassato": round(tot_in, 2), "uscite": round(tot_out, 2), "saldo": round(tot_in - tot_out, 2),
+                       "pezzi": sum(v["pieces"] for v in per_day.values()),
+                       "da_incassare": round(sum(r.amount or 0 for r in open_pay), 2)},
+            "best_items": sorted(items.values(), key=lambda x: (-x["pieces"], -x["revenue"]))[:6],
+            "best_customers": [{"name": k, "revenue": round(v, 2)}
+                               for k, v in sorted(customers.items(), key=lambda kv: -kv[1])[:6]],
+            "oldest_open": [{"who": r.counterpart or "cliente", "amount": r.amount, "since": r.day}
+                            for r in open_pay[:5]]}

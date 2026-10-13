@@ -142,3 +142,22 @@ async def test_http_api_and_notifier_shapes():
     sends = [b for m, b in seen if m == "sendMessage"]
     assert len(sends) == 4 and "reply_markup" not in sends[-2] and sends[-1]["reply_markup"]
     assert chunks("a\nb") == ["a\nb"] and len(chunks("x" * 9000)) == 3
+
+
+async def test_a_photo_from_the_phone_is_saved_and_read(db, seeded, world, settings, tmp_path, monkeypatch):
+    from nodo.services.files import FileStore
+    c, api, ch = await night(db, world, settings)
+    c.files = FileStore(tmp_path / "files")
+    asked = []
+
+    async def fake_ask(text):
+        asked.append(text)
+    monkeypatch.setattr(ch, "ask_nodo", fake_ask)
+    api.files["big"] = b"\xff\xd8JPEG"
+    upd = {"update_id": 11, "message": {"date": int(time.time()), "chat": {"id": int(OWNER)}, "caption": "bolla di oggi",
+                                        "photo": [{"file_id": "small", "file_size": 10},
+                                                  {"file_id": "big", "file_size": 999}]}}
+    await ch.handle_update(upd)
+    saved = list((tmp_path / "files").iterdir())
+    assert len(saved) == 1 and saved[0].read_bytes() == b"\xff\xd8JPEG" and saved[0].suffix == ".jpg"
+    assert asked and asked[0].startswith(f"[Ti ho mandato una foto: {saved[0].name}] bolla di oggi")

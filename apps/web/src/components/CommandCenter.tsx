@@ -21,7 +21,7 @@ const DOING: Record<string, string> = {
   check_url: "Controllo l'indirizzo", fetch_url: "Leggo la pagina", web_search: "Cerco sul web", list_files: "Guardo i file",
   ledger_add: "Segno nel registro", ledger_update: "Correggo il registro", ledger_report: "Faccio i conti",
   ledger_open: "Guardo sospesi e consegne", ledger_prices: "Guardo il listino", ledger_close_day: "Chiudo la giornata",
-  show_on_screen: "Te lo mostro", close_screen: "Chiudo", nodo_updates: "Guardo i miei aggiornamenti", create_document: "Preparo il documento", now: "Guardo l'ora",
+  show_on_screen: "Te lo mostro", read_photo: "Guardo la foto", ledger_stats: "Guardo i numeri del negozio", close_screen: "Chiudo", nodo_updates: "Guardo i miei aggiornamenti", create_document: "Preparo il documento", now: "Guardo l'ora",
   calendar_events: "Guardo il calendario", ssl_status: "Controllo i certificati",
   read_file: "Apro il file", list_drafts: "Guardo le bozze", update_draft: "Aggiorno la bozza", start_work: "Avvio il lavoro",
   nodo_health: "Controllo i miei accessi", sync_sites: "Importo i siti", create_file: "Preparo il file",
@@ -206,6 +206,23 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     } catch (e) { setError((e as Error).message); }
     finally { setModeBusy(false); }
   };
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  /** A photo or a document handed to NODO: uploaded among its files, then NODO is told to look at it. */
+  const handOver = async (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    const t = localStorage.getItem("nodo_token");
+    try {
+      const r = await fetch("/api/v1/files/upload", { method: "POST", body: fd, headers: t ? { Authorization: `Bearer ${t}` } : {} });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error((d as { detail?: string }).detail || `caricamento: ${r.status}`);
+      const isPhoto = /\.(png|jpe?g|webp)$/i.test((d as { name: string }).name);
+      const note = input.trim();
+      setInput("");
+      await send(`[Ti ho caricato ${isPhoto ? "una foto" : "un file"}: ${(d as { name: string }).name}] ${note || (isPhoto ? "Guardala e dimmi cosa c'è." : "Dagli un'occhiata.")}`);
+    } catch (e) { setError((e as Error).message); }
+  };
   const answer = (choice: "approve" | "reject") => {
     if (!decision || decision.sending) return;
     voice.answer(decision.id, choice); setDecision({ ...decision, sending: true });
@@ -222,7 +239,11 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       : mode === "speak" ? (voice.engine === "api" ? "Per interrompermi tocca Interrompi." : "Puoi interrompermi quando vuoi.")
       : "Collego la tua richiesta alle cose che contano.");
 
-  return <section className={`conversation-room ${diary ? "with-diary" : ""}`}>
+  return <section className={`conversation-room ${diary ? "with-diary" : ""} ${dragging ? "dragging" : ""}`}
+    onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }}
+    onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
+    onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files?.[0]; if (f) void handOver(f); }}>
+    {dragging && <div className="drop-hint">Lascia qui la foto o il documento: NODO lo guarda</div>}
     <Viewer item={viewing} onClose={() => setViewing(null)} />
     <div className="voice-stage">
       <div className="stage-topline"><span className="eyebrow">IL TUO SPAZIO DI LAVORO</span>
@@ -265,6 +286,9 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         {(voice.audioPlaying || busy || activity) && <button className="quiet-button" onClick={() => voice.interrupt()}>Interrompi</button>}
         {voice.liveOn && <button className="quiet-button" onClick={voice.endConversation}>Chiudi voce</button>}
         <button className="quiet-button" aria-expanded={writing} onClick={() => setWriting(!writing)}>{writing ? "Chiudi testo" : "Scrivi un pensiero"}</button>
+        <button className="quiet-button" title="Mostra a NODO una foto (scontrino, bolla, etichetta) o un documento" onClick={() => fileInput.current?.click()}>Mostrale una foto</button>
+        <input ref={fileInput} type="file" hidden accept="image/*,.pdf,.docx,.xlsx,.pptx,.csv,.txt"
+          onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void handOver(f); }} />
       </div>
       {writing && <form className="thought-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
         <input autoFocus aria-label="Scrivi a NODO" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Da dove cominciamo?" />
