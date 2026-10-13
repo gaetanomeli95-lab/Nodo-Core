@@ -59,7 +59,7 @@ class ChunkPlayer {
     this.analyser.getFloatTimeDomainData(this.samples);
     return Math.sqrt(this.samples.reduce((sum, n) => sum + n * n, 0) / this.samples.length);
   }
-  spectrum(out: Uint8Array) {
+  spectrum(out: Uint8Array<ArrayBuffer>) {
     if (!this.analyser || !this.playing) return false;
     this.analyser.getByteFrequencyData(out);
     return true;
@@ -132,7 +132,7 @@ class PcmPlayer {
     this.analyser.getFloatTimeDomainData(this.samples);
     return Math.sqrt(this.samples.reduce((sum, n) => sum + n * n, 0) / this.samples.length);
   }
-  spectrum(out: Uint8Array) {
+  spectrum(out: Uint8Array<ArrayBuffer>) {
     if (!this.analyser || !this.sources.size) return false;
     this.analyser.getByteFrequencyData(out);
     return true;

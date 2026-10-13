@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 export type PresenceMode = "rest" | "listen" | "think" | "act" | "speak" | "approve" | "reconnect";
-type Bins = { input: Uint8Array | null; output: Uint8Array | null };
+type Bins = { input: Uint8Array<ArrayBuffer> | null; output: Uint8Array<ArrayBuffer> | null };
 
 /** Colour of each state: [core, glow, accent] as r,g,b. */
 const PALETTE: Record<PresenceMode, [number[], number[], number[]]> = {
