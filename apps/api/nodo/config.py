@@ -125,6 +125,8 @@ class Settings(BaseSettings):
     # --- Night shift (docs/NIGHT_SHIFT.md) ---
     night_enabled: bool = True                  # background scheduler inside the API process
     owner_name: str = "Gaetano"                 # how NODO greets you
+    assistant_name: str = "Maria"               # the name Gaetano gives NODO when he talks to it
+    ledger_business: str = "CF Materassi"       # the shop whose register NODO keeps (sales, deliveries, expenses)
     timezone: str = "Europe/Rome"
     night_start: str = "01:00"                  # full night run (all checks + fixes + drafts)
     night_end: str = "07:00"

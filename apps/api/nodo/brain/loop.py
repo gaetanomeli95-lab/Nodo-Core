@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from nodo.brain.persona import PERSONA
+from nodo.brain.persona import build_persona
 from nodo.brain.tools import Toolbox, recent_history, result_text
 from nodo.db.models import FactStatus, MemoryFact, Project, Sensitivity, Site
 from nodo.night import briefing as B
@@ -92,6 +92,17 @@ class Brain:
         if shown:
             lines.append("Già presentate in questa conversazione (approval_id: cosa): "
                          + "; ".join(f"{p['approval_id']}: {p['label']}" for p in shown) + ".")
+        try:
+            from nodo.ledger import Ledger, sentence
+            led = Ledger(self.s, self.org, self.settings.ledger_business, today=now.date())
+            todo, open_pay = led.pending_work(), led.open_payments()
+            if todo:
+                lines.append(f"Registro di {self.settings.ledger_business}, da fare: "
+                             + "; ".join(f"{sentence(r)} ({r.day})" for r in todo[:6]) + ".")
+            if open_pay:
+                lines.append("Pagamenti sospesi: " + "; ".join(sentence(r) for r in open_pay[:6]) + ".")
+        except Exception:  # noqa: BLE001 - the snapshot must never fail because of the register
+            pass
         from nodo.brain.background import _running
         busy = [x.name for x in sites if _running.get(x.id) and not _running[x.id].done()]
         if busy:
@@ -115,7 +126,7 @@ class Brain:
         model produced anything (nothing has been said yet, so the caller can fall back)."""
         rid = self.request_id
         box = Toolbox(self.core, self.conv, rid, text, self.channel)
-        messages: list[dict] = [{"role": "system", "content": PERSONA.format(context=self.snapshot())}]
+        messages: list[dict] = [{"role": "system", "content": build_persona(self.settings, self.snapshot())}]
         messages += recent_history(self.s, self.conv.id, self.settings.brain_history, exclude_request=rid)
         messages.append({"role": "user", "content": text})
         specs = box.specs()
@@ -159,10 +170,9 @@ class Brain:
                 result = await box.call(c.name, c.arguments)
                 yield _ev("step", rid, step=f"tool:{c.name}", status="done",
                           ok="error" not in result)
-                if c.name in ("create_file", "generate_image") and result.get("url"):
-                    yield _ev("ui.present", rid, view="files",
-                              rows=[{"title": result.get("created"), "url": result["url"]}],
-                              summary=str(result.get("note") or ""))
+                from nodo.brain.surfaces import surface_for
+                if (card := surface_for(c.name, result)) is not None:
+                    yield _ev("ui.present", rid, **card)
                 messages.append({"role": "tool", "tool_call_id": c.id, "name": c.name,
                                  "content": result_text(result)})
                 for b in box.bindings:

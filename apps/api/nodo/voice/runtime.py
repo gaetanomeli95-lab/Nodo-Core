@@ -19,7 +19,7 @@ import random
 import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text as text_sql
@@ -481,7 +481,7 @@ class VoiceRuntime:
     async def _start_live(self, resume_model: str | None = None, resume_handle: str | None = None) -> None:
         """Opens the real-time session: persona + tools identical to the text brain, but audio in/out."""
         from nodo.brain.loop import Brain
-        from nodo.brain.persona import LIVE_STYLE, PERSONA
+        from nodo.brain.persona import LIVE_STYLE, build_persona
         from nodo.brain.tools import Toolbox, recent_history
 
         rid = f"voice-live-{self.vs.id[:8]}"
@@ -489,7 +489,7 @@ class VoiceRuntime:
             core = self.c.core(sdb)
             conv = core._conversation(self.vs.conversation_id, "voice")
             self.vs.conversation_id = conv.id
-            system = PERSONA.format(context=Brain(core, conv, rid, "voice").snapshot()[:6000]) + LIVE_STYLE
+            system = build_persona(self.c.settings, Brain(core, conv, rid, "voice").snapshot()[:6000]) + LIVE_STYLE
             hist = recent_history(sdb, conv.id, 8)
             if hist and not resume_handle:
                 system += ("\n\nConversazione recente (contesto, non rispondere a queste righe):\n"
@@ -720,18 +720,9 @@ class VoiceRuntime:
             responses.append((c["id"], c["name"], result))
             await self._send("nodo.step", step=f"tool:{c['name']}", status="done",
                              ok="error" not in result)
-            if "error" not in result and c["name"] in ("sites_status", "today_agenda", "projects", "night_report"):
-                rows = result.get("sites") if c["name"] == "sites_status" else (
-                    result.get("tasks") if c["name"] == "today_agenda" else result.get("projects"))
-                await self._send("ui.present", view=c["name"],
-                                 rows=[{k: v for k, v in row.items() if k in
-                                        ("name", "title", "status", "project", "last_checked", "due")}
-                                       for row in (rows or [])[:6] if isinstance(row, dict)],
-                                 summary=str(result.get("briefing") or result.get("description") or "")[:1200])
-            if "error" not in result and c["name"] in ("create_file", "generate_image") and result.get("url"):
-                await self._send("ui.present", view="files",
-                                 rows=[{"title": result.get("created"), "url": result["url"]}],
-                                 summary=str(result.get("note") or ""))
+            from nodo.brain.surfaces import surface_for
+            if (card := surface_for(c["name"], result)) is not None:
+                await self._send("ui.present", **card)
         if self._live is not None and (bridge is None or self._live is bridge):
             await self._live.tool_response(responses)
         if bridge is not None and self._live is not bridge:
@@ -764,9 +755,13 @@ class VoiceRuntime:
                     # release it while we block), fail fast and try again after yielding to the event loop
                     if sdb.get_bind().dialect.name == "sqlite":
                         sdb.execute(text_sql("PRAGMA busy_timeout=200"))
-                    for role, content in rows:
+                    # explicit, increasing times: on Windows two rows saved together can get the SAME timestamp,
+                    # and the history then shows the answer before the question (the model loses the thread)
+                    base = datetime.now(UTC)
+                    for i, (role, content) in enumerate(rows):
                         sdb.add(Message(conversation_id=conversation_id, role=role, content=content,
-                                        request_id=request_id))
+                                        request_id=request_id,
+                                        created_at=base + timedelta(milliseconds=i - len(rows) + 1)))
                     sdb.commit()
 
             try:
