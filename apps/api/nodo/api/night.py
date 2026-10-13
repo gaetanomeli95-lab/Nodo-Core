@@ -326,6 +326,7 @@ _SETTABLE_KEYS = {
     "NODO_ANTHROPIC_API_KEY": "anthropic_api_key",
     "NODO_GITHUB_TOKEN": "github_token",
     "NODO_VERCEL_TOKEN": "vercel_token",
+    "NODO_CALENDAR_ICS_URL": "calendar_ics_url",
     "NODO_TELEGRAM_BOT_TOKEN": "telegram_bot_token",
     "NODO_TELEGRAM_CHAT_ID": "telegram_chat_id",
 }

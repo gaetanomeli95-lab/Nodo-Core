@@ -36,6 +36,8 @@ def _remove_sample_data() -> None:
 def create_app(settings: Settings | None = None, container=None) -> FastAPI:
     settings = settings or get_settings()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    for noisy in ("httpx", "httpcore"):   # their INFO lines print full URLs: secret calendar link, Telegram token
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

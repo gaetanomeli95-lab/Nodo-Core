@@ -438,7 +438,16 @@ class Toolbox(ExtraTools):
         rems = self.s.scalars(select(Reminder).where(Reminder.organization_id == self.org,
                                                      Reminder.status == "pending")
                               .order_by(Reminder.remind_at).limit(5)).all()
+        agenda_cal: list[dict] = []
+        if self.settings.calendar_ics_url:
+            try:
+                from nodo.services.calendar import fetch_events
+                agenda_cal = [e.as_dict(self._tz()) for e in
+                              (await fetch_events(self.settings.calendar_ics_url, 2, self._tz()))[:12]]
+            except Exception:  # noqa: BLE001 - the agenda must still work when the calendar link does not
+                agenda_cal = []
         return {"today": today, "tasks": views[:10], "open_tasks_total": len(views),
+                "calendar": agenda_cal,
                 "reminders": [{"text": r.text, "when": self._clock(r.remind_at)} for r in rems],
                 "night": {"sites_checked": b.sites_checked, "open_problems": len(open_items),
                           "pending_decisions": [self._decision_view(p) for p in b.pending]},

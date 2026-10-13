@@ -164,6 +164,10 @@ class NightScheduler:
             await self.deliver_reminders(now)
         except Exception:   # a reminder problem must never stop the night shift
             log.exception("could not deliver reminders")
+        try:
+            await self.housekeeping(now)
+        except Exception:   # learning and watching are extras: never at the cost of the night shift
+            log.exception("housekeeping failed")
         jobs = decide(now, self.state(), self.settings, self.tz)
         for job in jobs:
             if job == "briefing":
@@ -171,6 +175,58 @@ class NightScheduler:
             else:
                 await self.run(job, trigger="schedule")
         return jobs
+
+    async def housekeeping(self, now: datetime) -> None:
+        """Quiet background work: learn from finished conversations, watch certificates and domains once a day."""
+        from nodo.db.session import session_scope
+        if self.state().running:
+            return
+        last = getattr(self, "_last_learn", None)
+        if self.settings.learn_from_chats and (last is None or now - last >= timedelta(minutes=5)):
+            self._last_learn = now
+            from nodo.memory.learn import learn_once
+            with session_scope() as db:
+                await learn_once(self.c, db, now)
+        today = now.astimezone(self.tz).date()
+        if getattr(self, "_last_watch", None) != today and now.astimezone(self.tz).hour >= 8:
+            self._last_watch = today
+            await self.watch_expiry()
+
+    async def watch_expiry(self, thresholds=(21, 14, 7, 3, 2, 1, 0)) -> list[str]:
+        """Warns (Telegram + panel) when a site's HTTPS certificate is close to expiring or no longer valid."""
+        from urllib.parse import urlparse
+
+        from nodo.db.models import Conversation, Message, Site
+        from nodo.db.session import session_scope
+        from nodo.services.expiry import certificate_days
+        warnings: list[str] = []
+        with session_scope() as db:
+            sites = list(db.scalars(select(Site).where(Site.active.is_(True))))
+            for x in sites:
+                host = urlparse(x.url).hostname if x.url else None
+                if not host:
+                    continue
+                days, why = await certificate_days(host)
+                if days is None and why.startswith("certificato non valido"):
+                    warnings.append(f"{x.name}: {why}")
+                elif days is not None and days in thresholds:
+                    warnings.append(f"{x.name}: il certificato HTTPS scade tra {days} giorni" if days > 0
+                                    else f"{x.name}: il certificato HTTPS scade oggi")
+            if warnings:
+                text = "Attenzione ai certificati: " + "; ".join(warnings) + ". Con Vercel di solito si rinnova da solo " \
+                       "se il dominio punta bene: se non succede, guarda i DNS."
+                notifier = self.c.notifier
+                if notifier is not None and getattr(notifier, "enabled", False):
+                    try:
+                        await notifier.send(f"🔒 {text}")
+                    except Exception:
+                        log.warning("expiry telegram send failed", exc_info=True)
+                conv = db.scalars(select(Conversation).order_by(Conversation.updated_at.desc()).limit(1)).first()
+                if conv is not None:
+                    db.add(Message(conversation_id=conv.id, role="nodo", content=f"🔒 {text}",
+                                   request_id=f"expiry-{datetime.now(UTC):%Y%m%d}"))
+                db.commit()
+        return warnings
 
     async def deliver_reminders(self, now: datetime | None = None) -> list[str]:
         """Reminders that are due: Telegram (when connected) + a message in the panel's conversation."""

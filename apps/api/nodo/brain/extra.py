@@ -25,6 +25,7 @@ from nodo.db.models import (
     MemoryFact,
     Project,
     Reminder,
+    Site,
     Task,
     TaskStatus,
 )
@@ -153,6 +154,13 @@ class ExtraTools:
                         "format": {**_STR, "description": "pdf, docx, xlsx oppure pptx"},
                         "content": {**_STR, "description": "il contenuto in Markdown"}, "title": _STR},
                        ["name", "format", "content"]), self.create_document)
+        self._add("calendar_events", "Gli appuntamenti del calendario di Gaetano (sola lettura) nei prossimi giorni: "
+                                     "oggi, domani, questa settimana. Serve il link segreto iCal già impostato.",
+                  _obj({"days": {"type": "integer", "description": "quanti giorni guardare (1-30), default 7"}}),
+                  self.calendar_events)
+        self._add("ssl_status", "Controlla il certificato HTTPS di un sito (scadenza) e, se riesce, la scadenza del "
+                                "dominio. Senza argomento controlla tutti i siti di Gaetano.",
+                  _obj({"site": {**_STR, "description": "nome del sito o dominio; vuoto = tutti"}}), self.ssl_status)
         self._add("list_files", "I file che NODO ha creato per Gaetano (documenti, immagini, tabelle).", _obj({}),
                   self.list_files)
         self._add("read_file", "Legge un file creato da NODO (nome o parte del titolo).",
@@ -493,6 +501,49 @@ class ExtraTools:
         if self.c is None or self.c.files is None:
             return {"error": "archivio file non disponibile"}
         return {"files": self.c.files.list(self.s, self.org)[:30]}
+
+    async def calendar_events(self, days: int = 7) -> dict:
+        url = self.settings.calendar_ics_url
+        if not url:
+            return {"error": "il calendario non è collegato",
+                    "how": "Google Calendar → Impostazioni → il tuo calendario → «Indirizzo segreto in formato iCal»: "
+                           "incollalo in Accessi (NODO_CALENDAR_ICS_URL). Resta in sola lettura."}
+        from nodo.services.calendar import fetch_events
+        tz = self._tz()
+        try:
+            events = await fetch_events(url, max(1, min(int(days or 7), 30)), tz)
+        except Exception as e:  # noqa: BLE001 - never echo the URL: it is a secret
+            return {"error": f"non riesco a leggere il calendario ({type(e).__name__}): controlla il link"}
+        return {"events": [e.as_dict(tz) for e in events[:40]], "total": len(events),
+                "note": "sola lettura: per cambiare un appuntamento serve Google Calendar"}
+
+    async def ssl_status(self, site: str | None = None) -> dict:
+        from nodo.services.expiry import certificate_days, domain_expiry
+        sites = list(self.s.scalars(select(Site).where(Site.organization_id == self.org, Site.active.is_(True))))
+        if site:
+            hit, cands = _best(site, sites, lambda x: f"{x.name} {x.url or ''}")
+            if hit is None:
+                host = urlparse(site if "//" in site else f"https://{site}").hostname if "." in site else None
+                if not host:
+                    return {"error": f"non trovo il sito «{site}»", "candidates": [x.name for x in cands or []]}
+                targets = [(site, host)]
+            else:
+                targets = [(hit.name, urlparse(hit.url).hostname)] if hit.url else []
+        else:
+            targets = [(x.name, urlparse(x.url).hostname) for x in sites if x.url]
+        rows = []
+        for name, host in targets[:25]:
+            if not host:
+                continue
+            days, why = await certificate_days(host)
+            row = {"site": name, "host": host, "certificate_days_left": days}
+            if days is None:
+                row["certificate_error"] = why
+            if site:
+                row["domain_expires"] = await domain_expiry(host)
+            rows.append(row)
+        rows.sort(key=lambda r: (r["certificate_days_left"] is None, r["certificate_days_left"] or 0))
+        return {"checked": rows, "warn_under_days": 21}
 
     async def create_document(self, name: str, format: str, content: str, title: str | None = None) -> dict:
         if self.c is None or self.c.files is None:

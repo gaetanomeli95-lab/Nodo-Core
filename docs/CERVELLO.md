@@ -131,6 +131,9 @@ Se ne configuri più di uno, NODO usa il migliore disponibile e passa al success
 | «che bozze ho per Bar Sole?» / «segna approvata la bozza di Natale» | elenca e aggiorna bozze e contenuti |
 | «preparami un piano di lancio per il sito di X» / «fai una ricerca approfondita su…» | lavoro lungo in background con il tuo abbonamento Claude, in una cartella sua (niente accesso al resto del PC); ti avvisa e trovi i file nella scheda File |
 | «fammi un PDF / un Word / un Excel / delle slide con…» | crea il documento vero (PDF, .docx, .xlsx, .pptx), lo trovi nella scheda File e puoi scaricarlo; può anche rileggere quelli che hai caricato |
+| «cosa ho in calendario domani?» | legge il tuo Google Calendar (sola lettura) dal link segreto iCal: Google Calendar → Impostazioni → il calendario → «Indirizzo segreto in formato iCal» → incollalo in Accessi |
+| «i certificati dei miei siti sono a posto? quando scade il dominio?» | controlla scadenza HTTPS (e dominio) di tutti i siti; ogni mattina dopo le 8 ti avvisa da solo se un certificato sta per scadere |
+| (da solo, a fine conversazione) | NODO tiene a mente i fatti duraturi che gli hai detto (preferenze, clienti, decisioni); «dimentica…» li toglie |
 | «funziona tutto? cosa manca?» | controlla gli accessi di NODO (Vercel, GitHub, AI, Telegram, voce) |
 
 Ricorda la conversazione: puoi dire «e quella di ieri?», «pubblica quella di Prosperya», «perché?». Nel

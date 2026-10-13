@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
     groq_api_key: str | None = None
     groq_model: str = "llama-3.3-70b-versatile"
+    # Calendar (read-only): the secret iCal link of Google Calendar / Apple / Outlook
+    calendar_ics_url: str | None = None
+    learn_from_chats: bool = True              # once a conversation is over, NODO keeps the lasting facts it contained
     # Free backup brains: when the main ones run out, the next in line answers (and can use tools)
     github_models: bool = True                 # GitHub Models, with your existing GitHub token (needs "Models: read")
     github_models_model: str = "openai/gpt-4.1-mini"

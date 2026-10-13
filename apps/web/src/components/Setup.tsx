@@ -12,6 +12,7 @@ const KEYS = [
   { name: "NODO_OPENROUTER_API_KEY", label: "OpenRouter — modelli gratuiti di riserva (openrouter.ai)" },
   { name: "NODO_GITHUB_TOKEN", label: "GitHub — pull request e turno di notte" },
   { name: "NODO_VERCEL_TOKEN", label: "Vercel — pubblicazione dei siti" },
+  { name: "NODO_CALENDAR_ICS_URL", label: "Calendario — indirizzo segreto iCal di Google Calendar (sola lettura)" },
   { name: "NODO_TELEGRAM_BOT_TOKEN", label: "Telegram — il briefing sul telefono" },
   { name: "NODO_TELEGRAM_CHAT_ID", label: "Telegram — chat id" },
   { name: "NODO_OPENAI_API_KEY", label: "OpenAI API — a consumo" },
