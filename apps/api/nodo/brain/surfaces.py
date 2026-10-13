@@ -13,6 +13,8 @@ def surface_for(name: str, result: dict) -> dict | None:
             return {"view": "tab", "rows": [{"tab": result["tab"]}], "summary": ""}
         return {"view": "viewer", "rows": [{"title": result.get("shown"), "url": result.get("url"),
                                             "kind": result.get("kind")}], "summary": ""}
+    if name in ("board_pin", "board_done"):
+        return {"view": "board", "rows": [], "summary": ""}
     if name == "close_screen":
         return {"view": "close", "rows": [], "summary": ""}
     if name in FILE_TOOLS and result.get("url"):

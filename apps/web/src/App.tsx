@@ -7,6 +7,8 @@ import { NightView } from "./components/Night";
 import { StatePanel, TracePanel } from "./components/Panels";
 import { SetupView } from "./components/Setup";
 import { SitesView } from "./components/Sites";
+import { Boot } from "./components/holo/Boot";
+import { Cosmos } from "./components/holo/Cosmos";
 
 type Tab = "command" | "ledger" | "night" | "sites" | "memory" | "setup";
 
@@ -60,7 +62,9 @@ export default function App() {
   ];
 
   return (
-    <main className={`layout presence-layout ${details ? "show-details" : ""}`}>
+    <main className={`layout presence-layout holo ${details ? "show-details" : ""}`}>
+      <Cosmos />
+      <Boot name="NODO" />
       <StatePanel system={system} projects={projects} tasks={tasks} activeContext={activeContext} sites={sites}
                   pending={pending.length} onOpen={(t) => setTab(t as Tab)} />
       <div className="center">
@@ -78,7 +82,7 @@ export default function App() {
           <CommandCenter voiceConfig={voice} onTrace={setTrace} onActiveContext={setActiveContext} onRequestDone={refresh}
             onOpenTab={(t) => setTab((["command", "ledger", "night", "sites", "memory", "setup"].includes(t) ? t : "command") as Tab)} />
         </div>
-        {tab === "ledger" && <div className="tab-body scroll"><LedgerView /></div>}
+        {tab === "ledger" && <div className="tab-body scroll holo-enter" key="ledger"><LedgerView /></div>}
         {tab === "night" && <div className="tab-body scroll"><NightView onChanged={refresh} /></div>}
         {tab === "sites" && <div className="tab-body scroll"><SitesView onChanged={refresh} /></div>}
         {tab === "memory" && <div className="tab-body scroll"><MemoryView /></div>}

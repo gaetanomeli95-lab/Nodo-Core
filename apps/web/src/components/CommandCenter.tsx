@@ -4,6 +4,10 @@ import { useVoiceSession } from "./Voice";
 import { Presence, type PresenceMode } from "./Presence";
 import { Pulse } from "./Pulse";
 import { Viewer, type ViewItem } from "./Viewer";
+import { Board } from "./holo/Board";
+import { Eyes } from "./holo/Eyes";
+import { Palette, type Action } from "./holo/Palette";
+import { Subtitles } from "./holo/Subtitles";
 
 type Turn = { who: "user" | "nodo"; text: string; done?: boolean };
 type Decision = { id: string; label: string; site?: string; preview?: string; pr?: string; sending?: boolean };
@@ -56,6 +60,8 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const [decision, setDecision] = useState<Decision | null>(null);
   const [surface, setSurfaceRaw] = useState<Surface | null>(null);
   const [viewing, setViewing] = useState<ViewItem | null>(null);
+  const [eyes, setEyes] = useState<"camera" | "screen" | null>(null);
+  const [boardRev, setBoardRev] = useState(0);
   const onOpenTabRef = useRef(onOpenTab);
   onOpenTabRef.current = onOpenTab;
   /** «Sul tavolo» cards, plus the screen commands: show a file big, open a tab, close what is shown. */
@@ -67,7 +73,8 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       if (row.download) setSurfaceRaw({ ...next, view: "files" });
       return;
     }
-    if (next?.view === "close") { setViewing(null); setSurfaceRaw(null); return; }
+    if (next?.view === "close") { setViewing(null); setSurfaceRaw(null); setEyes(null); return; }
+    if (next?.view === "board") { setBoardRev((n) => n + 1); return; }
     if (next?.view === "tab") { setViewing(null); onOpenTabRef.current?.(String(next.rows[0]?.tab || "command")); return; }
     setSurfaceRaw(next);
   };
@@ -209,7 +216,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const fileInput = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   /** A photo or a document handed to NODO: uploaded among its files, then NODO is told to look at it. */
-  const handOver = async (file: File) => {
+  const handOver = async (file: File, question?: string) => {
     const fd = new FormData();
     fd.append("file", file, file.name);
     const t = localStorage.getItem("nodo_token");
@@ -218,11 +225,32 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error((d as { detail?: string }).detail || `caricamento: ${r.status}`);
       const isPhoto = /\.(png|jpe?g|webp)$/i.test((d as { name: string }).name);
-      const note = input.trim();
+      const note = (question ?? input).trim();
       setInput("");
       await send(`[Ti ho caricato ${isPhoto ? "una foto" : "un file"}: ${(d as { name: string }).name}] ${note || (isPhoto ? "Guardala e dimmi cosa c'è." : "Dagli un'occhiata.")}`);
     } catch (e) { setError((e as Error).message); }
   };
+  const actions: Action[] = [
+    { id: "talk", label: voice.liveOn ? "Chiudi la voce" : "Parla con NODO", hint: "voce", run: () => voice.toggleMic() },
+    { id: "write", label: "Scrivi un pensiero", hint: "testo", run: () => setWriting(true) },
+    { id: "camera", label: "Guarda con la camera", hint: "occhi", run: () => setEyes("camera") },
+    { id: "screen", label: "Guarda il mio schermo", hint: "occhi", run: () => setEyes("screen") },
+    { id: "photo", label: "Mostrale una foto o un file", hint: "carica", run: () => fileInput.current?.click() },
+    { id: "recap", label: "Riepilogo di oggi del negozio", hint: "registro", run: () => void send("Fammi il riepilogo di oggi del negozio") },
+    { id: "close", label: "Chiudi la giornata", hint: "registro", run: () => void send("Chiudiamo la giornata") },
+    { id: "month", label: "Com'è andato il mese?", hint: "numeri", run: () => void send("Com'è andato il negozio negli ultimi 30 giorni?") },
+    { id: "ledger", label: "Apri il Registro", hint: "scheda", run: () => onOpenTabRef.current?.("ledger") },
+    { id: "night", label: "Apri la Notte", hint: "scheda", run: () => onOpenTabRef.current?.("night") },
+    { id: "sites", label: "Apri i Siti", hint: "scheda", run: () => onOpenTabRef.current?.("sites") },
+    { id: "memory", label: "Apri la Memoria", hint: "scheda", run: () => onOpenTabRef.current?.("memory") },
+    { id: "setup", label: "Apri gli Accessi", hint: "scheda", run: () => onOpenTabRef.current?.("setup") },
+    { id: "precise", label: "Voce precisa (Claude)", hint: "voce", run: () => void setVoiceMode("precise") },
+    { id: "fast", label: "Voce veloce (Gemini)", hint: "voce", run: () => void setVoiceMode("auto") },
+    { id: "diary", label: diary ? "Chiudi il diario" : "Apri il diario", hint: "conversazione", run: () => setDiary(!diary) },
+    { id: "new", label: "Nuova conversazione", hint: "conversazione", run: () => voice.setConversation(null) },
+  ];
+  const lastUser = [...turns].reverse().find((t) => t.who === "user")?.text;
+  const lastNodo = turns.at(-1)?.who === "nodo" ? turns.at(-1)?.text : undefined;
   const answer = (choice: "approve" | "reject") => {
     if (!decision || decision.sending) return;
     voice.answer(decision.id, choice); setDecision({ ...decision, sending: true });
@@ -245,6 +273,9 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files?.[0]; if (f) void handOver(f); }}>
     {dragging && <div className="drop-hint">Lascia qui la foto o il documento: NODO lo guarda</div>}
     <Viewer item={viewing} onClose={() => setViewing(null)} />
+    <Eyes source={eyes} onClose={() => setEyes(null)} onShot={(f, q) => void handOver(f, q || "Guarda e dimmi cosa vedi.")} />
+    <Palette actions={actions} onAsk={(t) => void send(t)} />
+    {!diary && <Board revision={boardRev} />}
     <div className="voice-stage">
       <div className="stage-topline"><span className="eyebrow">IL TUO SPAZIO DI LAVORO</span>
         <button className={`quiet-button ${diary ? "selected" : ""}`} aria-expanded={diary} onClick={() => setDiary(!diary)}>Diario <span>↗</span></button></div>
@@ -252,6 +283,8 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         {!voice.connected ? "COLLEGAMENTO IN CORSO" : mode === "rest" ? "PRONTO QUANDO VUOI" : { listen: "IN ASCOLTO", think: "STO PENSANDO", act: "AL LAVORO", speak: "NODO PARLA", approve: "UNA TUA DECISIONE", reconnect: "RICONNESSIONE" }[mode]}</span>
         <h2>{title}</h2><p>{subtitle}</p></div>
       <Presence mode={mode} sampleLevel={voice.sampleLevel} spectrum={voice.spectrum} />
+      {activity && <div className="holo-chip" role="status"><i />{activity}</div>}
+      {!decision && !surface && <Subtitles user={lastUser} nodo={lastNodo} partial={voice.partial} />}
       {error && <div className="voice-notice" role="alert"><span>{error}</span><button aria-label="Chiudi avviso" onClick={() => setError(null)}>×</button></div>}
       {decision ? <section className="context-sheet decision-sheet" aria-label="Decisione in attesa">
         <div className="sheet-kicker">SERVE IL TUO OK {decision.site && `· ${decision.site}`}</div>
@@ -287,6 +320,8 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         {voice.liveOn && <button className="quiet-button" onClick={voice.endConversation}>Chiudi voce</button>}
         <button className="quiet-button" aria-expanded={writing} onClick={() => setWriting(!writing)}>{writing ? "Chiudi testo" : "Scrivi un pensiero"}</button>
         <button className="quiet-button" title="Mostra a NODO una foto (scontrino, bolla, etichetta) o un documento" onClick={() => fileInput.current?.click()}>Mostrale una foto</button>
+        <button className="quiet-button" title="NODO guarda con la camera" onClick={() => setEyes("camera")}>Occhi</button>
+        <button className="quiet-button holo-k" title="Tutti i comandi (Ctrl+K)" onClick={() => window.dispatchEvent(new Event("nodo:palette"))}>⌘K</button>
         <input ref={fileInput} type="file" hidden accept="image/*,.pdf,.docx,.xlsx,.pptx,.csv,.txt"
           onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void handOver(f); }} />
       </div>

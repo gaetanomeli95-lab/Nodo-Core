@@ -336,6 +336,17 @@ class Reminder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class BoardNote(Base, TimestampMixin):
+    """The board («la lavagna»): short notes NODO pins on the screen for Gaetano - things to remember today, lists,
+    numbers to keep at hand. Removed when done (kept as history with done_at)."""
+    __tablename__ = "board_notes"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    color: Mapped[str] = mapped_column(String(16), default="mint")       # mint | gold | violet | rose | blue
+    done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class LedgerEntry(Base, TimestampMixin):
     """The shop register (CF Materassi): every sale, replacement, expense and payment, with model, size, price and
     customer. Totals and recaps are computed from these rows by code (nodo/ledger.py), never by a model."""

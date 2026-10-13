@@ -369,3 +369,23 @@ def build_container_for(world):
     from nodo.providers.deterministic import FakeModelProvider
     return build_container(Settings(), providers=[FakeModelProvider()], vercel=world.vercel, repo=world.github,
                            prober=world.prober, notifier=FakeNotifier())
+
+
+async def test_the_board_pins_and_unpins_notes(box, client):  # noqa: F811
+    from nodo.brain.surfaces import surface_for
+    out = await box.call("board_pin", {"text": "Consegna Russo alle 17", "color": "gold"})
+    assert out["pinned"] and surface_for("board_pin", out)["view"] == "board"
+    await box.call("board_pin", {"text": "Chiamare Arrisal per le reti"})
+    assert [n["text"] for n in (await box.call("board_list", {}))["board"]] == ["Consegna Russo alle 17",
+                                                                                "Chiamare Arrisal per le reti"]
+    assert (await box.call("board_done", {"note": "Arrisal"}))["removed"] == 1
+    assert (await box.call("board_done", {"note": "tutto"}))["removed"] == 1
+    assert (await box.call("board_list", {}))["board"] == []
+
+
+def test_board_api(client):
+    n = client.post("/api/v1/board", json={"text": "Prova", "color": "rose"}).json()
+    assert client.get("/api/v1/board").json()["notes"][0]["text"] == "Prova"
+    assert client.post(f"/api/v1/board/{n['id']}/done").json()["ok"]
+    assert client.get("/api/v1/board").json()["notes"] == []
+    assert client.post("/api/v1/board", json={"text": "  "}).status_code == 400
