@@ -171,3 +171,6 @@ body { background: #04070a; }
   .holo-aurora, .holo .nodo-wordmark, .holo .conversation-button::before, .holo-chip i, .holo-eyes .scan, .holo-boot .boot-ring i,
   .holo .context-sheet, .holo .context-sheet::after, .holo .tab-body.scroll, .holo-board, .holo-board .note { animation: none !important; }
 }
+.holo section.pulse { background: var(--glass) !important; border: 1px solid var(--edge) !important; border-radius: 16px;
+  backdrop-filter: blur(14px); box-shadow: 0 10px 40px #0007; animation: holo-in .45s ease-out both; }
+.holo .pulse-eyebrow { font-family: var(--mono); color: var(--cyan); }
