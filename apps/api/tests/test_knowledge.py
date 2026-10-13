@@ -270,3 +270,19 @@ async def test_brain_tool_searches_imported_conversations(core, db, seeded):
     full = await box.call("read_knowledge", {"chunk_id": out["results"][0]["chunk_id"]})
     assert "IVA inclusa" in full["text"]
     assert "search_knowledge" in (await box.call("recall", {"query": "xyzzy quantum"}))["note"]
+
+
+def test_new_chatgpt_export_with_split_files_is_read_from_disk_in_place(tmp_path):
+    """2026 exports: conversations-000.json, -001.json, ... plus GBs of attachments (never loaded)."""
+    one, two = chatgpt_export(), chatgpt_export()
+    two[0]["id"] = two[0]["conversation_id"] = "cg-2"
+    two[0]["title"] = "Seconda parte"
+    path = tmp_path / "export.zip"
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("conversations-001.json", json.dumps(two))
+        z.writestr("conversations-000.json", json.dumps(one))
+        z.writestr("files/abc.dat", b"x" * 1000)
+        z.writestr("chat.html", "<html></html>")
+    convs = read_export(path)
+    assert [c.title for c in convs][-1] == "Seconda parte" and len(convs) == len(one) + len(two)
+    assert len({c.external_id for c in convs}) == len(convs)

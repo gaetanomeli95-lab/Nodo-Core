@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import zipfile
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -41,20 +42,50 @@ class UnknownExport(ValueError):
 
 # ------------------------------------------------------------------------------------------- entry points
 def read_export(data: bytes | Path, filename: str = "") -> list[ImportedConversation]:
-    """Accepts a .zip (official export) or a conversations.json; detects ChatGPT vs Claude from the shape."""
-    raw = data.read_bytes() if isinstance(data, Path) else data
+    """Accepts a .zip (official export) or a conversations.json; detects ChatGPT vs Claude from the shape.
+
+    Recent ChatGPT exports split the chats into conversations-000.json, conversations-001.json, ... and ship several
+    GB of attachments next to them: a zip on disk is opened in place and only the conversation files are read."""
     name = filename or (data.name if isinstance(data, Path) else "")
-    if raw[:2] == b"PK":
-        with zipfile.ZipFile(io.BytesIO(raw)) as z:
-            entries = [n for n in z.namelist() if n.rsplit("/", 1)[-1] == "conversations.json"]
-            if not entries:
-                raise UnknownExport("nello zip non c'è conversations.json: non sembra un export di ChatGPT o Claude")
-            raw = z.read(sorted(entries, key=len)[0])
+    if isinstance(data, Path):
+        with open(data, "rb") as fh:
+            is_zip = fh.read(2) == b"PK"
+        if is_zip:
+            with zipfile.ZipFile(data) as z:
+                return _from_zip(z)
+        raw = data.read_bytes()
+    else:
+        raw = data
+        if raw[:2] == b"PK":
+            with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                return _from_zip(z)
+    return list(parse_conversations(_json(raw, name)))
+
+
+_PART = re.compile(r"(?:^|/)conversations(?:-(\d+))?\.json$")
+
+
+def _from_zip(z: zipfile.ZipFile) -> list[ImportedConversation]:
+    names = [n for n in z.namelist() if _PART.search(n)]
+    whole = [n for n in names if n.rsplit("/", 1)[-1] == "conversations.json"]
+    if whole:                                             # classic export: one file (shortest path = top level)
+        parts = [sorted(whole, key=len)[0]]
+    else:
+        parts = sorted(names, key=lambda n: int(_PART.search(n).group(1) or 0))
+    if not parts:
+        raise UnknownExport("nello zip non c'è conversations.json: non sembra un export di ChatGPT o Claude")
+    out: list[ImportedConversation] = []
+    for part in parts:
+        payload = _json(z.read(part), part)
+        out.extend(parse_conversations(payload))
+    return out
+
+
+def _json(raw: bytes, name: str):
     try:
-        payload = json.loads(raw.decode("utf-8-sig"))
+        return json.loads(raw.decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError) as e:
         raise UnknownExport(f"il file {name or 'caricato'} non è un JSON leggibile: {e}") from e
-    return list(parse_conversations(payload))
 
 
 def detect_kind(payload) -> str:
