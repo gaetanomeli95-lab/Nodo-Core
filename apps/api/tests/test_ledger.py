@@ -66,7 +66,8 @@ def test_today_with_corrections_suspended_payment_and_short_names(db, seeded):
             status="da_fare")
     nocera = led.add(kind="vendita", item="Andromeda H25", size="160x190", amount=150,
                      counterpart="Alessandro Nocera", status="da_fare")
-    assert nocera.item == "materasso Andromeda H25 poliuretano"     # completed from the name already used
+    assert nocera.item == "Andromeda H25"                           # never completed by guessing
+    assert led.similar_items("Andromeda H25") == ["materasso Andromeda H25 poliuretano"]
     # «sono tre, matrimoniali», «costa 140», delivered, Softcomfort has not paid
     assert led.update(sc, qty=3, size="160 x 90", status="fatto", payment="sospeso")
     assert sc.amount == 330.0 and sc.size == "160x190"

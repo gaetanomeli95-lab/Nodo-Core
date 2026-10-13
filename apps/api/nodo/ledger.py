@@ -125,7 +125,8 @@ class Ledger:
         self.s, self.org, self.business = s, org, business
         self.today = today or date.today()
 
-    # -- names: «Morpheus» becomes the «Morpheus Memory due strati» already used before, when it is unambiguous
+    # -- names: same spelling as before when only the case differs. A short name is NOT completed automatically
+    # («Andromeda» could be H25 or another one): the brain is told to use the full model name instead.
     def known_items(self) -> list[str]:
         rows = self.s.scalars(select(LedgerEntry.item).where(LedgerEntry.organization_id == self.org)
                               .distinct()).all()
@@ -133,15 +134,13 @@ class Ledger:
 
     def canonical_item(self, item: str) -> str:
         item = re.sub(r"\s+", " ", (item or "").strip())
-        if not item:
-            return item
-        words = set(item.lower().split())
-        hits = [k for k in self.known_items() if k.lower() != item.lower()
-                and words <= set(k.lower().split()) and fuzz.token_set_ratio(item.lower(), k.lower()) == 100]
-        if len(hits) == 1 and len(hits[0]) > len(item):
-            return hits[0]
         same = [k for k in self.known_items() if k.lower() == item.lower()]
         return same[0] if same else item
+
+    def similar_items(self, item: str) -> list[str]:
+        """Longer names already used that contain every word of `item` (to suggest, never to replace)."""
+        words = set((item or "").lower().split())
+        return [k for k in self.known_items() if words and words < set(k.lower().split())][:4]
 
     # -- write
     def add(self, *, kind: str, item: str = "", size: str | None = None, qty: int | None = 1,
@@ -264,7 +263,7 @@ class Ledger:
     def open_payments(self) -> list[LedgerEntry]:
         return list(self.s.scalars(select(LedgerEntry).where(
             LedgerEntry.organization_id == self.org, LedgerEntry.kind == "vendita",
-            LedgerEntry.status != "annullato", LedgerEntry.payment == "sospeso").order_by(LedgerEntry.day)))
+            LedgerEntry.status == "fatto", LedgerEntry.payment == "sospeso").order_by(LedgerEntry.day)))
 
     def pending_work(self) -> list[LedgerEntry]:
         return list(self.s.scalars(select(LedgerEntry).where(

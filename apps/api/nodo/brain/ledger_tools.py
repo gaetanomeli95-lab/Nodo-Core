@@ -82,6 +82,10 @@ class LedgerTools:
         self.s.flush()
         out = {"saved": len(saved), "rows": [{"id": e.id[:8], "row": sentence(e), "day": e.day} for e in saved],
                "note": "segnato nel registro: per i totali usa ledger_report"}
+        hints = {e.item: led.similar_items(e.item) for e in saved if led.similar_items(e.item)}
+        if hints:
+            out["check_names"] = {k: f"nome breve: era forse uno di {v}? Se sì correggi con ledger_update"
+                                  for k, v in hints.items()}
         if errors:
             out["errors"] = errors
         return out
