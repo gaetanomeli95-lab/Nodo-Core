@@ -99,6 +99,16 @@ async def run_checks(c) -> list[Check]:
                      if api_voice else f"voce del browser ({c.stt.name}/{c.tts.name}): dipende da Chrome/Edge.",
                      "" if api_voice else "Con una chiave Gemini e NODO_STT_PROVIDER/NODO_TTS_PROVIDER=auto NODO "
                                           "parla anche senza Live."))
+    spare = sorted({d.descriptor.provider for d in ModelRouter(c.providers, s.mode, s.allow_paid_in_free_mode)
+                    .eligible(RouteRequest(min_reasoning=2)) if d.descriptor.tier in ("free", "local")
+                    and d.descriptor.tool_calling})
+    out.append(Check("Cervelli di riserva gratuiti", "ok" if len(spare) >= 2 else "optional",
+                     (f"pronti: {', '.join(spare)}. Se un cervello finisce i crediti, risponde il successivo."
+                      if spare else "nessuno: finiti i crediti NODO risponde a regole fisse."),
+                     "" if len(spare) >= 2 else
+                     "Gratis, bastano pochi minuti: NODO_CEREBRAS_API_KEY (cloud.cerebras.ai), NODO_MISTRAL_API_KEY "
+                     "(console.mistral.ai), NODO_GROQ_API_KEY (console.groq.com); oppure Ollama sul PC "
+                     "(NODO_OLLAMA_BASE_URL=http://localhost:11434). GitHub Models usa già il tuo token GitHub."))
     paused = cooldowns()
     if paused:
         out.append(Check("Modelli in pausa", "warning",

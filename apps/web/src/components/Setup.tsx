@@ -6,6 +6,8 @@ const ICON: Record<string, string> = { ok: "✓", missing: "–", error: "✕", 
 // keys you can paste here: saved into apps/api/.env and activated without restarting NODO
 const KEYS = [
   { name: "NODO_GEMINI_API_KEY", label: "Gemini — voce dal vivo + cervello gratis (aistudio.google.com)" },
+  { name: "NODO_CEREBRAS_API_KEY", label: "Cerebras — cervello di riserva gratis, velocissimo (cloud.cerebras.ai)" },
+  { name: "NODO_MISTRAL_API_KEY", label: "Mistral — cervello di riserva gratis (console.mistral.ai)" },
   { name: "NODO_GROQ_API_KEY", label: "Groq — cervello veloce gratis (console.groq.com)" },
   { name: "NODO_OPENROUTER_API_KEY", label: "OpenRouter — modelli gratuiti di riserva (openrouter.ai)" },
   { name: "NODO_GITHUB_TOKEN", label: "GitHub — pull request e turno di notte" },

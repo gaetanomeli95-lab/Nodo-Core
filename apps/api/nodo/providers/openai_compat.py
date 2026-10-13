@@ -154,3 +154,37 @@ def gemini_descriptors(model: str) -> list[ModelDescriptor]:
                             tier="free" if flash else "paid", cost_in_per_1k=0 if flash else 0.00125,
                             cost_out_per_1k=0 if flash else 0.01, max_sensitivity=Sensitivity.INTERNAL,
                             daily_quota=None)]
+
+
+def free_cloud_descriptors(provider: str, model: str, *, context: int = 32_000, reasoning: int = 3, coding: int = 3,
+                           latency: str = "medium", daily_quota: int | None = None) -> list[ModelDescriptor]:
+    """Backup brains with a free tier (GitHub Models, Cerebras, Mistral...): same shape as Groq."""
+    return [ModelDescriptor(provider=provider, model=model, reasoning=reasoning, coding=coding, tool_calling=True,
+                            context_window=context, latency_class=latency, tier="free",
+                            max_sensitivity=Sensitivity.INTERNAL, daily_quota=daily_quota)]
+
+
+class LocalOpenAIProvider(OpenAICompatProvider):
+    """A model running on this PC behind an OpenAI-style endpoint (Ollama's /v1, LM Studio...): free, private,
+    and it can use NODO's tools. Only 'available' while the server really answers."""
+
+    def __init__(self, name: str, base_url: str, model: str, timeout: float = 120.0,
+                 transport: httpx.AsyncBaseTransport | None = None):
+        desc = [ModelDescriptor(provider=name, model=model, reasoning=2, coding=2, tool_calling=True, is_local=True,
+                                tier="local", context_window=16_000, latency_class="medium",
+                                max_sensitivity=Sensitivity.HIGHLY_SENSITIVE)]
+        super().__init__(name, base_url, "local", desc, timeout=timeout, transport=transport)
+        self._seen: tuple[float, bool] = (0.0, False)
+
+    async def available(self) -> bool:
+        import time
+        at, ok = self._seen
+        if time.monotonic() - at < 20:
+            return ok
+        try:
+            async with httpx.AsyncClient(timeout=1.5, transport=self._transport) as c:
+                ok = (await c.get(f"{self.base_url}/models")).status_code == 200
+        except httpx.HTTPError:
+            ok = False
+        self._seen = (time.monotonic(), ok)
+        return ok

@@ -96,6 +96,13 @@ Se preferisci non usare l'abbonamento, il cervello funziona anche con:
   <https://aistudio.google.com/apikey> e scrivi `NODO_GEMINI_API_KEY=...`.
 - **Groq** (gratis, molto veloce, un po' meno bravo con gli strumenti): `NODO_GROQ_API_KEY=...` da
   <https://console.groq.com>.
+- **Cerebras** (gratis, velocissimo): `NODO_CEREBRAS_API_KEY=...` da <https://cloud.cerebras.ai>.
+- **Mistral** (gratis, piano «experiment»): `NODO_MISTRAL_API_KEY=...` da <https://console.mistral.ai>.
+- **GitHub Models**: si attiva da solo se hai già `NODO_GITHUB_TOKEN`; il token deve poter leggere «Models»
+  (GitHub → Settings → Developer settings → token → permesso *Models: read*). Se non può, NODO lo mette da parte.
+- **Ollama sul tuo PC** (gratis, privato, senza limiti): installa Ollama, scarica un modello che usa gli strumenti
+  (`ollama pull qwen2.5:7b`), poi `NODO_OLLAMA_BASE_URL=http://localhost:11434` e `NODO_OLLAMA_MODEL=qwen2.5:7b`.
+  Lo usa solo se in quel momento è acceso.
 
 Se ne configuri più di uno, NODO usa il migliore disponibile e passa al successivo se uno non risponde.
 

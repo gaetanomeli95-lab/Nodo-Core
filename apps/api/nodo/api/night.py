@@ -320,6 +320,8 @@ _SETTABLE_KEYS = {
     "NODO_GEMINI_API_KEY": "gemini_api_key",
     "NODO_GROQ_API_KEY": "groq_api_key",
     "NODO_OPENROUTER_API_KEY": "openrouter_api_key",
+    "NODO_CEREBRAS_API_KEY": "cerebras_api_key",
+    "NODO_MISTRAL_API_KEY": "mistral_api_key",
     "NODO_OPENAI_API_KEY": "openai_api_key",
     "NODO_ANTHROPIC_API_KEY": "anthropic_api_key",
     "NODO_GITHUB_TOKEN": "github_token",
@@ -328,7 +330,8 @@ _SETTABLE_KEYS = {
     "NODO_TELEGRAM_CHAT_ID": "telegram_chat_id",
 }
 # keys that unlock a model provider: rebuild the list so they work without restarting NODO
-_PROVIDER_KEYS = {"gemini_api_key", "groq_api_key", "openrouter_api_key", "openai_api_key", "anthropic_api_key"}
+_PROVIDER_KEYS = {"gemini_api_key", "groq_api_key", "openrouter_api_key", "openai_api_key", "anthropic_api_key",
+                  "cerebras_api_key", "mistral_api_key"}
 
 
 class KeyIn(BaseModel):

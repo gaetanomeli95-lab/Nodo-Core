@@ -9,7 +9,9 @@ from nodo.providers.codex_cli import CodexCliProvider
 from nodo.providers.deterministic import DeterministicProvider
 from nodo.providers.ollama import OllamaProvider
 from nodo.providers.openai_compat import (
+    LocalOpenAIProvider,
     OpenAICompatProvider,
+    free_cloud_descriptors,
     gemini_descriptors,
     groq_descriptors,
     openai_descriptors,
@@ -21,6 +23,20 @@ def build_providers(s: Settings) -> list[ModelProvider]:
     providers: list[ModelProvider] = []
     if s.ollama_base_url:
         providers.append(OllamaProvider(s.ollama_base_url, s.ollama_model))
+        if s.ollama_tools:
+            providers.append(LocalOpenAIProvider("ollama-tools", s.ollama_base_url.rstrip("/") + "/v1", s.ollama_model))
+    if s.cerebras_api_key:
+        providers.append(OpenAICompatProvider("cerebras", "https://api.cerebras.ai/v1", s.cerebras_api_key,
+                                              free_cloud_descriptors("cerebras", s.cerebras_model, context=64_000,
+                                                                     latency="low", daily_quota=1000)))
+    if s.mistral_api_key:
+        providers.append(OpenAICompatProvider("mistral", "https://api.mistral.ai/v1", s.mistral_api_key,
+                                              free_cloud_descriptors("mistral", s.mistral_model, context=128_000)))
+    if s.github_token and s.github_models and s.env not in ("TEST", "DEMO"):
+        providers.append(OpenAICompatProvider("github-models", "https://models.github.ai/inference", s.github_token,
+                                              free_cloud_descriptors("github-models", s.github_models_model,
+                                                                     context=128_000, reasoning=4, coding=4,
+                                                                     daily_quota=150)))
     if s.groq_api_key:
         providers.append(OpenAICompatProvider("groq", "https://api.groq.com/openai/v1", s.groq_api_key,
                                               groq_descriptors(s.groq_model)))

@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
     groq_api_key: str | None = None
     groq_model: str = "llama-3.3-70b-versatile"
+    # Free backup brains: when the main ones run out, the next in line answers (and can use tools)
+    github_models: bool = True                 # GitHub Models, with your existing GitHub token (needs "Models: read")
+    github_models_model: str = "openai/gpt-4.1-mini"
+    cerebras_api_key: str | None = None        # cloud.cerebras.ai: very fast, free tier
+    cerebras_model: str = "gpt-oss-120b"
+    mistral_api_key: str | None = None         # console.mistral.ai: free "experiment" tier
+    mistral_model: str = "mistral-small-latest"
+    ollama_tools: bool = True                  # when Ollama is set, also use it as a brain that can use tools
     gemini_api_key: str | None = None            # Google AI Studio key: free tier on Flash models
     gemini_model: str = "gemini-3.5-flash"     # 2.5 is closed to keys created after the 3.x rollout
     gemini_reasoning: str = "none"             # none | low | medium | high: hidden thinking eats max_tokens (verified: empty answers)
