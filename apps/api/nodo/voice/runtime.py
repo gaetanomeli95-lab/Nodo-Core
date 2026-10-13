@@ -75,7 +75,20 @@ _FORWARD = {"agent.started", "agent.finished", "tool.started", "tool.finished", 
             "ui.present"}
 
 
+THINK_DECL = {
+    "name": "pensa",
+    "description": ("Il cervello di Maria (memoria completa, registro, ricordi, ricerche, file, azioni). Usalo per "
+                    "QUALSIASI cosa che non sia un saluto o una battuta. Restituisce la risposta da dire."),
+    "parameters": {"type": "object", "properties": {
+        "richiesta": {"type": "string", "description": "Le parole di Gaetano, così come le ha dette."}},
+        "required": ["richiesta"]},
+}
+_LIVE_OWN_TOOLS = {"decide", "close_screen"}   # yes/no on the proposal shown, close what is on screen
+
+
 class VoiceRuntime:
+    SPEECH_TAIL_S = 90.0   # max wait for the voice to finish the last sentences of a turn
+
     def __init__(self, session: VoiceSession, container: Container,
                  emit: Callable[[dict], Any], session_factory: SessionFactory):
         self.vs = session
@@ -264,7 +277,8 @@ class VoiceRuntime:
         # Late Live frames cannot be decoded by the browser WebM STT chain; a PCM-capable STT buffers them.
         if (msg.mime or "").startswith("audio/pcm") and not getattr(stt, "accepts_pcm", False):
             return
-        if vs.state == VoiceState.IDLE:
+        if vs.state in (VoiceState.IDLE, VoiceState.WAITING_FOR_APPROVAL):
+            # waiting for a confirmation: keep listening; a «sì»/«no» is bound to vs.pending_approval_id only
             await self._set_state(VoiceState.LISTENING)
         if vs.state != VoiceState.LISTENING:
             return  # audio outside a listening phase is ignored (no silent capture)
@@ -388,7 +402,10 @@ class VoiceRuntime:
         self._request_id = None
         gen = self._gen
         interrupted = False
-        speaker = asyncio.create_task(self._speak_loop(gen))
+        # one speech queue PER TURN: a stop marker left by an interrupted turn can never mute the next one
+        q: asyncio.Queue[str | None] = asyncio.Queue()
+        self._speech_q = q
+        speaker = asyncio.create_task(self._speak_loop(gen, q))
         try:
             await self._pipeline(text, gen)
         except InterruptRequested:
@@ -400,16 +417,20 @@ class VoiceRuntime:
                     await self._send("error", where="turn", message=f"{type(e).__name__}: {e}")
                     await self._set_state(VoiceState.ERROR)
         finally:
-            self._speech_q.put_nowait(None)
+            q.put_nowait(None)
+            # let the voice FINISH the answer (a local Piper sentence can take several seconds): the loop stops
+            # by itself on an interruption; the long cap only guards against a TTS that hangs for ever
             with suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(speaker, timeout=3)
+                await asyncio.wait_for(speaker, timeout=self.SPEECH_TAIL_S)
             if "tts_started" in vs.stamps:
                 vs.mark("tts_done")
             vs.mark("turn_done")
             self._persist_metrics(interrupted)
             vs.turn_active = False
             if self._gen == gen:  # not superseded
-                if vs.state == VoiceState.INTERRUPTED:
+                if vs.pending_approval_id and vs.state != VoiceState.WAITING_FOR_APPROVAL:
+                    await self._set_state(VoiceState.WAITING_FOR_APPROVAL)   # the proposal is still open
+                elif vs.state == VoiceState.INTERRUPTED:
                     await self._set_state(VoiceState.LISTENING)
                 elif vs.state not in (VoiceState.IDLE, VoiceState.LISTENING, VoiceState.CLOSED,
                                       VoiceState.WAITING_FOR_APPROVAL):
@@ -486,7 +507,7 @@ class VoiceRuntime:
     async def _start_live(self, resume_model: str | None = None, resume_handle: str | None = None) -> None:
         """Opens the real-time session: persona + tools identical to the text brain, but audio in/out."""
         from nodo.brain.loop import Brain
-        from nodo.brain.persona import LIVE_STYLE, build_persona
+        from nodo.brain.persona import LIVE_BRAIN, LIVE_STYLE, build_persona
         from nodo.brain.tools import Toolbox, recent_history
 
         rid = f"voice-live-{self.vs.id[:8]}"
@@ -501,6 +522,11 @@ class VoiceRuntime:
                            + "\n".join(f"{m['role']}: {m['content'][:300]}" for m in hist))
             decls = [{"name": s.name, "description": s.description, "parameters": s.parameters}
                      for s in Toolbox(core, conv, rid, "", "voice").specs()]
+            if self.c.settings.live_brain:
+                # Gemini is fast but shallow and claims things it did not do: it keeps only the ears, the mouth and
+                # the yes/no of a decision; every real answer comes from the Claude brain through «pensa»
+                system += LIVE_BRAIN
+                decls = [THINK_DECL] + [d for d in decls if d["name"] in _LIVE_OWN_TOOLS]
             sdb.commit()  # Advertise only a durable, valid conversation ID.
         bridge = live_engine.LiveBridge(self.c.settings, self._on_live_event,
                                        getattr(self.c, "live_connect", None))
@@ -696,6 +722,8 @@ class VoiceRuntime:
             try:
                 if c["id"] and c["id"] in self._live_results:
                     result = self._live_results[c["id"]]
+                elif c["name"] == THINK_DECL["name"]:
+                    result = await self._live_think(c["args"], bindings)
                 elif c["name"] == "decide" and c["args"].get("approval_id") != self.vs.pending_approval_id:
                     result = {"error": "La decisione deve essere quella attualmente mostrata in questa sessione."}
                 elif c["name"] == "decide" and not (
@@ -739,6 +767,40 @@ class VoiceRuntime:
                 await self._send("approval.required", **{k: v for k, v in b.items()
                                  if k in ("approval_id", "tool", "action", "level", "label", "params",
                                           "site", "preview_url", "pr_url")})
+
+    async def _live_think(self, args: dict, bindings: list[dict]) -> dict:
+        """«pensa»: the Claude brain (memory, register, tools, honesty guard) answers; Live only says it."""
+        from nodo.brain.loop import Brain, BrainUnavailable
+
+        heard = (self._in_text or "").strip()
+        asked = str(args.get("richiesta") or "").strip()
+        text = heard or asked
+        if asked and heard and asked.lower() not in heard.lower():
+            text += f"\n(La voce ha capito così: {asked})"
+        if not text:
+            return {"error": "Non ho capito la richiesta: chiedi a Gaetano di ripetere."}
+        rid = f"voice-think-{self.vs.id[:8]}-{self.vs.turn_number}"
+        with self._db() as sdb:
+            core = self.c.core(sdb)
+            conv = core._conversation(self.vs.conversation_id, "voice")
+            self.vs.conversation_id = conv.id
+            brain = Brain(core, conv, rid, "voice")
+            try:
+                async for ev in brain.run(text):
+                    t, body = ev["type"], {k: v for k, v in ev.items() if k not in ("type", "request_id", "at")}
+                    if t == "step":
+                        await self._send("nodo.step", **body)
+                    elif t == "ui.present":
+                        await self._send("ui.present", **body)
+                    elif t == "approval.requested":
+                        bindings.append(body)
+            except BrainUnavailable:
+                return {"error": "Il cervello non risponde adesso: dillo a Gaetano in una frase, non inventare."}
+            sdb.commit()
+        if getattr(brain, "silent", False):
+            return {"silenzio": True}
+        return {"risposta": brain.text,
+                "come": "Dilla con parole tue, naturale e breve, senza aggiungere niente che non c'è qui."}
 
     async def _live_finalize_input(self) -> None:
         if self._in_text.strip() and not self._live_user_emitted:
@@ -886,10 +948,11 @@ class VoiceRuntime:
                                          latency_ms=vs.latency_ms()))
 
     # ------------------------------------------------------------- TTS streaming
-    async def _speak_loop(self, gen: int) -> None:
+    async def _speak_loop(self, gen: int, q: asyncio.Queue | None = None) -> None:
+        q = q if q is not None else self._speech_q
         started = False
         while True:
-            item = await self._speech_q.get()
+            item = await q.get()
             if item is None or self._gen != gen or self._dead:
                 break
             if not started:

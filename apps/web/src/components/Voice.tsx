@@ -402,7 +402,8 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
         // api engine: speak, pause ~0.8 s, the utterance goes to the server. Nothing is sent while NODO works
         // or speaks (no echo turned into a question); interrupting is a click.
         const v = vad.current, now = Date.now();
-        const busy = playingRef.current || !["IDLE", "LISTENING"].includes(stateRef.current);
+        // a pending confirmation keeps the ears open: «sì» / «no» answer ONLY the proposal on screen (bound server-side)
+        const busy = playingRef.current || !["IDLE", "LISTENING", "WAITING_FOR_APPROVAL"].includes(stateRef.current);
         if (busy) { v.voiced = false; v.preroll = []; return; }
         if (!v.voiced) v.floor = v.floor * 0.95 + rms * 0.05;   // noise floor follows the room while quiet
         const threshold = Math.max(0.012, v.floor * 3.5);

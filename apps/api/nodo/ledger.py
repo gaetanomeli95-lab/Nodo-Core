@@ -204,7 +204,10 @@ class Ledger:
         return None, top[:6]
 
     def update(self, e: LedgerEntry, **changes) -> list[str]:
-        done: list[str] = []
+        """All or nothing: every field is checked first; one invalid value changes NOTHING (no half-saved row
+        behind a «non aggiornato»)."""
+        new: dict = {}
+        paid_on: str | None | bool = False     # False = untouched
         for key in ("item", "size", "qty", "unit_price", "amount", "counterpart", "payment", "status", "day",
                     "note", "kind"):
             if key not in changes or changes[key] in (None, ""):
@@ -219,9 +222,17 @@ class Ledger:
             elif key == "day":
                 v = parse_day(v, self.today).isoformat()
             elif key in ("unit_price", "amount"):
-                v = float(v)
+                try:
+                    v = float(str(v).replace("€", "").replace(",", ".").strip())
+                except ValueError:
+                    raise ValueError(f"{key}: «{v}» non è un numero") from None
+                if v < 0:
+                    raise ValueError(f"{key}: non può essere negativo")
             elif key == "qty":
-                v = max(1, int(v))
+                try:
+                    v = max(1, int(float(str(v).replace(",", "."))))
+                except ValueError:
+                    raise ValueError(f"quantità: «{v}» non è un numero") from None
             elif key == "status":
                 v = str(v).lower().replace(" ", "_")
                 if v not in ("da_fare", "fatto", "annullato"):
@@ -231,9 +242,15 @@ class Ledger:
                 if v not in ("pagato", "sospeso", "nessuno"):
                     raise ValueError("pagamento: pagato, sospeso o nessuno")
                 if v == "pagato" and e.payment != "pagato":
-                    e.paid_on = parse_day(changes.get("paid_on"), self.today).isoformat()
+                    paid_on = parse_day(changes.get("paid_on"), self.today).isoformat()
                 elif v != "pagato":
-                    e.paid_on = None
+                    paid_on = None
+            new[key] = v
+        # every value is valid: only now touch the row
+        done: list[str] = []
+        if paid_on is not False:
+            e.paid_on = paid_on
+        for key, v in new.items():
             old = getattr(e, key)
             if old != v:
                 setattr(e, key, v)

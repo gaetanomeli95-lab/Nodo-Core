@@ -132,7 +132,8 @@ class VoiceState(StrEnum):
 
 TRANSITIONS: dict[VoiceState, set[VoiceState]] = {
     VoiceState.CONNECTING: {VoiceState.IDLE, VoiceState.CLOSED, VoiceState.ERROR},
-    VoiceState.IDLE: {VoiceState.LISTENING, VoiceState.UNDERSTANDING, VoiceState.CLOSED, VoiceState.ERROR},
+    VoiceState.IDLE: {VoiceState.LISTENING, VoiceState.UNDERSTANDING, VoiceState.WAITING_FOR_APPROVAL,
+                     VoiceState.CLOSED, VoiceState.ERROR},  # back to an open proposal
     VoiceState.LISTENING: {VoiceState.TRANSCRIBING, VoiceState.UNDERSTANDING, VoiceState.IDLE,
                            VoiceState.INTERRUPTED, VoiceState.CLOSED, VoiceState.ERROR},
     VoiceState.TRANSCRIBING: {VoiceState.UNDERSTANDING, VoiceState.LISTENING, VoiceState.IDLE,
@@ -145,7 +146,7 @@ TRANSITIONS: dict[VoiceState, set[VoiceState]] = {
     VoiceState.ACTING: {VoiceState.SPEAKING, VoiceState.THINKING, VoiceState.WAITING_FOR_APPROVAL,
                         VoiceState.IDLE, VoiceState.INTERRUPTED, VoiceState.CLOSED, VoiceState.ERROR},
     VoiceState.SPEAKING: {VoiceState.IDLE, VoiceState.LISTENING, VoiceState.INTERRUPTED,
-                          VoiceState.CLOSED, VoiceState.ERROR},  # LISTENING/INTERRUPTED = barge-in
+                          VoiceState.WAITING_FOR_APPROVAL, VoiceState.CLOSED, VoiceState.ERROR},  # LISTENING/INTERRUPTED = barge-in
     VoiceState.WAITING_FOR_APPROVAL: {VoiceState.ACTING, VoiceState.UNDERSTANDING, VoiceState.LISTENING,
                                       VoiceState.IDLE, VoiceState.INTERRUPTED, VoiceState.CLOSED,
                                       VoiceState.ERROR},

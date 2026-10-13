@@ -367,6 +367,9 @@ def test_live_config_validates_with_real_sdk(settings):
     config = types.LiveConnectConfig(**live_config(settings, "Parla italiano", [], "resume-test"))
     assert config.session_resumption.handle == "resume-test"
     assert config.realtime_input_config.automatic_activity_detection.disabled is False
+    assert config.speech_config.language_code == "it-IT"       # Italian ears: no Hindi/Korean transcripts of noise
+    settings.live_language = ""
+    config = types.LiveConnectConfig(**live_config(settings, "Parla italiano", [], None))
     assert config.speech_config.language_code is None
 
 
@@ -660,3 +663,59 @@ async def test_persisting_a_live_turn_waits_out_a_locked_database():
 
     with pytest.raises(OperationalError):
         await _retry_locked(broken)
+
+
+def test_live_pensa_hands_the_answer_to_the_claude_brain(client, container, monkeypatch):
+    """Live keeps ears and mouth; «pensa» runs the real brain (memory, register, guard) and returns its words."""
+    from nodo.brain import loop
+    seen = []
+
+    async def fake_run(self, text):
+        seen.append(text)
+        yield {"type": "step", "request_id": "r", "at": "t", "step": "tool:ledger_report", "status": "done",
+               "ok": True}
+        self.text = "Marcello ci deve 30 euro, ancora non li ha portati."
+
+    monkeypatch.setattr(loop.Brain, "run", fake_run)
+    script = [_sc(input_transcription=SimpleNamespace(text="Quanto mi deve Marcello?")),
+              _tc("pensa", {"richiesta": "quanto mi deve Marcello"}),
+              _sc(output_transcription=SimpleNamespace(text="Trenta euro, ancora non li ha portati.")),
+              _sc(turn_complete=True)]
+    holder = []
+    container.live_connect = make_connect(script, holder)
+    with client.websocket_connect(WS) as ws:
+        _open_live(ws)
+        events, _ = _recv_until(ws, "voice.turn.done")
+    model, config, session = holder[0]
+    names = [d["name"] for d in config["tools"][0]["function_declarations"]]
+    assert names[0] == "pensa" and "ledger_add" not in names and "decide" in names   # Gemini cannot act alone
+    assert "le orecchie e la bocca di Maria" in config["system_instruction"]
+    assert seen == ["Quanto mi deve Marcello?"]                     # the brain gets Gaetano's own words
+    result = session.tool_responses[0]["response"]["result"]
+    assert result["risposta"].startswith("Marcello ci deve 30 euro")
+    assert any(e["type"] == "nodo.step" and e["step"] == "tool:ledger_report" for e in events)
+
+
+async def test_pensa_silence_and_brain_down(container, engine, monkeypatch):
+    from nodo.brain import loop
+    from nodo.db.session import session_scope
+    from nodo.voice.runtime import VoiceRuntime
+
+    async def quiet(self, text):
+        self.silent, self.text = True, ""
+        return
+        yield
+
+    async def emit(event):
+        pass
+    monkeypatch.setattr(loop.Brain, "run", quiet)
+    runtime = VoiceRuntime(container.voice_sessions.create(None, "it"), container, emit, session_scope)
+    runtime._in_text = "Mi dica signora, lo viene a ritirare lei?"
+    assert await runtime._live_think({}, []) == {"silenzio": True}
+
+    async def down(self, text):
+        raise loop.BrainUnavailable("nessun modello")
+        yield
+    monkeypatch.setattr(loop.Brain, "run", down)
+    assert "error" in await runtime._live_think({"richiesta": "quanto ho incassato?"}, [])
+    await runtime.close()

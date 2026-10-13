@@ -104,6 +104,7 @@ class Settings(BaseSettings):
     live_language: str = "it-IT"      # Gemini Live: hear and speak Italian (no Hindi/Korean «transcripts» of noise)
     voice_engine: str = "precise"     # precise (Gemini ears/mouth, Claude brain with full memory) | auto (Gemini Live) | browser
     gemini_live_model: str = ""       # empty = try the built-in ladder of Live models
+    live_brain: bool = True           # Live = ears and mouth; anything real goes to the Claude brain via «pensa»
     live_voice: str = "Kore"          # Gemini voice: Puck | Charon | Kore | Fenrir | Aoede | ...
 
     # --- Tools ---

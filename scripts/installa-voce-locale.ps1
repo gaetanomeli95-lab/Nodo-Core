@@ -62,6 +62,19 @@ try {
   $text = SetEnvValue $text "NODO_PIPER_VOICE" "it_IT-paola-medium"
   [IO.File]::WriteAllText($EnvPath, $text, (New-Object System.Text.UTF8Encoding($false)))
 
+  Step "Prova audio vera: Piper dice una frase, Whisper deve riconoscerla."
+  Push-Location $Api
+  try {
+    & $Py -m nodo.voice.selftest
+    if ($LASTEXITCODE -ne 0) {
+      Step "La prova non e' andata: reinstallo le versioni compatibili e riprovo una volta."
+      & $Py -m pip install --force-reinstall "av==16.1.0" "faster-whisper==1.2.1"
+      CheckExit "Reinstallazione PyAV/Whisper"
+      & $Py -m nodo.voice.selftest
+      CheckExit "Prova audio"
+    }
+  } finally { Pop-Location }
+
   Step "Installazione completata. Chiudi e riapri NODO con avvia-nodo.bat."
   Step "In Accessi/Voce controlla che STT=faster-whisper e TTS=piper risultino pronti."
   Step "Questa installazione e' offline DURANTE L'USO della voce; il cervello puo' usare modelli cloud."

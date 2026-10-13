@@ -33,6 +33,16 @@ def voice_files(root: str, model: str, voice: str) -> tuple[Path, Path]:
     return whisper, piper
 
 
+def pcm_samples(audio: bytes, rate: int = 16000):
+    """16-bit mono PCM -> float32 at 16 kHz for Whisper, without PyAV (immune to decoder version breaks)."""
+    import numpy as np
+    x = np.frombuffer(audio[: len(audio) - len(audio) % 2], dtype="<i2").astype(np.float32) / 32768.0
+    if rate != 16000 and len(x):
+        n = int(len(x) * 16000 / rate)
+        x = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x).astype(np.float32)
+    return x
+
+
 class LocalWhisper:
     name, location = "faster-whisper", "local"
     accepts_pcm = True   # microphone worklet frames (open-mic conversation) are wrapped into WAV here
@@ -64,12 +74,15 @@ class LocalWhisper:
                                            local_files_only=True)
             return self._model
 
-    def _transcribe(self, audio: bytes, language: str) -> str:
-        from faster_whisper import decode_audio
+    def _transcribe(self, audio: bytes, language: str, pcm_rate: int | None = None) -> str:
         with self._infer_lock:
             model = self._load()
-            # PyAV (bundled in faster-whisper) handles WebM/Opus/WAV without a system FFmpeg install.
-            samples = decode_audio(io.BytesIO(audio), sampling_rate=16000)
+            if pcm_rate:
+                samples = pcm_samples(audio, pcm_rate)    # open-mic frames: no decoder involved at all
+            else:
+                from faster_whisper import decode_audio
+                # PyAV (bundled in faster-whisper) handles WebM/Opus/WAV without a system FFmpeg install.
+                samples = decode_audio(io.BytesIO(audio), sampling_rate=16000)
             if not len(samples):
                 return ""
             segments, _ = model.transcribe(samples, language=language.split("-")[0], beam_size=2,
@@ -81,12 +94,12 @@ class LocalWhisper:
             return Transcript("", language, None, self.name)
         if len(audio) > MAX_AUDIO_BYTES:
             raise ValueError("Registrazione troppo lunga (limite 12 MB): dividi la richiesta in turni più brevi")
+        rate = None
         if (mime or "").startswith("audio/pcm"):
-            from nodo.voice.providers import pcm_to_wav
             m = re.search(r"rate=(\d+)", mime)
-            audio = pcm_to_wav(audio, int(m.group(1)) if m else 16000)
+            rate = int(m.group(1)) if m else 16000
         started = time.perf_counter()
-        text = await asyncio.to_thread(self._transcribe, audio, language)
+        text = await asyncio.to_thread(self._transcribe, audio, language, rate)
         return Transcript(text, language, None, self.name, int((time.perf_counter() - started) * 1000))
 
 

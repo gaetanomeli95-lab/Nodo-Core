@@ -84,11 +84,13 @@ async def test_audio_upload_size_is_capped(tmp_path):
 
 
 async def test_local_whisper_takes_the_open_microphone_pcm(monkeypatch):
-    """Open-mic conversation (engine "api") streams raw PCM: local Whisper wraps it into WAV itself."""
+    """Open-mic conversation (engine "api") streams raw PCM: it goes to Whisper as samples, no decoder (PyAV)."""
     from nodo.voice.local import LocalWhisper
     w = LocalWhisper("/nonexistent")
     seen = {}
-    monkeypatch.setattr(w, "_transcribe", lambda audio, lang: seen.setdefault("head", audio[:4]) and "ciao")
+    monkeypatch.setattr(w, "_transcribe", lambda audio, lang, rate=None: seen.update(audio=audio, rate=rate) or "ciao")
     assert w.accepts_pcm
     out = await w.transcribe(b"\x00\x01" * 1600, "audio/pcm;rate=16000")
-    assert seen["head"] == b"RIFF" and out.text == "ciao"
+    assert seen["audio"] == b"\x00\x01" * 1600 and seen["rate"] == 16000 and out.text == "ciao"
+    await w.transcribe(b"RIFF....", "audio/wav")
+    assert seen["rate"] is None                       # a real file still goes through the decoder

@@ -217,7 +217,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       await post("/api/v1/setup/key", { name: "NODO_VOICE_ENGINE", value });
       window.dispatchEvent(new Event("nodo:access-updated"));      // App reloads the voice configuration
       setError(value === "precise" ? "Voce precisa attiva: risponde Claude. Vale dalla prossima volta che apri la voce."
-        : "Voce veloce attiva: risponde Gemini dal vivo. Vale dalla prossima volta che apri la voce.");
+        : "Voce veloce attiva: Gemini ascolta e parla dal vivo, per tutto il resto pensa Claude. Vale dalla prossima volta che apri la voce.");
     } catch (e) { setError((e as Error).message); }
     finally { setModeBusy(false); }
   };
@@ -339,11 +339,11 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       {writing && <form className="thought-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
         <input autoFocus aria-label="Scrivi a NODO" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Da dove cominciamo?" />
         <button disabled={!input.trim() || busy}>Invia ↗</button></form>}
-      <footer className="stage-footnote"><span>{voice.microphoneOn ? "MICROFONO ATTIVO" : "ATTIVA LA VOCE PER COMINCIARE"}</span><span>{voice.engine === "live" ? "Conversazione dal vivo"
+      <footer className="stage-footnote"><span>{voice.microphoneOn ? "MICROFONO ATTIVO" : "ATTIVA LA VOCE PER COMINCIARE"}</span><span>{voice.engine === "live" ? "Conversazione dal vivo · pensa Claude"
         : voiceConfig?.stt.location === "local" && voiceConfig?.tts.location === "local" ? "Voce locale sul tuo PC · pause di qualche secondo"
         : voice.engine === "api" ? (precise ? "Voce precisa · risponde Claude · pause di qualche secondo" : "Voce Gemini · pause di qualche secondo") : "Voce del browser"}</span>
         <span className="voice-mode" role="group" aria-label="Tipo di voce">
-          <button className={!precise ? "on" : ""} disabled={modeBusy || voice.liveOn} title="Risposte immediate (Gemini dal vivo)" onClick={() => setVoiceMode("auto")}>Veloce</button>
+          <button className={!precise ? "on" : ""} disabled={modeBusy || voice.liveOn} title="Dal vivo: Gemini ascolta e parla, il cervello Claude pensa e ricorda" onClick={() => setVoiceMode("auto")}>Veloce</button>
           <button className={precise ? "on" : ""} disabled={modeBusy || voice.liveOn} title="Risponde il cervello Claude: più preciso su conti e registro" onClick={() => setVoiceMode("precise")}>Precisa</button>
         </span></footer>
     </div>
