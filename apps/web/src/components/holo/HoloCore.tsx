@@ -48,7 +48,7 @@ void main(){
   float z = p.z + 3.4;
   gl_Position = vec4(p.x / z * uScale / uAspect, p.y / z * uScale, 0., 1.);
   float depth = clamp((3.4 - p.z) / 2.4 - .6, 0., 1.);
-  gl_PointSize = (1.2 + 2.6 * depth + band * 3.) * (1. + uEnergy * .6) * uScale * .55;
+  gl_PointSize = (1.2 + 2.6 * depth + band * 3.) * (1. + uEnergy * .6) * (.45 + uScale * .3);
   float k = .5 + .5 * snoise(n * 2.2 + vec3(uTime * .1));
   vColor = mix(uC1, uC2, k) * (.55 + .7 * depth) + band * .35;
   vAlpha = (.18 + .62 * depth) * mix(.25, 1., ease);
@@ -141,7 +141,7 @@ export function HoloCore({ mode, sampleLevel, spectrum, boot }: {
       spin += dt * (reduced ? 0 : m === "think" ? 0.55 : m === "act" ? 0.8 : 0.16);
       gl.uniform1f(uTime, reduced ? 0 : (now - t0) / 1000); gl.uniform1f(uBoot, bootT); gl.uniform1f(uEnergy, energy);
       gl.uniform1f(uSpin, spin); gl.uniform1f(uAspect, w / Math.max(1, h));
-      gl.uniform1f(uScale, Math.min(1.25, (Math.min(w, h * 1.4) / Math.max(1, h)) * 0.95));
+      gl.uniform1f(uScale, Math.min(2.0, (Math.min(w, h * 1.4) / Math.max(1, h)) * 1.55));
       gl.uniform1f(uMode, m === "think" || m === "act" ? 1 : 0);
       gl.uniform1fv(uBands, bands); gl.uniform3fv(uC1, c1); gl.uniform3fv(uC2, c2);
       gl.drawArrays(gl.POINTS, 0, N);
