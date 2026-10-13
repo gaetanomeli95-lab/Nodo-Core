@@ -184,9 +184,15 @@ class NightScheduler:
         last = getattr(self, "_last_learn", None)
         if self.settings.learn_from_chats and (last is None or now - last >= timedelta(minutes=5)):
             self._last_learn = now
-            from nodo.memory.learn import learn_once
+            from nodo.memory import mind
             with session_scope() as db:
-                await learn_once(self.c, db, now)
+                await mind.sweep(self.c, db, now)
+            local_now = now.astimezone(self.tz)
+            yesterday = local_now.date() - timedelta(days=1)
+            if getattr(self, "_last_diary", None) != yesterday:          # one diary page per day
+                self._last_diary = yesterday
+                with session_scope() as db:
+                    await mind.write_diary(self.c, db, yesterday)
         today = now.astimezone(self.tz).date()
         local = now.astimezone(self.tz)
         if self.settings.evening_recap and getattr(self, "_last_evening", None) != today \

@@ -18,7 +18,7 @@ from sqlalchemy import select
 
 from nodo.brain.persona import build_persona
 from nodo.brain.tools import Toolbox, recent_history, result_text
-from nodo.db.models import FactStatus, MemoryFact, Project, Sensitivity, Site
+from nodo.db.models import Project, Sensitivity, Site
 from nodo.night import briefing as B
 from nodo.providers.router import NoEligibleModel, RouteRequest
 
@@ -28,6 +28,35 @@ _MONTHS = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio
            "novembre", "dicembre"]
 _CHANNEL = {"voice": "voce (la risposta viene letta ad alta voce: niente elenchi, frasi brevi)",
             "telegram": "Telegram dal telefono (risposte brevi)", "text": "chat testuale nel pannello"}
+
+
+_EARLY_DONE = re.compile(r"\s*(ok|okay|va bene|fatto|segnat\w*|registrat\w*|me lo ricordo|ricevuto|capito|perfetto|certo)\b",
+                         re.I)
+_SILENCE = re.compile(r"\s*\[?\(?\s*silenzio\s*\]?\)?\.?\s*", re.I)
+
+_CLAIMS = [
+    (re.compile(r"\b(ho|l'ho|li ho|le ho)\s+(segnat|registrat|annotat|aggiunt|corrett|aggiornat)\w*.{0,40}"
+                r"\b(registro|vendit|spes|consegn|credit|sospes)", re.I | re.S),
+     ("ledger_add", "ledger_update"), "segnato/corretto nel registro"),
+    (re.compile(r"\b(ho|l'ho)\s+(creat|preparat|fatt|salvat|generat)\w*\s+(il|un|la|una|lo)?\s*"
+                r"(file|pdf|documento|excel|word|presentazion|immagin|foto)", re.I),
+     ("create_file", "create_document", "generate_image"), "creato il file"),
+    (re.compile(r"\b(sul|nel)\s+desktop\b", re.I), ("save_to_desktop",), "messo sul desktop"),
+    (re.compile(r"\b(ho|l'ho)\s+(appuntat|mess|scritt)\w*.{0,30}\blavagna\b", re.I | re.S), ("board_pin",),
+     "appuntato sulla lavagna"),
+    (re.compile(r"\b(ho|l'ho)\s+(impostat|programmat|messo)\w*.{0,30}\bpromemoria\b", re.I | re.S),
+     ("set_reminder",), "impostato il promemoria"),
+]
+
+
+def unbacked_claim(text: str, used: list[str]) -> str | None:
+    """«Ho segnato nel registro», «ho creato il PDF»… without the tool that does it: a promise not kept."""
+    for rx, tools, what in _CLAIMS:
+        if rx.search(text or "") and not any(t in used for t in tools):
+            return (f"[Controllo automatico] Hai scritto di aver {what}, ma non hai usato lo strumento "
+                    f"({' / '.join(tools)}). Fallo adesso con lo strumento giusto; se non puoi, dillo chiaramente "
+                    "senza far finta di averlo fatto.")
+    return None
 
 
 class BrainUnavailable(RuntimeError):
@@ -58,7 +87,7 @@ class Brain:
         self.tools_used: list[str] = []
 
     # ------------------------------------------------------------------ context
-    def snapshot(self) -> str:
+    def snapshot(self, query: str = "") -> str:
         tz = B.tzinfo(self.settings.timezone)
         now = datetime.now(tz)
         lines = [f"Adesso: {_DAYS[now.weekday()]} {now.day} {_MONTHS[now.month - 1]} {now.year}, ore {now:%H:%M}.",
@@ -107,12 +136,10 @@ class Brain:
         busy = [x.name for x in sites if _running.get(x.id) and not _running[x.id].done()]
         if busy:
             lines.append("Modifiche che stai preparando adesso in background: " + ", ".join(busy) + ".")
-        facts = self.s.scalars(select(MemoryFact).where(
-            MemoryFact.organization_id == self.org, MemoryFact.subject_type == "user",
-            MemoryFact.status.in_((FactStatus.CONFIRMED, FactStatus.INFERRED)), MemoryFact.valid_until.is_(None))
-            .order_by(MemoryFact.status, MemoryFact.confidence.desc(), MemoryFact.recorded_at.desc()).limit(25)).all()
-        if facts:
-            lines.append("Cosa sai di Gaetano: " + " | ".join(f.content for f in facts) + ".")
+        from nodo.memory.mind import memory_context
+        mem = memory_context(self.s, self.org, tz, query, self.settings.owner_name, self.settings.assistant_name)
+        if mem:
+            lines.append("\n" + mem)
         from nodo.knowledge.service import KnowledgeService
         k = KnowledgeService(self.s, self.org).overview()
         if k["conversations"]:
@@ -126,19 +153,21 @@ class Brain:
         model produced anything (nothing has been said yet, so the caller can fall back)."""
         rid = self.request_id
         box = Toolbox(self.core, self.conv, rid, text, self.channel)
-        messages: list[dict] = [{"role": "system", "content": build_persona(self.settings, self.snapshot())}]
+        messages: list[dict] = [{"role": "system", "content": build_persona(self.settings, self.snapshot(text))}]
         messages += recent_history(self.s, self.conv.id, self.settings.brain_history, exclude_request=rid)
         messages.append({"role": "user", "content": text})
         specs = box.specs()
         said: list[str] = []
+        guarded = False
         bound_sent: set[str] = set()
         max_steps = max(1, self.settings.brain_max_steps)
         for step in range(max_steps + 1):
             last = step == max_steps
             # release the database while the model thinks (seconds): background jobs and the night shift can write
             self.s.commit()
+            # «voce precisa» (the default) wants the BEST brain even on voice: speed is not worth wrong answers
             req = RouteRequest(purpose="brain", sensitivity=Sensitivity.INTERNAL, min_reasoning=3,
-                               prefer_fast=self.channel == "voice")
+                               prefer_fast=self.channel == "voice" and self.settings.voice_engine == "auto")
             try:
                 turn = await self.core.router.complete_tools(messages, [] if last else specs, req, request_id=rid,
                                                              temperature=0.4, max_tokens=1500)
@@ -152,8 +181,19 @@ class Brain:
                 self.provider, self.model = d.descriptor.provider, d.descriptor.model
             calls = [] if last else turn.tool_calls
             interim = turn.text.strip()
-            if calls and len(interim) > 120:
-                interim = ""   # long text next to tool calls is usually repeated in the final answer: keep that one
+            if calls and (len(interim) > 120 or _EARLY_DONE.match(interim)):
+                # long text next to tool calls is repeated in the final answer, and «ok, fatto» said BEFORE the tool
+                # ran is both a double answer («ok… Ok, me lo ricordo») and a claim not yet true: keep the final one
+                interim = ""
+            if not calls and not last and not guarded and (fix := unbacked_claim(interim, self.tools_used)):
+                # it says «fatto» but did not do it: do not let it say so, make it act (or tell the truth)
+                guarded = True
+                messages.append({"role": "assistant", "content": interim})
+                messages.append({"role": "user", "content": fix})
+                continue
+            if interim and _SILENCE.fullmatch(interim):
+                interim = ""                     # it chose to stay quiet (Gaetano is talking to someone else)
+                self.silent = True
             if interim:
                 # a short "un attimo, controllo" before tools is spoken right away; the final answer closes the turn
                 said.append(interim)
@@ -180,6 +220,6 @@ class Brain:
                         bound_sent.add(b["approval_id"])
                         self.core.events.emit("approval.requested", b, request_id=rid, organization_id=self.org)
                         yield _ev("approval.requested", rid, **b)
-        if not said:
+        if not said and not getattr(self, "silent", False):
             said.append("Fatto.")
         self.text = " ".join(said).strip()

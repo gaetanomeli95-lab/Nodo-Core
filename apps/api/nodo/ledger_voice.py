@@ -153,6 +153,7 @@ def spoken_recap(rows: list[LedgerEntry], settled: list[LedgerEntry], totals: di
         swaps = [r for r in day_rows if r.kind == "sostituzione"]
         costs = [r for r in day_rows if r.kind == "spesa"]
         notes = [r for r in day_rows if r.kind == "nota"]
+        debts = [r for r in day_rows if r.kind == "credito"]
         lines = _sales_for(sales, owner)
         if lines:
             lines[0] = f"{when.capitalize()}: " + lines[0][0].lower() + lines[0][1:]
@@ -166,6 +167,10 @@ def spoken_recap(rows: list[LedgerEntry], settled: list[LedgerEntry], totals: di
             tot = sum(r.amount or 0 for r in costs)
             lines.append(f"Sono uscite {_money(tot)}: " + _join([_expense(r, owner) for r in costs]) + "."
                          if len(costs) > 1 else f"È uscita una spesa: {_expense(costs[0], owner)}.")
+        for r in debts:
+            who = r.counterpart or "qualcuno"
+            lines.append(f"{who} ti deve {_money(r.amount)}" + (f" per {r.item}" if r.item else "")
+                         + (", li ha già dati." if r.payment == "pagato" else "."))
         for r in notes:
             lines.append((r.note or r.item) + ".")
         out.append(" ".join(lines))

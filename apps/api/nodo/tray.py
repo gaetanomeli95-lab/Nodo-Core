@@ -131,7 +131,9 @@ def open_panel(port: int) -> None:
         exe = shutil.which(name) or _windows_browser(name)
         if exe:
             try:
-                subprocess.Popen([exe, f"--app={url}"], creationflags=NO_WINDOW)
+                # the app window may speak at once: NODO greets you while it appears
+                subprocess.Popen([exe, f"--app={url}", "--autoplay-policy=no-user-gesture-required"],
+                                 creationflags=NO_WINDOW)
                 return
             except OSError:
                 break

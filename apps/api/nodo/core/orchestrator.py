@@ -107,14 +107,18 @@ class NodoCore:
                 async for ev in self._brain_turn(text, conv, request_id, channel, outcome):
                     yield ev
                 if outcome.intent == "conversation":  # the brain answered; otherwise fall back to the rules below
-                    self.s.add(Message(conversation_id=conv.id, role="nodo", content=outcome.text,
-                                       request_id=request_id))
+                    if outcome.text:                       # an empty answer = NODO chose to stay quiet
+                        self.s.add(Message(conversation_id=conv.id, role="nodo", content=outcome.text,
+                                           request_id=request_id))
                     self.events.emit("request.completed", {"intent": outcome.intent, "provider": outcome.provider,
                                                            "model": outcome.model, "brain": True},
                                      request_id=request_id, organization_id=self.org)
                     self.s.flush()
                     yield _ev("done", request_id, conversation_id=conv.id, text=outcome.text, intent=outcome.intent,
                               provider=outcome.provider, model=outcome.model, confidence="known", agents=["brain"])
+                    if self.container is not None:          # the archivist updates the memory a few seconds later
+                        from nodo.memory import mind
+                        mind.after_turn(self.container, conv.id)
                     return
                 cursor = len(self.events.history)
             outcome.intent = intent.name

@@ -11,7 +11,8 @@ _NUM = {"type": "number"}
 _ENTRY = {
     "type": "object",
     "properties": {
-        "kind": {**_STR, "description": "vendita | sostituzione | spesa | nota"},
+        "kind": {**_STR, "description": "vendita | sostituzione | spesa | credito (qualcuno deve soldi al negozio, "
+                                        "non è una vendita: «Marcello ci deve 30 euro») | nota"},
         "item": {**_STR, "description": "cosa, col nome COMPLETO del modello: «materasso Morpheus Memory due strati», "
                                         "«rete a doghe», «rete con tavola», per le spese la voce: «palestra», "
                                         "«stipendio», «pulizie», «fornitore Arrisal»"},

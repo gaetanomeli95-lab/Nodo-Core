@@ -12,13 +12,12 @@ export function Boot({ name }: { name: string }) {
   });
   useEffect(() => {
     if (gone) return;
-    const t = setInterval(() => setStep((s) => s + 1), 330);
-    const end = setTimeout(() => { setGone(true); try { sessionStorage.setItem("nodo.booted", "1"); } catch { /* ignore */ } }, 2600);
+    const t = setInterval(() => setStep((s) => s + 1), 520);
+    const end = setTimeout(() => { setGone(true); try { sessionStorage.setItem("nodo.booted", "1"); } catch { /* ignore */ } }, 3600);
     return () => { clearInterval(t); clearTimeout(end); };
   }, [gone]);
   if (gone) return null;
   return <div className={`holo-boot ${step > LINES.length + 1 ? "out" : ""}`} onClick={() => setGone(true)}>
-    <div className="boot-ring"><i /><i /><i /></div>
     <div className="boot-name">{name}</div>
     <ol>{LINES.slice(0, step).map((l, i) => <li key={i}><span>{String(i + 1).padStart(2, "0")}</span>{l}</li>)}</ol>
   </div>;

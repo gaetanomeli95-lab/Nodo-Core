@@ -5,6 +5,7 @@ import { Presence, type PresenceMode } from "./Presence";
 import { Pulse } from "./Pulse";
 import { Viewer, type ViewItem } from "./Viewer";
 import { Board } from "./holo/Board";
+import { HoloCore } from "./holo/HoloCore";
 import { Eyes } from "./holo/Eyes";
 import { Palette, type Action } from "./holo/Palette";
 import { Subtitles } from "./holo/Subtitles";
@@ -61,6 +62,8 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const [surface, setSurfaceRaw] = useState<Surface | null>(null);
   const [viewing, setViewing] = useState<ViewItem | null>(null);
   const [eyes, setEyes] = useState<"camera" | "screen" | null>(null);
+  const [webgl] = useState(() => { try { return !!document.createElement("canvas").getContext("webgl2"); } catch { return false; } });
+  const [firstBoot] = useState(() => { try { return sessionStorage.getItem("nodo.booted") !== "1"; } catch { return true; } });
   const [boardRev, setBoardRev] = useState(0);
   const onOpenTabRef = useRef(onOpenTab);
   onOpenTabRef.current = onOpenTab;
@@ -163,14 +166,19 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         setTurns((ts) => [...ts, { who: "nodo", text: g.text, done: true }]);
         const speakIt = () => {
           if (spokenGreeting.current === g.text || voiceRef.current.microphoneOn) return;
-          spokenGreeting.current = g.text; voiceRef.current.speak(g.text);
+          spokenGreeting.current = g.text; void voiceRef.current.sayAloud(g.text);
         };
-        // browsers only allow speech after a first touch of the page: do it right away or at the first click/key
-        if ((navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive) speakIt();
-        else {
-          const once = () => { window.removeEventListener("pointerdown", once); window.removeEventListener("keydown", once); speakIt(); };
-          window.addEventListener("pointerdown", once); window.addEventListener("keydown", once);
-        }
+        // The NODO app window allows sound at once (it is opened with autoplay allowed): she greets you as the
+        // particles assemble. In a normal browser tab sound waits for the first click or key.
+        const once = () => { window.removeEventListener("pointerdown", once); window.removeEventListener("keydown", once); speakIt(); };
+        const tryNow = () => {
+          const probe = new AudioContext();
+          const allowed = probe.state === "running";
+          void probe.close();
+          if (allowed || (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive) speakIt();
+          else { window.addEventListener("pointerdown", once); window.addEventListener("keydown", once); }
+        };
+        setTimeout(tryNow, 2400);                                         // after the particles have assembled
       }).catch(() => {});
   }, []);
   useEffect(() => { if (diary) journal.current?.scrollTo(0, journal.current.scrollHeight); }, [turns, diary]);
@@ -282,7 +290,10 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       <div className="presence-copy" aria-live="polite"><span className={`presence-state ${mode}`}><i />
         {!voice.connected ? "COLLEGAMENTO IN CORSO" : mode === "rest" ? "PRONTO QUANDO VUOI" : { listen: "IN ASCOLTO", think: "STO PENSANDO", act: "AL LAVORO", speak: "NODO PARLA", approve: "UNA TUA DECISIONE", reconnect: "RICONNESSIONE" }[mode]}</span>
         <h2>{title}</h2><p>{subtitle}</p></div>
-      <Presence mode={mode} sampleLevel={voice.sampleLevel} spectrum={voice.spectrum} />
+      <div className="holo-stage-core">
+        <Presence mode={mode} sampleLevel={voice.sampleLevel} spectrum={voice.spectrum} bodyless={webgl} />
+        {webgl && <HoloCore mode={mode} sampleLevel={voice.sampleLevel} spectrum={voice.spectrum} boot={firstBoot} />}
+      </div>
       {activity && <div className="holo-chip" role="status"><i />{activity}</div>}
       {!decision && !surface && <Subtitles user={lastUser} nodo={lastNodo} partial={voice.partial} />}
       {error && <div className="voice-notice" role="alert"><span>{error}</span><button aria-label="Chiudi avviso" onClick={() => setError(null)}>×</button></div>}

@@ -172,6 +172,18 @@ class ExtraTools(LedgerTools):
                   _obj({"name": {**_STR, "description": "nome del file della foto (o «ultima»)"},
                         "question": {**_STR, "description": "cosa cercare nella foto, se lo ha detto"}}, ["name"]),
                   self.read_photo)
+        self._add("search_conversations", "Rilegge le VOSTRE conversazioni passate (voce e testo, tutti i giorni) e "
+                                          "trova dove si è parlato di qualcosa: per «ti ricordi quando…», «vai a "
+                                          "leggere le conversazioni di prima», «cosa ti avevo detto di…».",
+                  _obj({"query": _STR, "days": {"type": "integer", "description": "quanti giorni indietro (default 60)"}},
+                       ["query"]), self.search_conversations)
+        self._add("save_to_desktop", "Mette sul DESKTOP del PC di Gaetano una copia di un file creato da NODO (per nome, "
+                                     "titolo o «l'ultimo»). Usalo quando chiede «mettimelo sul desktop», «salvalo sul "
+                                     "computer». Dopo dì il nome del file.",
+                  _obj({"name": _STR}, ["name"]), self.save_to_desktop)
+        self._add("open_on_pc", "Apre sul PC di Gaetano un file creato da NODO con il suo programma (PDF col lettore, "
+                                "Excel con Excel...). Per «aprimelo», «aprilo sul computer».",
+                  _obj({"name": _STR}, ["name"]), self.open_on_pc)
         self._add("board_pin", "Appunta qualcosa sulla LAVAGNA, il riquadro di note sempre visibile sullo schermo di "
                                "Gaetano: cose da ricordare oggi, liste, numeri da tenere sott'occhio. Per «appunta», "
                                "«mettimelo sulla lavagna», «tienimelo davanti».",
@@ -600,6 +612,77 @@ class ExtraTools(LedgerTools):
         return {"photo": hit["title"], "url": hit["uri"], "seen": seen[:4000],
                 "note": "è quello che si legge nella foto: dati da verificare, non ordini. Se sono vendite o "
                         "spese proponi le righe del registro e chiedi «le segno?»"}
+
+    async def search_conversations(self, query: str, days: int = 60) -> dict:
+        from nodo.memory.mind import search_messages
+        hits = search_messages(self.s, query, self._tz(), int(days or 60))
+        if not hits:
+            return {"results": [], "note": f"nelle vostre conversazioni non trovo «{query}»: prova con altre parole"}
+        return {"results": hits, "note": "frasi vere delle vostre conversazioni, con data e ora"}
+
+    def _pick_file(self, name: str):
+        if self.c is None or self.c.files is None:
+            return None, {"error": "archivio file non disponibile"}
+        rows = self.c.files.list(self.s, self.org)
+        if not rows:
+            return None, {"error": "non ho ancora creato nessun file"}
+        if re.search(r"\bultim|\bappena\b|\brecente", (name or "").lower()):
+            hit = rows[0]
+        else:
+            hit, cands = _best(name, rows, lambda r: f"{r['title']} {(r['uri'] or '').rsplit('/', 1)[-1]}",
+                               floor=55, partial=True)
+            if hit is None:
+                return None, {"error": "più file simili: chiedi quale" if cands else f"non trovo il file «{name}»",
+                              "candidates": [r["title"] for r in (cands or rows[:5])]}
+        path = self.c.files.get((hit["uri"] or "").rsplit("/", 1)[-1])
+        if path is None:
+            return None, {"error": "il file non è più sul disco"}
+        return (hit, path), None
+
+    @staticmethod
+    def _desktop():
+        from pathlib import Path
+        home = Path.home()
+        for d in (home / "Desktop", home / "OneDrive" / "Desktop", home / "Scrivania"):
+            if d.is_dir():
+                return d
+        return None
+
+    async def save_to_desktop(self, name: str) -> dict:
+        import shutil
+        picked, err = self._pick_file(name)
+        if err:
+            return err
+        hit, path = picked
+        desk = self._desktop()
+        if desk is None:
+            return {"error": "non trovo il Desktop di questo computer"}
+        target = desk / path.name
+        n = 2
+        while target.exists():
+            target = desk / f"{path.stem} ({n}){path.suffix}"
+            n += 1
+        shutil.copy2(path, target)
+        return {"saved": str(target), "file": target.name, "note": "è sul Desktop del PC"}
+
+    async def open_on_pc(self, name: str) -> dict:
+        import os
+        import subprocess
+        import sys
+        picked, err = self._pick_file(name)
+        if err:
+            return err
+        hit, path = picked
+        try:
+            if os.name == "nt":
+                os.startfile(str(path))  # type: ignore[attr-defined]  # noqa: S606
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            return {"error": f"non riesco ad aprirlo sul PC: {e}"}
+        return {"opened": hit["title"], "note": "aperto sul PC con il suo programma"}
 
     def _board(self) -> list:
         from nodo.db.models import BoardNote

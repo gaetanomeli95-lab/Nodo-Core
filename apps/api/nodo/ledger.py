@@ -16,11 +16,13 @@ from sqlalchemy.orm import Session
 
 from nodo.db.models import LedgerEntry
 
-KINDS = ("vendita", "sostituzione", "spesa", "nota")
+KINDS = ("vendita", "sostituzione", "spesa", "credito", "nota")
+MONEY_IN = ("vendita", "credito")      # money someone owes the shop: a sale, or a plain debt («Marcello ci deve 30»)
 _KIND_ALIASES = {"venduto": "vendita", "vendite": "vendita", "consegna": "vendita", "ordine": "vendita",
                  "cambio": "sostituzione", "garanzia": "sostituzione", "sostituito": "sostituzione",
                  "uscita": "spesa", "uscite": "spesa", "pagamento": "spesa", "stipendio": "spesa",
-                 "appunto": "nota"}
+                 "appunto": "nota", "debito": "credito", "prestito": "credito", "deve": "credito",
+                 "crediti": "credito"}
 SIZE_NAMES = {80: "singolo", 85: "singolo", 90: "singolo", 100: "singolo grande", 120: "una piazza e mezzo",
               140: "alla francese", 160: "matrimoniale", 170: "matrimoniale", 180: "matrimoniale grande"}
 _WORD_SIZES = {"singolo": "80x190", "singola": "80x190", "una piazza e mezzo": "120x190",
@@ -36,7 +38,7 @@ def norm_kind(kind: str | None) -> str:
     k = (kind or "").strip().lower()
     k = _KIND_ALIASES.get(k, k)
     if k not in KINDS:
-        raise ValueError(f"tipo non valido «{kind}»: usa vendita, sostituzione, spesa o nota")
+        raise ValueError(f"tipo non valido «{kind}»: usa vendita, sostituzione, spesa, credito o nota")
     return k
 
 
@@ -153,7 +155,7 @@ class Ledger:
             amount = round(float(unit_price) * qty, 2)
         if unit_price is None and amount is not None and qty:
             unit_price = round(float(amount) / qty, 2)
-        pay = (payment or ("pagato" if k in ("vendita", "spesa") else "nessuno")).lower()
+        pay = (payment or ("pagato" if k in ("vendita", "spesa") else "sospeso" if k == "credito" else "nessuno")).lower()
         if pay not in ("pagato", "sospeso", "nessuno"):
             raise ValueError("pagamento: pagato, sospeso o nessuno")
         st = (status or "fatto").lower().replace(" ", "_").replace("da fare", "da_fare")
@@ -165,7 +167,7 @@ class Ledger:
                         unit_price=float(unit_price) if unit_price is not None else None,
                         amount=float(amount) if amount is not None else None,
                         counterpart=(counterpart or "").strip() or None, payment=pay,
-                        paid_on=d.isoformat() if pay == "pagato" and k == "vendita" else None,
+                        paid_on=d.isoformat() if pay == "pagato" and k in MONEY_IN else None,
                         status=st, note=(note or "").strip() or None)
         if at is not None:
             e.at = at
@@ -255,14 +257,14 @@ class Ledger:
     def settled_in(self, start: date, end: date) -> list[LedgerEntry]:
         """Earlier sales paid within the period (a «sospeso» settled later)."""
         return list(self.s.scalars(select(LedgerEntry).where(
-            LedgerEntry.organization_id == self.org, LedgerEntry.kind == "vendita",
+            LedgerEntry.organization_id == self.org, LedgerEntry.kind.in_(MONEY_IN),
             LedgerEntry.status != "annullato", LedgerEntry.payment == "pagato",
             LedgerEntry.paid_on >= start.isoformat(), LedgerEntry.paid_on <= end.isoformat(),
             LedgerEntry.day < start.isoformat())))
 
     def open_payments(self) -> list[LedgerEntry]:
         return list(self.s.scalars(select(LedgerEntry).where(
-            LedgerEntry.organization_id == self.org, LedgerEntry.kind == "vendita",
+            LedgerEntry.organization_id == self.org, LedgerEntry.kind.in_(MONEY_IN),
             LedgerEntry.status == "fatto", LedgerEntry.payment == "sospeso").order_by(LedgerEntry.day)))
 
     def pending_work(self) -> list[LedgerEntry]:
@@ -276,7 +278,7 @@ class Ledger:
         settled = self.settled_in(start, end)
         t = Totals()
         for r in rows:
-            if r.kind == "vendita" and r.status != "da_fare":
+            if r.kind in MONEY_IN and r.status != "da_fare":
                 if r.payment == "pagato" and (r.paid_on or r.day) <= end.isoformat():
                     t.incassato += r.amount or 0
                 elif r.payment in ("sospeso", "pagato"):        # paid only after the period: still open then
@@ -322,6 +324,7 @@ class Ledger:
             day_rows = [r for r in rows if r.day == d]
             out.append(f"{say_day(date.fromisoformat(d), self.today).capitalize()}:")
             for kind, title in (("vendita", "Vendite"), ("sostituzione", "Sostituzioni"), ("spesa", "Uscite"),
+                                ("credito", "Crediti"),
                                 ("nota", "Note")):
                 part = [r for r in day_rows if r.kind == kind]
                 if part:
@@ -358,6 +361,10 @@ def sentence(r: LedgerEntry) -> str:
         s = f"{what} {euro(r.amount)}".strip() + (f" {_to(who)}" if who else "")
     elif r.kind == "sostituzione":
         s = f"{what}" + (f" per {r.counterpart}" if r.counterpart else "") + " (in garanzia, nessun incasso)"
+    elif r.kind == "credito":
+        s = f"{r.counterpart or 'qualcuno'} deve {euro(r.amount)}" + (f" ({r.item})" if r.item else "")
+        s += {"pagato": ", pagato", "sospeso": "", "nessuno": ""}.get(r.payment, "")
+        return s + (f" ({r.note})" if r.note else "")
     elif r.kind == "nota":
         s = r.note or r.item
         return s + (" [da fare]" if r.status == "da_fare" else "")
@@ -402,7 +409,7 @@ def check_entry(led: Ledger, e: LedgerEntry, *, explicit_payment: bool = True) -
     w: list[str] = []
     if e.status == "annullato":
         return w
-    if e.kind in ("vendita", "spesa") and e.amount is None:
+    if e.kind in ("vendita", "spesa", "credito") and e.amount is None:
         w.append("manca il prezzo")
     if e.kind in ("vendita", "sostituzione") and _NEEDS_SIZE.search(e.item or "") and not e.size:
         w.append("manca la misura")
@@ -416,7 +423,7 @@ def check_entry(led: Ledger, e: LedgerEntry, *, explicit_payment: bool = True) -
             w.append(f"misura insolita {e.size}: è giusta?")
     if e.qty > 8:
         w.append(f"{e.qty} pezzi: è giusto?")
-    if not e.item and e.kind != "nota":
+    if not e.item and e.kind not in ("nota", "credito"):
         w.append("manca cosa (l'articolo o la voce di spesa)")
     if e.kind == "vendita" and e.unit_price is not None:
         hist = price_history(led, e.item, e.size, exclude_id=e.id)
@@ -497,8 +504,8 @@ def stats(led: Ledger, days: int = 30) -> dict:
         d = per_day.get(r.day)
         if d is None or r.status == "da_fare":
             continue
-        if r.kind == "vendita":
-            d["pieces"] += r.qty
+        if r.kind in MONEY_IN:
+            d["pieces"] += r.qty if r.kind == "vendita" else 0
             if r.payment == "pagato":
                 d["in"] += r.amount or 0
         elif r.kind == "spesa":

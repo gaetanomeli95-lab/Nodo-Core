@@ -18,12 +18,14 @@ const mix = (a: number[], b: number[], k: number) => a.map((v, i) => v + (b[i] -
 
 /** NODO's presence: a living core with a ring that dances on the real frequencies of the voice (yours while you
  *  speak, NODO's while it answers), sound waves running across the stage and particles in orbit. */
-export function Presence({ mode, sampleLevel, spectrum }: {
+export function Presence({ mode, sampleLevel, spectrum, bodyless = false }: {
   mode: PresenceMode; sampleLevel: () => { input: number; output: number }; spectrum?: () => Bins;
+  /** true when the WebGL body (HoloCore) draws the core: here only waves and HUD rings */
+  bodyless?: boolean;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const latest = useRef({ mode, sampleLevel, spectrum });
-  latest.current = { mode, sampleLevel, spectrum };
+  const latest = useRef({ mode, sampleLevel, spectrum, bodyless });
+  latest.current = { mode, sampleLevel, spectrum, bodyless };
 
   useEffect(() => {
     const el = canvas.current!;
@@ -137,6 +139,7 @@ export function Presence({ mode, sampleLevel, spectrum }: {
         ctx.lineTo(cx + Math.cos(a) * r2, cy + Math.sin(a) * r2); ctx.stroke();
       }
 
+      if (latest.current.bodyless) { ctx.globalCompositeOperation = "source-over"; return; }
       // the spectrum ring
       for (let i = 0; i < N; i++) {
         const a = (i / N) * Math.PI * 2 - Math.PI / 2 + spin * 0.12;

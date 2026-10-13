@@ -4,7 +4,7 @@
  * Browser speech APIs do the heavy lifting in FREE mode (stt/tts location === "browser").
  */
 import { useEffect, useRef, useState } from "react";
-import { VoiceSocket, type VoiceConfig, type VoiceEvent } from "../api";
+import { speak as serverSpeak, VoiceSocket, type VoiceConfig, type VoiceEvent } from "../api";
 
 export type VoiceState =
   | "IDLE" | "CONNECTING" | "LISTENING" | "TRANSCRIBING" | "UNDERSTANDING" | "THINKING"
@@ -72,6 +72,7 @@ class ChunkPlayer {
     this.queue.push(URL.createObjectURL(new Blob([bytes], { type: mime })));
     void this.pump();
   }
+  pushBlob(blob: Blob) { this.queue.push(URL.createObjectURL(blob)); void this.pump(); }
   private async pump() {
     if (this.playing) return;
     this.playing = true;
@@ -604,6 +605,15 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
 
   /** NODO speaks a text of its own (the morning greeting) with the browser voice. */
   const speak = (text: string) => { speechQueue.current.push(text); if (!speaking.current) browserTtsNext(); };
+  /** Her real voice (server TTS, the same as in conversation) - the browser's robot voice only as a last resort.
+   *  Goes through the analysed player, so the presence on screen moves with it. */
+  const sayAloud = async (text: string) => {
+    try {
+      const { data } = await serverSpeak(text);
+      if (!data.size) throw new Error("empty");
+      player.current.pushBlob(data);
+    } catch { speak(text); }
+  };
 
   const toggleMic = () => { pressStart(); if (engine === "browser") pressStop(); };
   const endConversation = () => {
@@ -631,7 +641,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   });
 
   return { state, connected, partial, engine, liveOn, audioPlaying, recovering, pressStart, pressStop,
-    interrupt, answer, sendText, speak, toggleMic, endConversation, setConversation, microphoneOn: liveOn || capturing,
+    interrupt, answer, sendText, speak, sayAloud, toggleMic, endConversation, setConversation, microphoneOn: liveOn || capturing,
     sampleLevel: () => ({ input: inputLevel.current, output: Math.max(pcm.current.level(), player.current.level()) }),
     /** Frequency bins (0-255) of what NODO hears and says, for the visuals. null = nothing playing / no mic. */
     spectrum: () => {

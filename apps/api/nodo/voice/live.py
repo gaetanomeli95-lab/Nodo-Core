@@ -109,7 +109,8 @@ def live_config(settings, system: str, tool_decls: list[dict], handle: str | Non
         # Native audio uses the language instruction in the prompt. Avoid forcing a locale
         # unsupported by a fallback model's speech configuration.
         "speech_config": {"voice_config": {"prebuilt_voice_config": {
-            "voice_name": settings.live_voice or "Kore"}}},
+            "voice_name": settings.live_voice or "Kore"}},
+            **({"language_code": settings.live_language} if getattr(settings, "live_language", "") else {})},
         "input_audio_transcription": {},
         "output_audio_transcription": {},
         "realtime_input_config": {

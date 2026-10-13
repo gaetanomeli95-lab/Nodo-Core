@@ -369,6 +369,11 @@ class VoiceRuntime:
 
     # ------------------------------------------------------------- turns
     async def _begin_turn(self, text: str) -> None:
+        from nodo.memory.mind import is_noise
+        if is_noise(text):                     # other alphabets, «egg», a cough: not a question, stay quiet
+            self._log("voice.noise_ignored", {"text": text[:60]})
+            await self._set_state(VoiceState.LISTENING)
+            return
         if self._turn_task and not self._turn_task.done() and not self.vs.interrupted:
             await self._send("error", where="turn", message="turn already in progress")
             return
@@ -766,6 +771,8 @@ class VoiceRuntime:
 
             try:
                 await _retry_locked(save)
+                from nodo.memory import mind
+                mind.after_turn(self.c, conversation_id)          # Gemini Live never remembers by itself
             except Exception:
                 log.exception("could not persist Live conversation turn")
                 await self._send("error", where="live-memory", message="Non sono riuscito a salvare questo turno nel diario")

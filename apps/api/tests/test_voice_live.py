@@ -469,6 +469,7 @@ def test_quota_error_rests_the_key_instead_of_retrying_the_ladder(container):
         live_engine._quota["key"] = None
         live_engine._quota["until"] = 0.0
         container.settings.env = "LOCAL"
+        container.settings.voice_engine = "auto"
         container.settings.gemini_api_key = "test-key"
         container.live_connect = None
         bridge = live_engine.LiveBridge(container.settings, lambda e: None, connect=quota_connect)
