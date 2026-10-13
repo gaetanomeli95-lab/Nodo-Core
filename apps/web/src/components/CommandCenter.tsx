@@ -3,6 +3,7 @@ import { downloadFile, get, post, streamCommand, type NodoEvent, type VoiceConfi
 import { useVoiceSession } from "./Voice";
 import { Presence, type PresenceMode } from "./Presence";
 import { Pulse } from "./Pulse";
+import { Viewer, type ViewItem } from "./Viewer";
 
 type Turn = { who: "user" | "nodo"; text: string; done?: boolean };
 type Decision = { id: string; label: string; site?: string; preview?: string; pr?: string; sending?: boolean };
@@ -19,7 +20,8 @@ const DOING: Record<string, string> = {
   read_site_file: "Leggo un file del sito", site_commits: "Guardo gli ultimi aggiornamenti", site_deployments: "Guardo i deploy",
   check_url: "Controllo l'indirizzo", fetch_url: "Leggo la pagina", web_search: "Cerco sul web", list_files: "Guardo i file",
   ledger_add: "Segno nel registro", ledger_update: "Correggo il registro", ledger_report: "Faccio i conti",
-  ledger_open: "Guardo sospesi e consegne", create_document: "Preparo il documento", now: "Guardo l'ora",
+  ledger_open: "Guardo sospesi e consegne", ledger_prices: "Guardo il listino", ledger_close_day: "Chiudo la giornata",
+  show_on_screen: "Te lo mostro", close_screen: "Chiudo", nodo_updates: "Guardo i miei aggiornamenti", create_document: "Preparo il documento", now: "Guardo l'ora",
   calendar_events: "Guardo il calendario", ssl_status: "Controllo i certificati",
   read_file: "Apro il file", list_drafts: "Guardo le bozze", update_draft: "Aggiorno la bozza", start_work: "Avvio il lavoro",
   nodo_health: "Controllo i miei accessi", sync_sites: "Importo i siti", create_file: "Preparo il file",
@@ -40,9 +42,9 @@ function Linkified({ text, onError }: { text: string; onError: (m: string) => vo
 const loadConv = () => { try { return localStorage.getItem("nodo.conversation"); } catch { return null; } };
 const safeUrl = (s?: string) => { try { const u = new URL(s || ""); return /^https?:$/.test(u.protocol) ? u.href : undefined; } catch { return undefined; } };
 
-export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequestDone }: {
+export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequestDone, onOpenTab }: {
   voiceConfig: VoiceConfig | null; onTrace: (e: NodoEvent[]) => void;
-  onActiveContext: (name: string | null) => void; onRequestDone: () => void;
+  onActiveContext: (name: string | null) => void; onRequestDone: () => void; onOpenTab?: (tab: string) => void;
 }) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
@@ -52,7 +54,23 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const [activity, setActivity] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [decision, setDecision] = useState<Decision | null>(null);
-  const [surface, setSurface] = useState<Surface | null>(null);
+  const [surface, setSurfaceRaw] = useState<Surface | null>(null);
+  const [viewing, setViewing] = useState<ViewItem | null>(null);
+  const onOpenTabRef = useRef(onOpenTab);
+  onOpenTabRef.current = onOpenTab;
+  /** «Sul tavolo» cards, plus the screen commands: show a file big, open a tab, close what is shown. */
+  const setSurface = (next: Surface | null) => {
+    if (next?.view === "viewer") {
+      const row = next.rows[0] || {};
+      setViewing({ title: String(row.title || "File"), url: String(row.url || ""), kind: String(row.kind || "text") });
+      onOpenTabRef.current?.("command");                 // the viewer lives on the conversation screen
+      if (row.download) setSurfaceRaw({ ...next, view: "files" });
+      return;
+    }
+    if (next?.view === "close") { setViewing(null); setSurfaceRaw(null); return; }
+    if (next?.view === "tab") { setViewing(null); onOpenTabRef.current?.(String(next.rows[0]?.tab || "command")); return; }
+    setSurfaceRaw(next);
+  };
   const [pulseRevision, setPulseRevision] = useState(0);   // refresh the radar after each turn
   const conv = useRef(loadConv());
   const journal = useRef<HTMLDivElement>(null);
@@ -205,13 +223,14 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       : "Collego la tua richiesta alle cose che contano.");
 
   return <section className={`conversation-room ${diary ? "with-diary" : ""}`}>
+    <Viewer item={viewing} onClose={() => setViewing(null)} />
     <div className="voice-stage">
       <div className="stage-topline"><span className="eyebrow">IL TUO SPAZIO DI LAVORO</span>
         <button className={`quiet-button ${diary ? "selected" : ""}`} aria-expanded={diary} onClick={() => setDiary(!diary)}>Diario <span>↗</span></button></div>
       <div className="presence-copy" aria-live="polite"><span className={`presence-state ${mode}`}><i />
         {!voice.connected ? "COLLEGAMENTO IN CORSO" : mode === "rest" ? "PRONTO QUANDO VUOI" : { listen: "IN ASCOLTO", think: "STO PENSANDO", act: "AL LAVORO", speak: "NODO PARLA", approve: "UNA TUA DECISIONE", reconnect: "RICONNESSIONE" }[mode]}</span>
         <h2>{title}</h2><p>{subtitle}</p></div>
-      <Presence mode={mode} sampleLevel={voice.sampleLevel} />
+      <Presence mode={mode} sampleLevel={voice.sampleLevel} spectrum={voice.spectrum} />
       {error && <div className="voice-notice" role="alert"><span>{error}</span><button aria-label="Chiudi avviso" onClick={() => setError(null)}>×</button></div>}
       {decision ? <section className="context-sheet decision-sheet" aria-label="Decisione in attesa">
         <div className="sheet-kicker">SERVE IL TUO OK {decision.site && `· ${decision.site}`}</div>

@@ -34,7 +34,36 @@ class ChunkPlayer {
   private current: HTMLAudioElement | null = null;
   private generation = 0;
   private finish: (() => void) | null = null;
+  private ctx: AudioContext | null = null;
+  private analyser: AnalyserNode | null = null;
+  private samples = new Float32Array(256);
   constructor(private onPlaying: (playing: boolean) => void) {}
+
+  /** The spoken audio also feeds an analyser: the presence on screen moves with NODO's real voice. */
+  private tap(audio: HTMLAudioElement) {
+    try {
+      if (!this.ctx || this.ctx.state === "closed") {
+        this.ctx = new AudioContext();
+        this.analyser = this.ctx.createAnalyser();
+        this.analyser.fftSize = 256;
+        this.analyser.smoothingTimeConstant = 0.6;
+        this.analyser.connect(this.ctx.destination);
+      }
+      // only when the context is really running: a suspended one would silence the voice
+      if (this.ctx.state !== "running") { void this.ctx.resume(); return; }
+      this.ctx.createMediaElementSource(audio).connect(this.analyser!);
+    } catch { /* visual only: playback works without it */ }
+  }
+  level() {
+    if (!this.analyser || !this.playing) return 0;
+    this.analyser.getFloatTimeDomainData(this.samples);
+    return Math.sqrt(this.samples.reduce((sum, n) => sum + n * n, 0) / this.samples.length);
+  }
+  spectrum(out: Uint8Array) {
+    if (!this.analyser || !this.playing) return false;
+    this.analyser.getByteFrequencyData(out);
+    return true;
+  }
 
   push(b64: string, mime: string) {
     const bin = atob(b64);
@@ -51,6 +80,7 @@ class ChunkPlayer {
     while (this.queue.length && gen === this.generation) {
       const url = this.queue.shift()!;
       const audio = new Audio(url);
+      this.tap(audio);
       this.current = audio;
       await new Promise<void>((resolve) => {
         this.finish = resolve;
@@ -101,6 +131,11 @@ class PcmPlayer {
     if (!this.analyser || !this.sources.size) return 0;
     this.analyser.getFloatTimeDomainData(this.samples);
     return Math.sqrt(this.samples.reduce((sum, n) => sum + n * n, 0) / this.samples.length);
+  }
+  spectrum(out: Uint8Array) {
+    if (!this.analyser || !this.sources.size) return false;
+    this.analyser.getByteFrequencyData(out);
+    return true;
   }
 
   push(b64: string, mime: string) {
@@ -182,6 +217,9 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const media = useRef<{ rec: MediaRecorder; stream: MediaStream } | null>(null);
   const pcm = useRef(new PcmPlayer(setAudioPlaying));
   const liveMic = useRef<{ ctx: AudioContext; stream: MediaStream } | null>(null);
+  const micAnalyser = useRef<AnalyserNode | null>(null);
+  const inBins = useRef(new Uint8Array(128));
+  const outBins = useRef(new Uint8Array(128));
   const cbRef = useRef(cb);
   cbRef.current = cb;
   engineRef.current = engine;
@@ -384,6 +422,10 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
         }
       };
       src.connect(node);
+      const an = ctx.createAnalyser();
+      an.fftSize = 256; an.smoothingTimeConstant = 0.55;
+      src.connect(an);
+      micAnalyser.current = an;
       const silent = ctx.createGain();
       silent.gain.value = 0;
       node.connect(silent);
@@ -404,6 +446,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const stopLiveMic = () => {
     micEpoch.current += 1;
     inputLevel.current = 0;
+    micAnalyser.current = null;
     if (!liveMic.current) return;
     liveMic.current.stream.getTracks().forEach((t) => t.stop());
     void liveMic.current.ctx.close();
@@ -589,7 +632,14 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
 
   return { state, connected, partial, engine, liveOn, audioPlaying, recovering, pressStart, pressStop,
     interrupt, answer, sendText, speak, toggleMic, endConversation, setConversation, microphoneOn: liveOn || capturing,
-    sampleLevel: () => ({ input: inputLevel.current, output: pcm.current.level() }) };
+    sampleLevel: () => ({ input: inputLevel.current, output: Math.max(pcm.current.level(), player.current.level()) }),
+    /** Frequency bins (0-255) of what NODO hears and says, for the visuals. null = nothing playing / no mic. */
+    spectrum: () => {
+      const said = pcm.current.spectrum(outBins.current) || player.current.spectrum(outBins.current);
+      const an = micAnalyser.current;
+      if (an) an.getByteFrequencyData(inBins.current);
+      return { input: an ? inBins.current : null, output: said ? outBins.current : null };
+    } };
 }
 
 export function VoiceDock({ voice, onInterrupt }: {

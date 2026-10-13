@@ -180,7 +180,7 @@ async def test_tools_read_back_ask_and_close_the_day(box, db):  # noqa: F811
     assert "giusto?" in out["say"] and any("era 40 euro" in c for c in out["rows"][0]["check"])
     assert any("non hai detto se ha pagato" in c for c in out["rows"][0]["check"])
     rep = await box.call("ledger_report", {})
-    assert "palestra 65 euro" in rep["say"]                       # «palestra» became the expense item
+    assert "palestra 65 euro" in rep["text"] and "65 euro di palestra" in rep["say"]
     prices = await box.call("ledger_prices", {"item": "rete"})
     assert prices["prices"][0]["last"] == "55 euro" and len(prices["prices"][0]["history"]) == 2
     close = await box.call("ledger_close_day", {"cash_counted": 0})
@@ -220,3 +220,57 @@ def test_voice_mode_can_be_switched_from_the_panel(client, tmp_path, monkeypatch
     from nodo.config import Settings
     from nodo.voice.live import missing_reason
     assert missing_reason(Settings(voice_engine="precise", gemini_api_key="k", env="LOCAL")).startswith("voce precisa")
+
+
+def test_the_spoken_recap_sounds_like_a_person(db, seeded):
+    led = Ledger(db, seeded, "CF Materassi", today=TODAY)
+    led.sounds = {"Morpheus": "Morfeus"}
+    _monday(led)
+    led.add(kind="sostituzione", item="materasso Andromeda H25 poliuretano", size="80x190", counterpart="Signora Silvana")
+    led.add(kind="vendita", item="materasso Arianna H20 poliuretano", size="160x190", qty=3, unit_price=110,
+            counterpart="Softcomfort", payment="sospeso")
+    led.add(kind="vendita", item="rete con tavola", size="160x190", amount=100, counterpart="Softcomfort",
+            payment="sospeso")
+    led.add(kind="spesa", counterpart="palestra", amount=10)               # saved the old way: no item
+    say = led.report(date(2026, 10, 12), TODAY)["say"]
+    for must in ("Ieri: a Simone Marrocchino hai venduto un materasso Morfeus Memory due strati matrimoniale, "
+                 "160 per 190, a 210 euro",
+                 "una rete a doghe singola, 80 per 190, a 40 euro",
+                 "a Softcomfort hai consegnato tre materassi Arianna H20 poliuretano matrimoniali, 160 per 190, a 110 "
+                 "euro l'uno e una rete con tavola matrimoniale, 160 per 190, a 100 euro: in tutto 430 euro, che deve "
+                 "ancora pagare",
+                 "sostituzione in garanzia alla signora Silvana", "40 euro di stipendio a te",
+                 "476 euro al fornitore Arrisal", "10 euro di palestra", "e ne aspetti ancora 430 euro"):
+        assert must in say, must
+    for robot in ("×", "(", ";", "x190", "pagato,", "Morpheus"):
+        assert robot not in say, robot
+
+
+async def test_show_and_close_on_screen(box, db, tmp_path):  # noqa: F811
+    from nodo.brain.surfaces import surface_for
+    from nodo.services.files import FileStore
+    box.c.files = FileStore(tmp_path / "files")
+    assert "error" in await box.call("show_on_screen", {"what": "l'ultimo pdf"})
+    await box.call("create_document", {"name": "preventivo", "format": "pdf", "content": "# Preventivo\n\nCiao"})
+    await box.call("generate_image", {"description": "x"}) if False else None
+    await box.call("create_document", {"name": "listino", "format": "xlsx", "content": "| a | b |\n|---|---|\n| 1 | 2 |"})
+    pdf = await box.call("show_on_screen", {"what": "l'ultimo pdf"})
+    assert pdf["kind"] == "pdf" and pdf["url"].endswith("preventivo.pdf")
+    card = surface_for("show_on_screen", pdf)
+    assert card["view"] == "viewer" and card["rows"][0]["kind"] == "pdf"
+    sheet = await box.call("show_on_screen", {"what": "listino"})
+    assert sheet["kind"] == "sheet"
+    tab = await box.call("show_on_screen", {"what": "registro"})
+    assert surface_for("show_on_screen", tab) == {"view": "tab", "rows": [{"tab": "ledger"}], "summary": ""}
+    assert surface_for("close_screen", await box.call("close_screen", {}))["view"] == "close"
+    made = surface_for("create_document", {"created": "x", "url": "/api/v1/files/x.pdf", "format": "pdf"})
+    assert made["view"] == "viewer" and made["rows"][0]["download"]
+
+
+def test_preview_of_a_spreadsheet(client, tmp_path):
+    from nodo.services import documents
+    c = client.app.state.container
+    c.files.save_bytes("prova.xlsx", documents.build("xlsx", "| Voce | Prezzo |\n|---|---|\n| Rete | 100 |"))
+    out = client.get("/api/v1/files/prova.xlsx/preview").json()
+    assert "Rete | 100" in out["text"]
+    assert client.get("/api/v1/files/nessuno.pdf/preview").status_code == 404

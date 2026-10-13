@@ -16,6 +16,23 @@ def list_files(c: Container = Depends(container), db: Session = Depends(get_db),
     return {"files": c.files.list(db, org)}
 
 
+@router.get("/{name}/preview")
+def preview(name: str, c: Container = Depends(container)):
+    """Text of a Word / Excel / PowerPoint / text file, to show it on screen without Office."""
+    p = c.files.get(name)
+    if p is None:
+        raise HTTPException(404, "file non trovato")
+    from nodo.services.documents import extract_text
+    ext = p.suffix.lower()
+    if ext in (".docx", ".xlsx", ".pptx", ".pdf"):
+        text = extract_text(p)
+    elif ext in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bin", ".zip"):
+        text = ""
+    else:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    return {"name": p.name, "text": text[:60000], "truncated": len(text) > 60000}
+
+
 @router.get("/{name}")
 def download(name: str, c: Container = Depends(container)):
     p = c.files.get(name)

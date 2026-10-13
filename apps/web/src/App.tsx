@@ -75,7 +75,8 @@ export default function App() {
           <button className="details-toggle" aria-expanded={details} onClick={() => setDetails(!details)}>{details ? "Chiudi dettagli" : "Dettagli"}</button>
         </nav>
         <div className={tab === "command" ? "tab-body" : "tab-body hidden"}>
-          <CommandCenter voiceConfig={voice} onTrace={setTrace} onActiveContext={setActiveContext} onRequestDone={refresh} />
+          <CommandCenter voiceConfig={voice} onTrace={setTrace} onActiveContext={setActiveContext} onRequestDone={refresh}
+            onOpenTab={(t) => setTab((["command", "ledger", "night", "sites", "memory", "setup"].includes(t) ? t : "command") as Tab)} />
         </div>
         {tab === "ledger" && <div className="tab-body scroll"><LedgerView /></div>}
         {tab === "night" && <div className="tab-body scroll"><NightView onChanged={refresh} /></div>}

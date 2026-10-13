@@ -8,9 +8,20 @@ def surface_for(name: str, result: dict) -> dict | None:
     """-> {"view", "rows", "summary"} or None. Rows carry only what the card shows."""
     if not isinstance(result, dict) or "error" in result:
         return None
+    if name == "show_on_screen":
+        if result.get("tab"):
+            return {"view": "tab", "rows": [{"tab": result["tab"]}], "summary": ""}
+        return {"view": "viewer", "rows": [{"title": result.get("shown"), "url": result.get("url"),
+                                            "kind": result.get("kind")}], "summary": ""}
+    if name == "close_screen":
+        return {"view": "close", "rows": [], "summary": ""}
     if name in FILE_TOOLS and result.get("url"):
-        return {"view": "files", "rows": [{"title": result.get("created"), "url": result["url"],
-                                           "download": True, "format": result.get("format")}],
+        url = result["url"]
+        ext = url.rsplit(".", 1)[-1].lower()
+        kind = {"png": "image", "jpg": "image", "jpeg": "image", "webp": "image", "pdf": "pdf", "docx": "doc",
+                "xlsx": "sheet", "pptx": "slides", "csv": "sheet"}.get(ext, "text")
+        return {"view": "viewer", "rows": [{"title": result.get("created"), "url": url, "kind": kind,
+                                            "download": True, "format": result.get("format")}],
                 "summary": "Pronto da scaricare."}
     if name in ("sites_status", "today_agenda", "projects", "night_report"):
         rows = result.get("sites") if name == "sites_status" else (

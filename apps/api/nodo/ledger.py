@@ -299,7 +299,18 @@ class Ledger:
             "goods_out": [{"item": i, "size": s, "pieces": n} for (i, s), n in sorted(goods.items())],
             "days_with_entries": days,
             "text": self.recap_text(start, end, rows, settled, t),
+            "say": self.spoken(start, end, rows, settled, t),
         }
+
+    owner: str = "Gaetano"
+    sounds: dict | None = None
+
+    def spoken(self, start: date, end: date, rows: list[LedgerEntry], settled: list[LedgerEntry],
+               t: Totals) -> str:
+        from nodo.ledger_voice import spoken_recap
+        totals = {"incassato": round(t.incassato, 2), "da_incassare_sospeso": round(t.da_incassare, 2),
+                  "uscite": round(t.uscite, 2), "saldo_del_periodo": round(t.saldo, 2)}
+        return spoken_recap(rows, settled, totals, start, end, self.today, self.owner, self.sounds)
 
     def recap_text(self, start: date, end: date, rows: list[LedgerEntry], settled: list[LedgerEntry],
                    t: Totals) -> str:
@@ -334,12 +345,17 @@ def _to(name: str) -> str:
 
 def sentence(r: LedgerEntry) -> str:
     what = f"{r.qty} × " if r.qty > 1 else ""
-    what += r.item or "(articolo non indicato)"
+    what += r.item or ("" if r.kind == "spesa" else "(articolo non indicato)")
     if r.size:
         what += f" {size_label(r.size)}"
+    if r.kind == "spesa" and not r.item and r.counterpart and r.counterpart[:1].islower():
+        what = r.counterpart                     # «palestra», «fornitore Arrisal» were saved as the receiver
+        if r.size:
+            what += f" {size_label(r.size)}"
+        return f"{what} {euro(r.amount)}"
     if r.kind == "spesa":
         who = r.counterpart if r.counterpart and r.counterpart.lower() not in what.lower() else None
-        s = f"{what} {euro(r.amount)}" + (f" {_to(who)}" if who else "")
+        s = f"{what} {euro(r.amount)}".strip() + (f" {_to(who)}" if who else "")
     elif r.kind == "sostituzione":
         s = f"{what}" + (f" per {r.counterpart}" if r.counterpart else "") + " (in garanzia, nessun incasso)"
     elif r.kind == "nota":

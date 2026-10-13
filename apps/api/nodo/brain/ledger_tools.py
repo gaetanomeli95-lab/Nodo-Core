@@ -41,7 +41,9 @@ class LedgerTools:
     """Mixed into Toolbox via ExtraTools: `_register_ledger()` is called from `_register_extra()`."""
 
     def _ledger(self) -> Ledger:
-        return Ledger(self.s, self.org, self.settings.ledger_business, today=datetime.now(self._tz()).date())
+        led = Ledger(self.s, self.org, self.settings.ledger_business, today=datetime.now(self._tz()).date())
+        led.owner, led.sounds = self.settings.owner_name, self.settings.pronounce
+        return led
 
     def _register_ledger(self) -> None:
         biz = self.settings.ledger_business
@@ -158,10 +160,9 @@ class LedgerTools:
         if start > end:
             start, end = end, start
         rep = led.report(start, end)
-        rep["say"] = rep["text"]
-        rep["note"] = ("Pronuncia «say» PAROLA PER PAROLA, nello stesso ordine: contiene tutte le righe con misure, "
-                       "prezzi e clienti e i totali calcolati. Non riassumere, non arrotondare, non ricalcolare. "
-                       "Il riepilogo è anche sullo schermo.")
+        rep["note"] = ("«say» è il racconto già pronto da dire a voce, con tutti i dettagli e i conti giusti: dillo "
+                       "così com'è, con calma, come una collega che racconta la giornata. «text» è la versione "
+                       "scritta, che compare sullo schermo: non leggerla.")
         return rep
 
     async def ledger_prices(self, item: str, size: str | None = None) -> dict:

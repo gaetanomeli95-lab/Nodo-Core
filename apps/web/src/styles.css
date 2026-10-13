@@ -367,3 +367,45 @@ button:focus-visible,a:focus-visible,input:focus-visible { outline:2px solid #e2
 .voice-mode button { background: none; border: 0; color: #8e9b9d; font: inherit; font-size: 10px; letter-spacing: .08em; padding: 3px 9px; cursor: pointer; }
 .voice-mode button.on { background: #23302e; color: #dfe9e2; }
 .voice-mode button:disabled { cursor: default; opacity: .6; }
+
+/* ---------------------------------------------------------------- presence core + viewer (futuristic layer) */
+.presence-core { width: min(1100px, 100%); height: clamp(260px, 42vh, 460px); flex: 0 0 auto; margin: -18px 0 -6px; }
+.voice-stage::before { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(ellipse 60% 45% at 50% 42%, #10242a88, transparent 70%),
+    repeating-linear-gradient(0deg, #ffffff05 0 1px, transparent 1px 42px),
+    repeating-linear-gradient(90deg, #ffffff04 0 1px, transparent 1px 42px);
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 45%, #000 30%, transparent 80%); }
+.presence-state i { box-shadow: 0 0 10px currentColor; }
+
+.viewer-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 3vh 3vw;
+  background: radial-gradient(ellipse at center, #0b1416cc, #05080acc); backdrop-filter: blur(10px) saturate(1.2);
+  animation: viewer-fade .25s ease-out both; }
+.viewer { width: min(1180px, 100%); height: min(88vh, 100%); display: flex; flex-direction: column; overflow: hidden;
+  background: linear-gradient(180deg, #121c1fee, #0d1416f2); border: 1px solid #3a5a5a; border-radius: 16px;
+  box-shadow: 0 0 0 1px #8fe3d822, 0 30px 90px #000a, 0 0 60px #4fd1c522; animation: viewer-rise .35s cubic-bezier(.2,.9,.2,1) both;
+  position: relative; }
+.viewer::after { content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: 16px;
+  background: linear-gradient(transparent 0, #8fe3d80d 50%, transparent 100%); background-size: 100% 6px; opacity: .25; }
+.viewer header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 18px;
+  border-bottom: 1px solid #2c4446; }
+.viewer header h3 { margin: 2px 0 0; font-size: 17px; font-weight: 500; }
+.viewer-actions { display: flex; gap: 8px; }
+.viewer-actions button { background: #1d2c2e; color: #d8efe9; border: 1px solid #3c5b5b; border-radius: 8px; padding: 7px 12px; font: inherit; font-size: 12px; cursor: pointer; }
+.viewer-actions button:hover { border-color: #8fe3d8; }
+.viewer-actions .close { font-size: 18px; line-height: 1; padding: 4px 11px; }
+.viewer-body { flex: 1; min-height: 0; overflow: auto; display: grid; place-items: center; padding: 16px; }
+.viewer-body img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 10px; box-shadow: 0 10px 40px #0008; animation: viewer-rise .4s ease-out both; }
+.viewer-body iframe { width: 100%; height: 100%; border: 0; border-radius: 8px; background: #fff; }
+.viewer-text { white-space: pre-wrap; max-width: 820px; width: 100%; align-self: start; font-size: 15px; line-height: 1.75; color: #dfe8e6; }
+.viewer-body table { border-collapse: collapse; align-self: start; font-size: 13px; }
+.viewer-body td { border: 1px solid #2c4446; padding: 6px 10px; }
+.viewer-body tr:first-child td, .viewer-body .sheet-name + tr td { background: #1b2a2c; font-weight: 600; }
+.viewer-body .sheet-name td { border: 0; padding: 18px 0 6px; color: #8fe3d8; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; }
+.viewer-error { color: var(--danger); }
+.viewer-loading { display: flex; gap: 8px; } .viewer-loading i { width: 9px; height: 9px; border-radius: 50%; background: #8fe3d8; animation: blink 1s infinite; }
+.viewer-loading i:nth-child(2) { animation-delay: .15s; } .viewer-loading i:nth-child(3) { animation-delay: .3s; }
+@keyframes viewer-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes viewer-rise { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
+@media (max-width: 760px) { .presence-core { height: 280px; } .viewer { height: 92vh; } }
+@media (prefers-reduced-motion: reduce) { .viewer, .viewer-backdrop, .viewer-body img { animation: none; } }
