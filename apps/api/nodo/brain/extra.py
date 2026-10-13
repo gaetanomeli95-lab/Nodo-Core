@@ -182,6 +182,11 @@ class ExtraTools(LedgerTools):
                                 "nulla. Per risposte brevi o file singoli usa invece create_file.",
                   _obj({"task": {**_STR, "description": "il lavoro, chiaro e completo, con tutto il contesto"}},
                        ["task"]), self.start_work)
+        self._add("nodo_updates", "Cosa è cambiato in NODO stesso (in te): gli ultimi aggiornamenti del tuo codice, con "
+                                  "data e descrizione. Usalo se chiede «ti hanno aggiornato?», «cosa c'è di nuovo?», "
+                                  "«cosa ha fatto Claude/Devin?».",
+                  _obj({"days": {"type": "integer", "description": "quanti giorni indietro (default 7)"}}),
+                  self.nodo_updates)
         self._add("nodo_health", "Come sta NODO stesso: quali accessi funzionano (Vercel, GitHub, AI, Telegram, voce) "
                                  "e cosa manca. Usalo se chiede «funziona tutto?» o «cosa manca?».",
                   _obj({}), self.nodo_health)
@@ -665,6 +670,35 @@ class ExtraTools(LedgerTools):
         return {"started": True, "job": job,
                 "next": "ci lavoro in background (da pochi minuti a un quarto d'ora); quando finisce te lo scrivo qui "
                         "e su Telegram con i file pronti"}
+
+    async def nodo_updates(self, days: int = 7) -> dict:
+        import asyncio
+        import subprocess
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[4]
+        if not (root / ".git").exists():
+            return {"error": "non trovo la cartella del mio codice (manca .git): non posso leggere gli aggiornamenti"}
+        since = f"{max(1, min(int(days or 7), 60))}.days"
+
+        def run() -> str:
+            return subprocess.run(["git", "-C", str(root), "log", f"--since={since}", "--no-merges",
+                                   "--date=format:%d/%m %H:%M", "--pretty=%ad|%an|%s", "-n", "40"],
+                                  capture_output=True, text=True, timeout=10, encoding="utf-8").stdout
+        try:
+            out = await asyncio.to_thread(run)
+        except (OSError, subprocess.SubprocessError) as e:
+            return {"error": f"git non disponibile ({type(e).__name__})"}
+        items = []
+        for line in out.splitlines():
+            when, who, subject = (line.split("|", 2) + ["", ""])[:3]
+            items.append({"when": when, "by": {"claude": "Claude", "devin": "Devin"}.get(who.lower().split()[0], who)
+                          if who else "", "what": subject})
+        return {"updates": items, "running_since": self._started(),
+                "note": "aggiornamenti del codice di NODO; quelli dopo l'avvio diventano attivi riavviando NODO"}
+
+    def _started(self) -> str | None:
+        t = getattr(self.c, "started_at", None) if self.c is not None else None
+        return self._clock(t) if t else None
 
     async def nodo_health(self) -> dict:
         from nodo.doctor import as_dicts, run_checks

@@ -49,7 +49,17 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
                 seed_demo(db)
         elif settings.remove_demo_data and settings.env not in ("TEST", "DEMO"):
             _remove_sample_data()
+        if settings.env not in ("TEST", "DEMO"):
+            try:                                   # shop sales live in the register now, not in loose notes
+                from nodo.ledger import archive_shop_notes
+                with session_scope() as db:
+                    if (n := archive_shop_notes(db)):
+                        log.info("archived %d old shop notes from memory (the register is the source now)", n)
+            except Exception:
+                log.exception("could not archive old shop notes")
         c = app.state.container
+        from datetime import UTC, datetime
+        c.started_at = datetime.now(UTC)
         if settings.env == "DEMO":
             from nodo.night.demo import bootstrap_demo
             await bootstrap_demo(c)

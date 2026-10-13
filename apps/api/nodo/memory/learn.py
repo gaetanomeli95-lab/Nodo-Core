@@ -20,7 +20,8 @@ log = logging.getLogger("nodo.learn")
 
 PROMPT = """Sei la memoria di NODO, l'assistente personale di {owner}. Qui sotto c'è una conversazione.
 Estrai SOLO i fatti duraturi che {owner} ha detto lui stesso: su di sé, sulle sue preferenze e abitudini, sui clienti,
-sui progetti, sulle decisioni prese, sui piani. Niente cose passeggere (che ore sono, un controllo di adesso), niente
+sui progetti, sulle decisioni prese, sui piani. Niente cose passeggere (che ore sono, un controllo di adesso), niente vendite, prezzi, consegne o spese del
+negozio (stanno nel registro), niente
 quello che ha detto NODO, niente ipotesi. Ogni fatto è una frase breve e autonoma, in italiano, che si capisce senza
 la conversazione. Se non c'è niente di duraturo, rispondi [].
 Rispondi SOLO con un array JSON di stringhe, al massimo {limit}.

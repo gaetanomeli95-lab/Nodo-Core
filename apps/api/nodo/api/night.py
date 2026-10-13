@@ -327,6 +327,7 @@ _SETTABLE_KEYS = {
     "NODO_GITHUB_TOKEN": "github_token",
     "NODO_VERCEL_TOKEN": "vercel_token",
     "NODO_CALENDAR_ICS_URL": "calendar_ics_url",
+    "NODO_VOICE_ENGINE": "voice_engine",
     "NODO_TELEGRAM_BOT_TOKEN": "telegram_bot_token",
     "NODO_TELEGRAM_CHAT_ID": "telegram_chat_id",
 }
@@ -354,6 +355,8 @@ async def save_key(body: KeyIn, c: Container = Depends(container)):
     value = body.value.strip()
     if not value or any(ch in value for ch in "\r\n"):
         raise HTTPException(400, "Valore non valido.")
+    if name == "NODO_VOICE_ENGINE" and value not in ("auto", "precise", "browser"):
+        raise HTTPException(400, "Valore non valido: auto, precise o browser.")
     env = Path(os.environ.get("NODO_ENV_FILE") or Path(__file__).resolve().parents[2] / ".env")
     lines = env.read_text(encoding="utf-8").splitlines() if env.exists() else []
     out, written = [], False

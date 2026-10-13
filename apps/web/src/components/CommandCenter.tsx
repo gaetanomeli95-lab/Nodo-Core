@@ -175,6 +175,19 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); setActivity(null); }
   };
+  const precise = (voiceConfig?.live_reason || "").startsWith("voce precisa");
+  const [modeBusy, setModeBusy] = useState(false);
+  const setVoiceMode = async (value: "auto" | "precise") => {
+    if (modeBusy || (value === "precise") === precise) return;
+    setModeBusy(true);
+    try {
+      await post("/api/v1/setup/key", { name: "NODO_VOICE_ENGINE", value });
+      window.dispatchEvent(new Event("nodo:access-updated"));      // App reloads the voice configuration
+      setError(value === "precise" ? "Voce precisa attiva: risponde Claude. Vale dalla prossima volta che apri la voce."
+        : "Voce veloce attiva: risponde Gemini dal vivo. Vale dalla prossima volta che apri la voce.");
+    } catch (e) { setError((e as Error).message); }
+    finally { setModeBusy(false); }
+  };
   const answer = (choice: "approve" | "reject") => {
     if (!decision || decision.sending) return;
     voice.answer(decision.id, choice); setDecision({ ...decision, sending: true });
@@ -239,7 +252,11 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         <button disabled={!input.trim() || busy}>Invia ↗</button></form>}
       <footer className="stage-footnote"><span>{voice.microphoneOn ? "MICROFONO ATTIVO" : "ATTIVA LA VOCE PER COMINCIARE"}</span><span>{voice.engine === "live" ? "Conversazione dal vivo"
         : voiceConfig?.stt.location === "local" && voiceConfig?.tts.location === "local" ? "Voce locale sul tuo PC · pause di qualche secondo"
-        : voice.engine === "api" ? "Voce Gemini · pause di qualche secondo" : "Voce del browser"}</span></footer>
+        : voice.engine === "api" ? (precise ? "Voce precisa · risponde Claude · pause di qualche secondo" : "Voce Gemini · pause di qualche secondo") : "Voce del browser"}</span>
+        <span className="voice-mode" role="group" aria-label="Tipo di voce">
+          <button className={!precise ? "on" : ""} disabled={modeBusy || voice.liveOn} title="Risposte immediate (Gemini dal vivo)" onClick={() => setVoiceMode("auto")}>Veloce</button>
+          <button className={precise ? "on" : ""} disabled={modeBusy || voice.liveOn} title="Risponde il cervello Claude: più preciso su conti e registro" onClick={() => setVoiceMode("precise")}>Precisa</button>
+        </span></footer>
     </div>
     {diary && <aside className="conversation-diary"><header><span className="eyebrow">DIARIO</span><button className="quiet-button" onClick={() => setDiary(false)}>Chiudi</button></header>
       <p className="diary-intro">Le parole restano qui. Il lavoro continua al centro.</p>

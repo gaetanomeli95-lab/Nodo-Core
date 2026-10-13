@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 import pytest
+from sqlalchemy import select
 
 from nodo.greeting import build_greeting
 from nodo.ledger import Ledger, norm_size, parse_day, size_label
@@ -147,3 +148,75 @@ def test_panel_api_shows_the_day_and_open_items(client):
     opened = client.get("/api/v1/ledger/open").json()
     assert opened["totale_sospeso"] == 100 and opened["business"] == "CF Materassi"
     assert client.get("/api/v1/ledger", params={"start": "boh"}).status_code == 400
+
+
+def test_the_register_catches_my_mistakes(db, seeded):
+    from nodo.ledger import check_entry
+    led = Ledger(db, seeded, "CF Materassi", today=TODAY)
+    _monday(led)
+    nocera = led.add(kind="vendita", item="materasso Andromeda H25 poliuretano", size="140x190", amount=160,
+                     counterpart="Mario Rossi")
+    w = check_entry(led, nocera)
+    assert any("l'ultima volta materasso Andromeda H25 poliuretano 140x190 (alla francese) era 140 euro" in x for x in w)
+    odd = led.add(kind="vendita", item="materasso Arianna", size="160x150", amount=110, counterpart="X")
+    assert any("misura insolita" in x for x in check_entry(led, odd))
+    bare = led.add(kind="vendita", item="materasso Arianna")
+    w = check_entry(led, bare, explicit_payment=False)
+    assert {"manca il prezzo", "manca la misura", "manca il nome del cliente"} <= set(w)
+    assert any("non hai detto se ha pagato" in x for x in w)
+    twice = led.add(kind="spesa", item="palestra", amount=65, day="ieri")
+    assert any("doppione" in x for x in check_entry(led, twice))
+    ok = led.add(kind="vendita", item="rete con tavola", size="160x190", amount=100, counterpart="Anna")
+    assert check_entry(led, ok) == []
+
+
+async def test_tools_read_back_ask_and_close_the_day(box, db):  # noqa: F811
+    await box.call("ledger_add", {"entries": [
+        {"kind": "vendita", "item": "rete a doghe", "size": "80x190", "amount": 40, "counterpart": "Enrico Patti",
+         "payment": "pagato", "day": "ieri"},
+        {"kind": "spesa", "counterpart": "palestra", "amount": 65}]})
+    out = await box.call("ledger_add", {"entries": [
+        {"kind": "vendita", "item": "rete a doghe", "size": "80x190", "amount": 55, "counterpart": "Bianchi"}]})
+    assert "giusto?" in out["say"] and any("era 40 euro" in c for c in out["rows"][0]["check"])
+    assert any("non hai detto se ha pagato" in c for c in out["rows"][0]["check"])
+    rep = await box.call("ledger_report", {})
+    assert "palestra 65 euro" in rep["say"]                       # «palestra» became the expense item
+    prices = await box.call("ledger_prices", {"item": "rete"})
+    assert prices["prices"][0]["last"] == "55 euro" and len(prices["prices"][0]["history"]) == 2
+    close = await box.call("ledger_close_day", {"cash_counted": 0})
+    assert "Incassato 55 euro, uscite 65 euro, saldo -10 euro" in close["say"]
+    assert close["cash_difference"] == 10.0 and "ci sono 10 euro in più" in close["say"]
+
+
+def test_old_shop_notes_are_archived_rules_are_kept(db, seeded):
+    from nodo.db.models import FactStatus, MemoryFact
+    from nodo.ledger import archive_shop_notes
+    texts = ["Il materasso Andromeda H25 per Alessandro Nocera costa 140 euro.",
+             "Oggi sono da consegnare a Softcomfort tre materassi Arianna.",
+             "Il tuo nome è Isabel.", "L'assistente non può creare file, PDF, immagini.",
+             "Quando Gaetano chiede un riepilogo dettagliato, vuole sempre misure, prezzi e tutti i dettagli.",
+             "Filippo è il titolare di CF Materassi.", "Le misure standard dei materassi sono: 80x190 singolo."]
+    for t in texts:
+        db.add(MemoryFact(organization_id=seeded, subject_type="user", subject_id=seeded, content=t,
+                          source_type="conversation"))
+    db.flush()
+    assert archive_shop_notes(db) == 4
+    left = {f.content for f in db.scalars(select(MemoryFact).where(MemoryFact.source_type == "conversation",
+                                                                   MemoryFact.status != FactStatus.ARCHIVED))}
+    assert left & set(texts) == set(texts[4:])
+    assert archive_shop_notes(db) == 0
+
+
+async def test_nodo_knows_its_own_updates(box):  # noqa: F811
+    out = await box.call("nodo_updates", {"days": 30})
+    assert ("updates" in out and out["updates"] and out["updates"][0]["what"]) or "error" in out
+
+
+def test_voice_mode_can_be_switched_from_the_panel(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("NODO_ENV_FILE", str(tmp_path / ".env"))
+    assert client.post("/api/v1/setup/key", json={"name": "NODO_VOICE_ENGINE", "value": "boh"}).status_code == 400
+    assert client.post("/api/v1/setup/key", json={"name": "NODO_VOICE_ENGINE", "value": "precise"}).status_code == 200
+    assert "NODO_VOICE_ENGINE=precise" in (tmp_path / ".env").read_text()
+    from nodo.config import Settings
+    from nodo.voice.live import missing_reason
+    assert missing_reason(Settings(voice_engine="precise", gemini_api_key="k", env="LOCAL")).startswith("voce precisa")

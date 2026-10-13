@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from nodo.ledger import KINDS, Ledger, parse_day, sentence, view
+from nodo.ledger import KINDS, Ledger, check_entry, day_check, euro, parse_day, price_history, sentence, view
 
 _STR = {"type": "string"}
 _NUM = {"type": "number"}
@@ -27,6 +27,14 @@ _ENTRY = {
     },
     "required": ["kind"],
 }
+
+
+def norm_kind_safe(kind) -> str:
+    from nodo.ledger import norm_kind
+    try:
+        return norm_kind(kind)
+    except ValueError:
+        return ""
 
 
 class LedgerTools:
@@ -62,6 +70,19 @@ class LedgerTools:
                       "day": {**_STR, "description": "oggi (default), ieri, 12/10…"},
                       "from_day": {**_STR, "description": "inizio periodo (es. ieri)"},
                       "to_day": {**_STR, "description": "fine periodo (es. oggi)"}}}, self.ledger_report)
+        self._add("ledger_prices", f"Listino di {biz} imparato dalle vendite segnate: a quanto è stato venduto un "
+                                   "articolo (per misura), le ultime volte e a chi. Per «quanto costa…», «a quanto "
+                                   "l'avevo dato…» e per controllare un prezzo che ti sembra strano.",
+                  {"type": "object", "properties": {"item": {**_STR, "description": "articolo, anche parziale"},
+                                                    "size": _STR}, "required": ["item"]}, self.ledger_prices)
+        self._add("ledger_close_day", f"Chiusura della giornata di {biz}: cosa è entrato e uscito, cosa dovrebbe "
+                                      "esserci in cassa, consegne in ritardo, chi deve pagare e le righe con qualcosa "
+                                      "che non torna (prezzo mancante, misura strana, doppioni). Usalo a fine "
+                                      "giornata o quando chiede «chiudiamo la giornata», «quadra tutto?».",
+                  {"type": "object", "properties": {
+                      "day": {**_STR, "description": "oggi (default) o un altro giorno"},
+                      "cash_counted": {**_NUM, "description": "quanto ha contato in cassa, se te lo dice"}}},
+                  self.ledger_close_day)
         self._add("ledger_open", f"Cosa resta aperto nel registro di {biz}: pagamenti sospesi (chi deve ancora "
                                  "pagare e quanto) e consegne/lavori da fare.", {"type": "object", "properties": {}},
                   self.ledger_open)
@@ -75,13 +96,23 @@ class LedgerTools:
             if not isinstance(raw, dict):
                 continue
             try:
-                e = led.add(**{k: v for k, v in raw.items() if k in _ENTRY["properties"] and v not in (None, "")})
-                saved.append(e)
+                clean = {k: v for k, v in raw.items() if k in _ENTRY["properties"] and v not in (None, "")}
+                if norm_kind_safe(clean.get("kind")) == "spesa" and not clean.get("item") and clean.get("counterpart"):
+                    clean["item"], clean["counterpart"] = clean["counterpart"], None    # «palestra 65»
+                e = led.add(**clean)
+                saved.append((e, raw))
             except (ValueError, TypeError) as ex:
                 errors.append(f"{raw.get('item') or raw.get('kind')}: {ex}")
         self.s.flush()
-        out = {"saved": len(saved), "rows": [{"id": e.id[:8], "row": sentence(e), "day": e.day} for e in saved],
-               "note": "segnato nel registro: per i totali usa ledger_report"}
+        rows = []
+        for e, raw in saved:
+            warn = check_entry(led, e, explicit_payment=bool(raw.get("payment")))
+            rows.append({"id": e.id[:8], "row": sentence(e), "day": e.day, **({"check": warn} if warn else {})})
+        saved = [e for e, _ in saved]
+        out = {"saved": len(saved), "rows": rows,
+               "say": "Ripeti a Gaetano, in breve, le righe così come sono segnate (modello, misura, prezzo, cliente) "
+                      "e chiedi «giusto?». Se una riga ha «check», chiediglielo SUBITO, una domanda alla volta, e "
+                      "correggi con ledger_update quello che ti dice."}
         hints = {e.item: led.similar_items(e.item) for e in saved if led.similar_items(e.item)}
         if hints:
             out["check_names"] = {k: f"nome breve: era forse uno di {v}? Se sì correggi con ledger_update"
@@ -107,7 +138,11 @@ class LedgerTools:
             done = led.update(e, **{k: v for k, v in changes.items() if k in _ENTRY["properties"] or k == "paid_on"})
         except ValueError as ex:
             return {"updated": False, "error": str(ex)}
-        return {"updated": bool(done), "changes": done, "row": sentence(e), "day": e.day, "entry": view(e)}
+        out = {"updated": bool(done), "changes": done, "row": sentence(e), "day": e.day, "entry": view(e),
+               "say": "Ripeti la riga corretta com'è adesso e chiedi conferma."}
+        if warn := check_entry(led, e):
+            out["check"] = [w for w in warn if not w.startswith("non hai detto")]
+        return out
 
     async def ledger_report(self, day: str | None = None, from_day: str | None = None,
                             to_day: str | None = None) -> dict:
@@ -123,9 +158,65 @@ class LedgerTools:
         if start > end:
             start, end = end, start
         rep = led.report(start, end)
-        rep["note"] = ("Leggi «text» così com'è: contiene tutte le righe con misure, prezzi e clienti e i totali "
-                       "calcolati. Non tralasciare righe e non ricalcolare.")
+        rep["say"] = rep["text"]
+        rep["note"] = ("Pronuncia «say» PAROLA PER PAROLA, nello stesso ordine: contiene tutte le righe con misure, "
+                       "prezzi e clienti e i totali calcolati. Non riassumere, non arrotondare, non ricalcolare. "
+                       "Il riepilogo è anche sullo schermo.")
         return rep
+
+    async def ledger_prices(self, item: str, size: str | None = None) -> dict:
+        from rapidfuzz import fuzz
+
+        from nodo.ledger import norm_size, size_label
+        led = self._ledger()
+        names = [n for n in led.known_items() if fuzz.token_set_ratio(item.lower(), n.lower()) >= 80
+                 or item.lower() in n.lower()]
+        if not names:
+            return {"prices": [], "note": f"nel registro non ho ancora vendite di «{item}»"}
+        want = norm_size(size) if size else None
+        out = []
+        from sqlalchemy import select
+
+        from nodo.db.models import LedgerEntry
+        for n in names[:6]:
+            sizes = {r for r in self.s.scalars(select(LedgerEntry.size).where(
+                LedgerEntry.organization_id == self.org, LedgerEntry.item == n, LedgerEntry.kind == "vendita"))}
+            for sz in sorted(x or "" for x in sizes):
+                if want and sz != want:
+                    continue
+                hist = price_history(led, n, sz or None)
+                if hist:
+                    out.append({"item": n, "size": size_label(sz or None) or "senza misura",
+                                "last": euro(hist[0].unit_price),
+                                "history": [f"{euro(r.unit_price)} a {r.counterpart or 'cliente'} il {r.day}"
+                                            for r in hist]})
+        return {"prices": out[:12], "note": "prezzi presi dalle vendite segnate: possono variare per cliente"}
+
+    async def ledger_close_day(self, day: str | None = None, cash_counted: float | None = None) -> dict:
+        led = self._ledger()
+        try:
+            d = parse_day(day, led.today)
+        except ValueError as ex:
+            return {"error": str(ex)}
+        res = day_check(led, d)
+        t = res["totals"]
+        lines = [f"Incassato {euro(t['incassato'])}, uscite {euro(t['uscite'])}, saldo {euro(t['saldo_del_periodo'])}."]
+        if cash_counted is not None:
+            diff = round(float(cash_counted) - t["saldo_del_periodo"], 2)
+            res["cash_difference"] = diff
+            lines.append("In cassa torna esatto." if abs(diff) < 0.5 else
+                         f"In cassa hai contato {euro(float(cash_counted))}: rispetto al registro "
+                         f"{'ci sono ' + euro(diff) + ' in più' if diff > 0 else 'mancano ' + euro(-diff)}. "
+                         "Forse una spesa o un incasso non segnato, o un pagamento con carta.")
+        if res["doubts"]:
+            lines.append(f"Da controllare: {len(res['doubts'])} " + ("riga." if len(res["doubts"]) == 1 else "righe."))
+        if res["late_deliveries"]:
+            lines.append("Consegne rimaste indietro: " + "; ".join(res["late_deliveries"]) + ".")
+        if res["open_payments"]:
+            lines.append(f"Devono ancora pagare: {len(res['open_payments'])}.")
+        res["say"] = " ".join(lines)
+        res["note"] = "Dì «say», poi chiedi le righe dubbie una alla volta e correggi con ledger_update."
+        return res
 
     async def ledger_open(self) -> dict:
         led = self._ledger()

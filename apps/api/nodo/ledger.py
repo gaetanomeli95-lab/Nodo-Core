@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from rapidfuzz import fuzz
 from sqlalchemy import or_, select
@@ -363,3 +363,108 @@ def view(r: LedgerEntry) -> dict:
     return {"id": r.id[:8], "day": r.day, "kind": r.kind, "item": r.item, "size": size_label(r.size), "qty": r.qty,
             "unit_price": r.unit_price, "amount": r.amount, "counterpart": r.counterpart, "payment": r.payment,
             "paid_on": r.paid_on, "status": r.status, "note": r.note}
+
+
+# ------------------------------------------------------------------------------------------------ the second pair of eyes
+_STD_W = {80, 85, 90, 100, 120, 140, 160, 170, 180, 190, 200}
+_STD_L = {190, 195, 200, 210}
+_NEEDS_SIZE = re.compile(r"materass|rete|topper|guanciale|cuscino|letto|sommier", re.I)
+
+
+def price_history(led: Ledger, item: str, size: str | None, exclude_id: str | None = None,
+                  limit: int = 5) -> list[LedgerEntry]:
+    """Previous sales of the same article and size (newest first): the price list learns by itself."""
+    q = select(LedgerEntry).where(LedgerEntry.organization_id == led.org, LedgerEntry.kind == "vendita",
+                                  LedgerEntry.status != "annullato", LedgerEntry.unit_price.is_not(None))
+    rows = [r for r in led.s.scalars(q.order_by(LedgerEntry.day.desc(), LedgerEntry.at.desc()).limit(400))
+            if r.id != exclude_id and r.item.lower() == (item or "").lower() and (r.size or "") == (size or "")]
+    return rows[:limit]
+
+
+def check_entry(led: Ledger, e: LedgerEntry, *, explicit_payment: bool = True) -> list[str]:
+    """Doubts about one row, in plain Italian, to ask Gaetano BEFORE moving on. Empty = nothing odd."""
+    w: list[str] = []
+    if e.status == "annullato":
+        return w
+    if e.kind in ("vendita", "spesa") and e.amount is None:
+        w.append("manca il prezzo")
+    if e.kind in ("vendita", "sostituzione") and _NEEDS_SIZE.search(e.item or "") and not e.size:
+        w.append("manca la misura")
+    if e.kind == "vendita" and not e.counterpart:
+        w.append("manca il nome del cliente")
+    if e.kind == "vendita" and not explicit_payment and e.status == "fatto":
+        w.append("non hai detto se ha pagato: l'ho segnato come pagato")
+    if e.size:
+        m = re.fullmatch(r"(\d+)x(\d+)", e.size)
+        if not m or int(m.group(1)) not in _STD_W or int(m.group(2)) not in _STD_L:
+            w.append(f"misura insolita {e.size}: è giusta?")
+    if e.qty > 8:
+        w.append(f"{e.qty} pezzi: è giusto?")
+    if not e.item and e.kind != "nota":
+        w.append("manca cosa (l'articolo o la voce di spesa)")
+    if e.kind == "vendita" and e.unit_price is not None:
+        hist = price_history(led, e.item, e.size, exclude_id=e.id)
+        if hist:
+            last = hist[0]
+            diff = abs((e.unit_price or 0) - (last.unit_price or 0))
+            if diff >= 5 and diff >= 0.08 * max(last.unit_price or 0, 1):
+                when = date.fromisoformat(last.day)
+                w.append(f"l'ultima volta {e.item} {size_label(e.size)} era {euro(last.unit_price)} "
+                         f"({last.counterpart or 'cliente'}, {when.day}/{when.month}): ora {euro(e.unit_price)}, "
+                         "confermi?".replace("  ", " "))
+    dupes = [r for r in led.entries(date.fromisoformat(e.day), date.fromisoformat(e.day))
+             if r.id != e.id and r.kind == e.kind and r.item.lower() == (e.item or "").lower()
+             and (r.size or "") == (e.size or "") and (r.counterpart or "").lower() == (e.counterpart or "").lower()]
+    if dupes:
+        w.append("c'è già una riga uguale nello stesso giorno: è un doppione o sono due pezzi?")
+    if e.status == "fatto" and e.day > led.today.isoformat():
+        w.append("è un giorno futuro ma risulta già fatto")
+    if e.kind == "vendita" and e.payment == "sospeso" and e.status == "da_fare":
+        pass                                    # normal: paid on delivery
+    return w
+
+
+def day_check(led: Ledger, day: date) -> dict:
+    """End-of-day closing: money, what is still open, and every doubtful row."""
+    rep = led.report(day, day)
+    doubts = []
+    for r in led.entries(day, day):
+        for w in check_entry(led, r):
+            if not w.startswith("non hai detto"):
+                doubts.append(f"{sentence(r)}: {w}")
+    late = [r for r in led.pending_work() if r.day < day.isoformat()]
+    return {"day": day.isoformat(), "totals": rep["totals"], "text": rep["text"], "doubts": doubts,
+            "late_deliveries": [f"{sentence(r)} (era per il {date.fromisoformat(r.day).day}/{date.fromisoformat(r.day).month})"
+                                for r in late],
+            "open_payments": [sentence(r) for r in led.open_payments()]}
+
+
+_SALE_NOTE = re.compile(r"\d+[.,]?\d*\s*(?:€|euro)|\bvendut|\bvenduto|\bvendita\b|\bconsegn|\bsostituit|\bsostituzione"
+                        r"|\bincass|\bpagamento\b.*\bsospes", re.I)
+_STALE_NOTE = re.compile(r"\b\d{1,2} (?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|"
+                         r"novembre|dicembre) 20\d\d\b|\bpartito dal negozio\b|completi e corretti|si è accordato per "
+                         r"sostituire|non può creare (?:file|pdf)|\brinominat|nome dell'assistente|\bil tuo nome è\b",
+                         re.I)
+_RULE_NOTE = re.compile(r"\bquando\b|\bsempre\b|\bogni volta\b|\bpreferisc|\bvuole che\b|\bvoglio che\b|\bdevi\b|"
+                        r"\bregola\b|\bmisure standard\b", re.I)
+
+
+def archive_shop_notes(db: Session) -> int:
+    """Before the register, sales and prices were saved as loose memory notes - with the errors Gaetano corrected.
+    They now contradict the register: archive them (not deleted, still visible as history). Also archived: dated
+    one-off events, old names of the assistant (the name is a setting now) and «non può creare PDF» (it can).
+    Rules such as «quando chiedo un riepilogo dimmi le misure» are kept."""
+    from nodo.db.models import FactStatus, MemoryFact
+    n = 0
+    for f in db.scalars(select(MemoryFact).where(MemoryFact.source_type == "conversation",
+                                                 MemoryFact.status.in_((FactStatus.CONFIRMED, FactStatus.INFERRED,
+                                                                        FactStatus.UNVERIFIED)),
+                                                 MemoryFact.valid_until.is_(None))):
+        text = f.content or ""
+        stale = _STALE_NOTE.search(text) and not re.search(r"\bvuole che\b|\bpreferisc", text, re.I)
+        if stale or (_SALE_NOTE.search(text) and not _RULE_NOTE.search(text)):
+            f.status = FactStatus.ARCHIVED
+            f.valid_until = datetime.now(UTC)
+            n += 1
+    db.flush()
+    return n

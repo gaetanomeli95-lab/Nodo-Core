@@ -101,7 +101,7 @@ class Settings(BaseSettings):
     piper_voice: str = "it_IT-paola-medium"       # offline voice model, installed explicitly
     # Real-time voice (Gemini Live API): talk to NODO like to a person — natural voice, ~1s, barge-in.
     # Needs the FREE Gemini key (aistudio.google.com). Without it NODO keeps the browser voice chain.
-    voice_engine: str = "auto"        # auto (live when configured) | live (require it) | browser
+    voice_engine: str = "auto"        # auto (live when configured) | precise (main brain, slower) | live | browser
     gemini_live_model: str = ""       # empty = try the built-in ladder of Live models
     live_voice: str = "Kore"          # Gemini voice: Puck | Charon | Kore | Fenrir | Aoede | ...
 
