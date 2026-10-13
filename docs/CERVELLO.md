@@ -123,6 +123,7 @@ Se ne configuri più di uno, NODO usa il migliore disponibile e passa al success
 | «leggi questa pagina…» / «controlla questo indirizzo» | legge una pagina web pubblica o ne misura risposta e velocità |
 | «che bozze ho per Bar Sole?» / «segna approvata la bozza di Natale» | elenca e aggiorna bozze e contenuti |
 | «preparami un piano di lancio per il sito di X» / «fai una ricerca approfondita su…» | lavoro lungo in background con il tuo abbonamento Claude, in una cartella sua (niente accesso al resto del PC); ti avvisa e trovi i file nella scheda File |
+| «fammi un PDF / un Word / un Excel / delle slide con…» | crea il documento vero (PDF, .docx, .xlsx, .pptx), lo trovi nella scheda File e puoi scaricarlo; può anche rileggere quelli che hai caricato |
 | «funziona tutto? cosa manca?» | controlla gli accessi di NODO (Vercel, GitHub, AI, Telegram, voce) |
 
 Ricorda la conversazione: puoi dire «e quella di ieri?», «pubblica quella di Prosperya», «perché?». Nel

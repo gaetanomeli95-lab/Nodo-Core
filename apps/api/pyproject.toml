@@ -16,6 +16,10 @@ dependencies = [
     "rapidfuzz>=3.9",
     "edge-tts>=7.0",                        # free neural TTS fallback when Gemini quota is gone
     "tzdata>=2024.1; sys_platform == 'win32'",  # time zones on Windows (night shift schedule)
+    "reportlab>=4.0",                       # documents: PDF
+    "python-docx>=1.1",                     # documents: Word
+    "openpyxl>=3.1",                        # documents: Excel
+    "python-pptx>=1.0",                     # documents: PowerPoint
 ]
 
 [project.optional-dependencies]
