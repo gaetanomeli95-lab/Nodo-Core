@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import os
+import tempfile  # noqa: E402
 
 import pytest
 from fastapi.testclient import TestClient
 
+# tests must never write into the real files folder of the PC they run on (they left empty «scontrino-….jpg»
+# among Gaetano's files every time someone ran them there)
+os.environ["NODO_FILES_DIR"] = tempfile.mkdtemp(prefix="nodo-test-files-")
 os.environ.update({"NODO_ENV": "TEST", "NODO_MODE": "FREE", "NODO_DATABASE_URL": "sqlite:///:memory:",
                    "NODO_STT_PROVIDER": "fake", "NODO_TTS_PROVIDER": "fake", "NODO_GITHUB_CONNECTOR": "fake"})
 

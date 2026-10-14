@@ -72,6 +72,38 @@ class BrainTool:
     handler: Callable[..., Awaitable[dict]]
 
 
+_ALIASES = {"prompt": "description", "descrizione": "description", "text": "content", "testo": "content",
+            "body": "content", "file_name": "name", "filename": "name", "nome": "name", "query": "what",
+            "file": "what", "cosa": "what", "formato": "format", "titolo": "title", "domanda": "question"}
+
+
+def _fit_args(handler, args: dict) -> dict:
+    """Models invent parameter names («prompt» instead of «description»): map the usual ones, drop the unknown
+    ones, and give a lone leftover value to a missing required parameter, instead of failing the whole action."""
+    import inspect
+    try:
+        sig = inspect.signature(handler)
+    except (TypeError, ValueError):
+        return args
+    params = sig.parameters
+    if any(p.kind == p.VAR_KEYWORD for p in params.values()):
+        return args
+    out, extra = {}, {}
+    for k, v in args.items():
+        if k in params:
+            out[k] = v
+        elif _ALIASES.get(k) in params and _ALIASES[k] not in args:
+            out[_ALIASES[k]] = v
+        else:
+            extra[k] = v
+    missing = [n for n, p in params.items() if p.default is p.empty and n not in out
+               and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)]
+    strings = [v for v in extra.values() if isinstance(v, str)]
+    if len(missing) == 1 and len(strings) == 1:
+        out[missing[0]] = strings[0]
+    return out
+
+
 class Toolbox(ExtraTools):
     def __init__(self, core, conv, request_id: str, user_text: str, channel: str = "text"):
         self.core, self.conv, self.request_id, self.user_text, self.channel = core, conv, request_id, user_text, channel
@@ -158,7 +190,7 @@ class Toolbox(ExtraTools):
         tool = self.tools.get(name)
         if tool is None:
             return {"error": f"strumento sconosciuto: {name}"}
-        clean = {k: v for k, v in (args or {}).items() if v not in (None, "")}
+        clean = _fit_args(tool.handler, {k: v for k, v in (args or {}).items() if v not in (None, "")})
         try:
             out = await tool.handler(**clean)
         except TypeError as e:
@@ -166,6 +198,9 @@ class Toolbox(ExtraTools):
         except Exception as e:  # a failing tool must never break the conversation
             log.exception("brain tool %s failed", name)
             out = {"error": f"{type(e).__name__}: {str(e)[:300]}"}
+        if isinstance(out, dict) and "error" in out:
+            # every failure in the log: «l'immagine non c'è» must be explainable from nodo.log
+            log.warning("tool %s → %s (args: %s)", name, str(out["error"])[:300], str(clean)[:200])
         try:    # the team view shows who did what: one light row per action (written at the next commit)
             self.core.events.emit("agent.work", {"tool": name, "ok": "error" not in (out or {}),
                                                  "what": str(clean)[:160]},
@@ -599,9 +634,19 @@ class Toolbox(ExtraTools):
         if self.c is None or self.c.files is None:
             return {"error": "archivio file non disponibile"}
         from nodo.services.gemini import generate_image as gi
-        data, engine = await gi(self.settings.gemini_api_key or "",
-                                self.settings.gemini_image_model, description)
-        ext = ".png" if data[:4] == b"\x89PNG" else (".jpg" if data[:2] == b"\xff\xd8" else ".bin")
+        try:
+            data, engine = await gi(self.settings.gemini_api_key or "",
+                                    self.settings.gemini_image_model, description)
+        except Exception as e:  # noqa: BLE001 - the real reason, said plainly, instead of a fake «è pronta»
+            log.warning("image generation failed: %s", str(e)[:400])
+            return {"error": "non sono riuscita a disegnarla: " + str(e)[:200],
+                    "note": "dillo a Gaetano con il motivo, non dire che è pronta"}
+        ext = (".png" if data[:4] == b"\x89PNG" else ".jpg" if data[:2] == b"\xff\xd8" else
+               ".webp" if data[:4] == b"RIFF" and data[8:12] == b"WEBP" else ".gif" if data[:3] == b"GIF" else "")
+        if not ext or len(data) < 1000:
+            log.warning("image generation returned no picture (%d bytes, starts %r)", len(data), data[:16])
+            return {"error": "il servizio non ha restituito un'immagine valida",
+                    "note": "dillo a Gaetano, non dire che è pronta; si può riprovare"}
         from datetime import datetime as _dt
         p = self.c.files.save_bytes(f"immagine-{_dt.now():%Y%m%d-%H%M%S}{ext}", data)
         doc = self.c.files.register(self.s, self.org, p.name, description[:200],

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import ipaddress
+import logging
 import re
 import socket
 from datetime import UTC, datetime, timedelta
@@ -89,6 +90,8 @@ def html_to_text(raw: str) -> str:
     return re.sub(r"\n\s*\n+", "\n\n", text).strip()
 
 
+
+log = logging.getLogger("nodo.brain")
 
 _TAB_FILLER = {"mostrami", "mostra", "fammi", "vedere", "apri", "aprimi", "vai", "su", "sul", "sulla", "nella", "nel",
                "il", "lo", "la", "le", "i", "gli", "l", "un", "una", "di", "del", "della", "mio", "mia", "tutto", "tutta",
@@ -587,6 +590,7 @@ class ExtraTools(LedgerTools):
         import asyncio
         hit, others = await asyncio.to_thread(media.find_local, what)
         if hit is not None:
+            log.info("show_on_screen «%s» → %s", what[:80], hit)
             return {"shown": hit.stem, "url": media.share(hit), "kind": media.kind_of(hit),
                     "where": str(hit.parent.name), "others": [p.name for p in others[:4]],
                     "note": "è sullo schermo in grande (dal PC di Gaetano); dì in una frase cosa sta guardando; "

@@ -95,7 +95,7 @@ async def test_everything_maria_creates_can_be_shown(box, client, tmp_path, monk
     monkeypatch.setattr("nodo.media.roots", lambda: [])
 
     async def fake_image(key, model, prompt, transport=None):
-        return b"\x89PNG\r\n\x1a\n" + b"0" * 100, "test"
+        return b"\x89PNG\r\n\x1a\n" + b"0" * 4000, "test"
     monkeypatch.setattr("nodo.services.gemini.generate_image", fake_image)
     md = "# Volantino\n\nSconti sui **materassi**\n\n| modello | prezzo |\n|---|---|\n| Andromeda | 420 |"
     made = [await box.call("create_document", {"name": f"volantino {f}", "format": f, "content": md})
@@ -111,3 +111,33 @@ async def test_everything_maria_creates_can_be_shown(box, client, tmp_path, monk
         res = await box.call("show_on_screen", {"what": what})
         assert res.get("kind") == kind, (what, res)
         assert client.get(res["url"]).status_code == 200 or res["url"].startswith("/api/v1/files/"), what
+
+
+def test_software_projects_are_not_his_photos(tmp_path):
+    """«Mostrami l'immagine di Nodo Core» opened an icon from NODO's own code folder on the Desktop."""
+    proj = tmp_path / "Desktop" / "NODO Core"
+    (proj / "apps" / "web" / "public").mkdir(parents=True)
+    (proj / "package.json").write_text("{}")
+    (proj / "apps" / "web" / "public" / "nodo core logo.svg").write_text("<svg/>")
+    (tmp_path / "Desktop" / "nodo core poster.png").write_bytes(b"\x89PNG")
+    hit, _ = media.find_local("l'immagine di nodo core", [tmp_path])
+    assert hit is not None and hit.name == "nodo core poster.png"
+
+
+async def test_a_wrong_parameter_name_does_not_lose_the_image(box, tmp_path, monkeypatch):  # noqa: F811
+    """The model called generate_image(prompt=…) instead of description=…: the image was never made and Maria
+    said «è pronta». Now the usual names are understood; a failure says its real reason."""
+    from nodo.services.files import FileStore
+    box.c.files = FileStore(tmp_path / "files")
+
+    async def fake_image(key, model, prompt, transport=None):
+        return b"\x89PNG\r\n\x1a\n" + b"0" * 4000, "test"
+    monkeypatch.setattr("nodo.services.gemini.generate_image", fake_image)
+    made = await box.call("generate_image", {"prompt": "un tubo cromato", "style": "realistico"})
+    assert made.get("url", "").endswith(".png"), made
+
+    async def broken(key, model, prompt, transport=None):
+        raise RuntimeError("quota finita e servizio di riserva irraggiungibile")
+    monkeypatch.setattr("nodo.services.gemini.generate_image", broken)
+    failed = await box.call("generate_image", {"description": "un tubo"})
+    assert "quota finita" in failed["error"]

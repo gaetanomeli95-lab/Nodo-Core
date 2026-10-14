@@ -316,9 +316,10 @@ async def test_gemini_look_sends_the_image_and_reads_the_answer():
 
 
 def test_upload_from_the_panel(client):
-    r = client.post("/api/v1/files/upload", files={"file": ("scontrino.jpg", b"\xff\xd8x", "image/jpeg")})
+    r = client.post("/api/v1/files/upload", files={"file": ("scontrino.jpg", b"\xff\xd8\xff\xe0 jpeg", "image/jpeg")})
     assert r.status_code == 200 and r.json()["url"].endswith(".jpg")
     assert client.post("/api/v1/files/upload", files={"file": ("virus.exe", b"MZ", "application/x")}).status_code == 400
+    assert client.post("/api/v1/files/upload", files={"file": ("vuota.jpg", b"abc", "image/jpeg")}).status_code == 400
     assert any(f["title"] == "scontrino.jpg" for f in client.get("/api/v1/files").json()["files"])
 
 

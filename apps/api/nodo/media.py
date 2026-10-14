@@ -71,14 +71,34 @@ def wanted_kind(text: str) -> str | None:
     return None
 
 
+_SKIP_DIRS = {"node_modules", "appdata", "venv", ".venv", "__pycache__", "site-packages", "dist", "build", "target",
+              "vendor", "bower_components", "cache", "temp", "tmp"}
+_PROJECT_MARKS = {"package.json", "pyproject.toml", "setup.py", "cargo.toml", "go.mod", "pom.xml", "composer.json",
+                  "requirements.txt", "alembic.ini", "vite.config.ts", "tsconfig.json"}
+_NODO_HOME = Path(__file__).resolve().parents[3]          # the folder NODO itself lives in
+
+
+def _is_project(here: Path, filenames: list[str], dirnames: list[str]) -> bool:
+    try:
+        if here.resolve() == _NODO_HOME or _NODO_HOME in here.resolve().parents:
+            return True
+    except OSError:
+        return True
+    return ".git" in dirnames or bool(_PROJECT_MARKS & {f.lower() for f in filenames})
+
+
 def _scan(base_roots: list[Path], kind: str | None) -> list[Path]:
     found: list[Path] = []
     started = time.monotonic()
     for root in base_roots:
         for dirpath, dirnames, filenames in os.walk(root):
             depth = len(Path(dirpath).relative_to(root).parts)
-            dirnames[:] = [d for d in dirnames if not d.startswith((".", "$")) and d.lower() not in
-                           ("node_modules", "appdata", "venv", ".venv", "__pycache__")] if depth < 4 else []
+            here = Path(dirpath)
+            if _is_project(here, filenames, dirnames):
+                dirnames[:] = []                 # a software project (NODO itself!): its icons and code are not
+                continue                         # «his» photos and documents
+            dirnames[:] = [d for d in dirnames if not d.startswith((".", "$", "_")) and d.lower() not in _SKIP_DIRS
+                           ] if depth < 4 else []
             for f in filenames:
                 k = KIND_BY_EXT.get(f.rsplit(".", 1)[-1].lower())
                 if k and (kind is None or k == kind):

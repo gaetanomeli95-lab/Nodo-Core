@@ -31,6 +31,9 @@ async def upload(file: UploadFile = File(...), c: Container = Depends(container)
     data = await file.read(15_000_001)
     if len(data) > 15_000_000:
         raise HTTPException(413, "file troppo grande (massimo 15 MB)")
+    if ext in ("png", "jpg", "jpeg", "webp") and not (data[:4] == b"\x89PNG" or data[:3] == b"\xff\xd8\xff"
+                                                      or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")):
+        raise HTTPException(400, "questa non è una foto valida (file vuoto o danneggiato)")
     stem = raw.rsplit(".", 1)[0][:60] or "file"
     p = c.files.save_bytes(f"{stem}-{datetime.now():%H%M%S}.{'jpg' if ext == 'jpeg' else ext}", data)
     doc = c.files.register(db, org, p.name, raw[:200], summary="caricato dal pannello")
