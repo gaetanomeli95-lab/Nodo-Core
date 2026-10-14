@@ -91,6 +91,14 @@ def build(db, org: str, settings, now: datetime) -> str:
             people[name.lower()] = f"{name}: {sentence(r).rstrip('.')} il {r.day[8:10]}/{r.day[5:7]}"
     if people:
         out.append("CLIENTI E FORNITORI RECENTI: " + _cap("; ".join(people.values()), 1100) + ".")
+    # every customer ever written in the register (sales, replacements, debts): «quanti clienti abbiamo?» must not
+    # forget the signora Silvana because her row was a replacement and not a sale
+    names = sorted({(r or "").strip() for r in db.scalars(select(LedgerEntry.counterpart).where(
+        LedgerEntry.organization_id == org, LedgerEntry.kind.in_(("vendita", "sostituzione", "credito", "incasso")),
+        LedgerEntry.status != "annullato", LedgerEntry.counterpart.is_not(None)).distinct()) if (r or "").strip()},
+        key=str.lower)
+    if names:
+        out.append(f"TUTTI I CLIENTI DEL REGISTRO ({len(names)}, nessuno escluso): " + _cap(", ".join(names), 900) + ".")
     return _cap("\n".join(out), MAX_CHARS)
 
 
