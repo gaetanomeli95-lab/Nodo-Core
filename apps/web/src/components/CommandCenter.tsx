@@ -6,7 +6,7 @@ import type { PresenceMode } from "./Presence";
 import { Pulse } from "./Pulse";
 import { Viewer, type ViewItem } from "./Viewer";
 import { Board } from "./holo/Board";
-import { INTRO_DONE_EVENT, introDone } from "./holo/Intro";
+import { ALMOST_EVENT, INTRO_DONE_EVENT, introDone } from "./holo/Intro";
 import { HoloTable, type HoloSurface } from "./holo/HoloTable";
 import { patienceFor, SLOW_TOOLS, type Work, WorkStage } from "./holo/WorkStage";
 import { MindGraph } from "./holo/MindGraph";
@@ -101,6 +101,8 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const conv = useRef(loadConv());
   const journal = useRef<HTMLDivElement>(null);
   const activeTools = useRef(new Set<string>());
+  const presentSeq = useRef(0);                         // holograms shown so far
+  const askedAt = useRef<number | null>(null);          // presentSeq when he last asked something
 
   const rememberConv = (id: unknown) => {
     if (typeof id !== "string" && id !== null) return;
@@ -148,6 +150,12 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       }
       const current = Array.from(activeTools.current).at(-1);
       setActivity(current ? DOING[current] || "Ci lavoro" : null);
+    }
+    if (e.type === "ui.present") presentSeq.current += 1;
+    if (e.type === "transcript.final") askedAt.current = presentSeq.current;
+    if (e.type === "voice.turn.done" && askedAt.current !== null && askedAt.current === presentSeq.current) {
+      askedAt.current = null;
+      setSurfaceRaw(null);          // she answered something else: yesterday's hologram must not stay up
     }
     if (e.type === "ui.present") setSurface({ view: String(e.view), rows: e.rows as Surface["rows"] || [], summary: String(e.summary || ""), totals: e.totals as Surface["totals"], title: e.title as string | undefined });
     if (e.type === "approval.required") setDecision({ id: String(e.approval_id), label: String(e.label || "Conferma questa azione"),
@@ -211,7 +219,8 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   useEffect(() => {
     const on = () => setIntroOver(true);
     window.addEventListener(INTRO_DONE_EVENT, on);
-    return () => window.removeEventListener(INTRO_DONE_EVENT, on);
+    window.addEventListener(ALMOST_EVENT, on);          // greet while the intro closes: no silent gap after it
+    return () => { window.removeEventListener(INTRO_DONE_EVENT, on); window.removeEventListener(ALMOST_EVENT, on); };
   }, []);
   const helloSent = useRef(false);
   useEffect(() => {
@@ -219,7 +228,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     helloSent.current = true;
     if (voiceConfig.engine === "browser") { autoHello.current = false; return; }
     if (!voice.microphoneOn) voice.pressStart();          // opens the live conversation (asks for the mic only once)
-    setTimeout(() => voiceRef.current.greet(), 700);
+    setTimeout(() => voiceRef.current.greet(), 250);
   }, [introOver, voice.connected, voiceConfig]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const send = async (requested?: string) => {
@@ -361,7 +370,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
           {decision.pr && <a href={decision.pr} target="_blank" rel="noreferrer">Guarda le modifiche ↗</a>}
           <button disabled={decision.sending || !voice.connected} onClick={() => answer("reject")}>Lascia stare</button>
           <button className="primary" disabled={decision.sending || !voice.connected} onClick={() => answer("approve")}>{decision.sending ? "Conferma in corso…" : "Conferma"}</button></div>
-      </section> : surface && <HoloTable key={`${surface.view}-${surface.rows.length}-${surface.summary.length}`} surface={surface}
+      </section> : surface && <HoloTable key={`${surface.view}-${surface.rows.length}-${surface.summary.length}`} surface={surface} said={lastNodo}
         title={surface.title || TITLES[surface.view] || "Il punto della situazione"} onClose={() => setSurface(null)}
         onDownload={(url) => downloadFile(url).catch((e) => setError((e as Error).message))} />}
       {!decision && !surface && mode === "rest" && <Pulse revision={pulseRevision} disabled={busy || !voice.connected}

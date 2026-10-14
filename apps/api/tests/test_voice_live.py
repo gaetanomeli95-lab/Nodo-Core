@@ -987,3 +987,20 @@ def test_maria_sings_over_a_band(client, container):
     assert start["style"] == "pop"
     assert any(e["type"] == "music.stop" for e in events)
     assert session.tool_responses[0]["response"]["result"]["ok"] is True
+
+
+def test_the_voice_reads_the_register_itself_and_the_hologram_appears(client, container):
+    """«Cosa ho venduto il 12?»: no brain round — the voice calls the register directly, the hologram shows."""
+    script = [_sc(input_transcription=SimpleNamespace(text="cosa ho venduto il 12 ottobre")),
+              _tc("ledger_report", {"day": "12/10"}, fid="led-1"),
+              _sc(output_transcription=SimpleNamespace(text="Il 12 hai venduto…")),
+              _sc(turn_complete=True)]
+    holder = []
+    container.live_connect = make_connect(script, holder)
+    with client.websocket_connect(WS) as ws:
+        _open_live(ws)
+        events, _ = _recv_until(ws, "voice.turn.done")
+    names = [d["name"] for d in holder[0][1]["tools"][0]["function_declarations"]]
+    assert {"ledger_report", "ledger_open", "ledger_customer"} <= set(names) and "ledger_add" not in names
+    assert any(e["type"] == "ui.present" and e["view"] == "ledger" for e in events)
+    assert "say" in holder[0][2].tool_responses[0]["response"]["result"]

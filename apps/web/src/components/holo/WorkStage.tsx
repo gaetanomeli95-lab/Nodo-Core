@@ -89,7 +89,8 @@ export function WorkStage({ work }: { work: Work }) {
       <h3>{spec.label}{what ? "…" : ""}</h3>
       {what && <p>«{what}»</p>}
       <div className="work-bar"><i style={{ width: `${Math.round(progress * 100)}%` }} /></div>
-      <small>{Math.floor(secs)} s{secs > spec.usual * 1.5 ? " · ci vuole un po' più del solito, continuo" : ` · di solito ${spec.usual} s`}</small>
+      <small><b className="work-pct">{Math.min(99, Math.round(progress * 100))}%</b> · {Math.floor(secs)} s
+        {secs > spec.usual * 1.5 ? " · ci vuole un po' più del solito, continuo" : ` · di solito ${spec.usual} s`}</small>
     </div>
   </section>;
 }

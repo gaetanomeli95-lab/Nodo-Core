@@ -459,3 +459,25 @@ html.calm .work-stage *, html.calm .work-stage { animation: none !important; }
 @keyframes note-rise { 0% { opacity: 0; transform: translateY(0) rotate(-10deg) scale(.7); } 15% { opacity: .95; }
   100% { opacity: 0; transform: translateY(-46vh) translateX(30px) rotate(14deg) scale(1.2); } }
 html.calm .sing-notes { display: none; }
+
+/* ---------------------------------------------------------------- hologram: more contrast, less «all light blue» */
+.holo-table-head .sheet-kicker { color: #ffd27a; }
+.holo-table-head h3 { background: linear-gradient(90deg, #ffffff, #ffe3a6); -webkit-background-clip: text; background-clip: text;
+  color: transparent; text-shadow: none; font-weight: 400; }
+.holo-kpi { background: linear-gradient(180deg, color-mix(in srgb, var(--c) 34%, #0a1016), rgba(6,10,14,.9));
+  border-color: var(--c); }
+.holo-kpi.mint { --c: #5af0a8; } .holo-kpi.violet { --c: #b48cff; } .holo-kpi.rose { --c: #ff6b8b; } .holo-kpi.cyan { --c: #ffd27a; }
+.holo-tile { background: linear-gradient(160deg, color-mix(in srgb, var(--c) 34%, #0b1218), rgba(5,9,13,.94) 72%);
+  color: #ffffff; border-color: color-mix(in srgb, var(--c) 70%, transparent); }
+.holo-tile.mint { --c: #5af0a8; } .holo-tile.rose { --c: #ff6b8b; } .holo-tile.amber { --c: #ffc65c; }
+.holo-tile.violet { --c: #b48cff; } .holo-tile.cyan { --c: #63d9ff; }
+.holo-tile.front { border-color: #ffffff; box-shadow: 0 0 0 1px var(--c), 0 0 44px color-mix(in srgb, var(--c) 60%, transparent),
+  0 22px 50px #000c; }
+.holo-tile.front::before { background: repeating-linear-gradient(0deg, rgba(255,255,255,.05) 0 1px, transparent 1px 3px),
+  linear-gradient(90deg, transparent, color-mix(in srgb, var(--c) 70%, white) 50%, transparent) top / 100% 2px no-repeat; }
+.holo-tile em { color: #fff; text-shadow: 0 0 16px var(--c); }
+.holo-beam { background: linear-gradient(to top, rgba(180,140,255,.32), rgba(99,217,255,.10) 60%, transparent); }
+.holo-projector { background: radial-gradient(ellipse at center, rgba(255,226,166,.6), rgba(180,140,255,.18) 45%, transparent 70%); }
+.holo-projector i:nth-child(2) { border-top-color: rgba(255,210,122,.8); border-bottom-color: rgba(255,210,122,.8); }
+.holo-nav { color: #ffe3a6; }
+.work-pct { color: #ffd27a; font-weight: 700; }

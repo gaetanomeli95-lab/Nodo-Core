@@ -59,8 +59,19 @@ function kpis(s: HoloSurface): [string, number, string][] {
   return out.slice(0, 4);
 }
 
-export function HoloTable({ surface, title, onClose, onDownload }: {
-  surface: HoloSurface; title: string; onClose: () => void; onDownload: (url: string) => void;
+const COMMON = new Set(["materasso", "materassi", "poliuretano", "matrimoniale", "singolo", "francese", "pagamento",
+  "sospeso", "pagato", "consegna", "consegnare", "garanzia", "incasso", "nessun", "totale", "rete", "doghe", "tavola"]);
+
+/** The words that identify a row when Maria says it: the customer first, then the distinctive model words. */
+function keys(row: Record<string, unknown>): string[] {
+  const t = String(row.title || row.name || "").toLowerCase();
+  const who = t.includes("—") ? t.split("—").pop()!.trim() : "";
+  const words = t.replace(/[^a-zà-ù0-9 ]/g, " ").split(/\s+/).filter((w) => w.length >= 5 && !COMMON.has(w) && !/^\d+$/.test(w));
+  return [...(who ? [who, ...who.split(/\s+/).filter((w) => w.length >= 4)] : []), ...words].slice(0, 6);
+}
+
+export function HoloTable({ surface, title, onClose, onDownload, said }: {
+  surface: HoloSurface; title: string; onClose: () => void; onDownload: (url: string) => void; said?: string;
 }) {
   const rows = surface.rows;
   const n = rows.length;
@@ -144,6 +155,21 @@ export function HoloTable({ surface, title, onClose, onDownload }: {
     if (Math.abs(d) < 4 || now - wheelAt.current < 220) return;
     wheelAt.current = now; goTo(front + (d > 0 ? 1 : -1));
   };
+
+  // the hologram follows her words: when she names a customer or a model, that tile comes to the front
+  const rowKeys = useMemo(() => rows.map(keys), [rows]);
+  const lastSaid = useRef("");
+  useEffect(() => {
+    if (!said || n < 2 || said === lastSaid.current) return;
+    const fresh = said.slice(Math.max(0, lastSaid.current.length - 20)).toLowerCase();
+    lastSaid.current = said;
+    let best = -1, at = -1;
+    rowKeys.forEach((ks, i) => ks.forEach((k) => {
+      const pos = fresh.lastIndexOf(k);
+      if (pos > at) { at = pos; best = i; }
+    }));
+    if (best >= 0 && best !== front && !st.current.drag) goTo(best);
+  }, [said]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const sel = rows[front] || {};
   return <section className={`holo-table${lite ? " lite" : ""}`} aria-label="Sul tavolo" role="region">

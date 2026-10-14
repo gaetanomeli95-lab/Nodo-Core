@@ -12,6 +12,8 @@ import { calm, canvasDpr } from "../../motion";
 
 const DONE = "nodo:intro-done";
 const TOTAL = 8.2;                 // seconds
+const ALMOST = 5.6;                // when the greeting is asked for (it arrives ~2 s later, as the intro ends)
+export const ALMOST_EVENT = "nodo:intro-almost";
 let played = false;                // once per page load: every time the NODO window opens
 export const introDone = () => played || calm || /[?&]nointro\b/.test(location.search);
 
@@ -132,6 +134,7 @@ export function Intro({ name }: { name: string }) {
   const stats = useRef<Stats>({});
   const finished = useRef(false);
   const leavingRef = useRef(false);
+  const almostRef = useRef(false);
   const stopSound = useRef<(() => void) | null>(null);
 
   const finish = (skipped = false) => {
@@ -181,6 +184,10 @@ export function Intro({ name }: { name: string }) {
       const T = (now - start) / 1000;
       if (T >= TOTAL) { finish(); return; }
       if (T > TOTAL - 0.75 && !leavingRef.current) { leavingRef.current = true; setLeaving(true); }
+      if (T > ALMOST && !almostRef.current) {        // the voice takes ~2 s to answer: ask for the hello now, so
+        almostRef.current = true;                    // «Ciao Gaetano» arrives as the curtain opens, with no gap
+        window.dispatchEvent(new Event(ALMOST_EVENT));
+      }
       const S = Math.min(W * 0.6, H) * 0.9, cx = W / 2, cy = H * 0.54, diag = Math.hypot(W, H);
       const fold = inC(seg(T, 6.5, 7.45));           // everything goes back into the core
       const scale = 1 - 0.88 * fold;

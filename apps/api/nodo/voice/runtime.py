@@ -106,15 +106,33 @@ def is_babble_text(text: str) -> bool:
 
 
 _SPOKEN_CALL = re.compile(r"(?:pensa|think)\s*\(", re.I)
-# «mostrami la foto…», «fammi un'immagine…», «crea un documento…»: things only the brain can do
-_ACTION = re.compile(r"\b(mostra\w*|fa(?:mmi|i|mme) (?:vedere|sentire)|apri(?:mi)?\b|crea\w*|disegn\w*|genera\w*|"
-                     r"fa(?:mmi|i) (?:un|una|un')\s*(?:immagin|foto|disegn|document|pdf|excel|tabell|letter|"
-                     r"preventiv|logo|volantin|video|present)|prepara\w* (?:un|una|il|la)|salva\w* sul desktop)", re.I)
+# «mostrami la foto…», «fammi un'immagine…», «crea un documento…», «completa l'immagine e me la mostri»: things only
+# the brain can do. A verb of making/showing WITH a thing to make/show, or a plain «mostrami / fammi vedere / apri».
+_ACTION = re.compile(r"\b(mostr\w*|fa(?:mmi|mme) (?:vedere|sentire)|apri(?:mi|re)?\b|salva\w* sul desktop)", re.I)
+_MAKE = re.compile(r"\b(crea\w*|disegn\w*|genera\w*|fa(?:mmi|i|re|mme)\b|prepar\w*|complet\w*|scriv\w*|"
+                   r"realizz\w*|produc\w*|elabor\w*)", re.I)
+_THING = re.compile(r"\b(immagin\w*|foto\w*|disegn\w*|document\w*|pdf|excel|word|tabell\w*|letter\w*|preventiv\w*|"
+                    r"logo|volantin\w*|presentazion\w*|slide|file|grafic\w*|locandin\w*|biglietto|poster|pagina)\b",
+                    re.I)
+
+
+_NOT_SEEN = re.compile(r"\bnon (?:la |lo |li |le )?(?:vedo|vedi|c'è|ce l'ho|è appars\w*|compar\w*)|\bdov'è\b|\bdove sta\b|"
+                       r"\battendo\b|\baspetto (?:ancora|l'|il|la)|\bancora niente\b", re.I)
+
+
+def action_intent(text: str) -> bool:
+    t = text or ""
+    return bool(_ACTION.search(t) or (_MAKE.search(t) and _THING.search(t)))
+
+
 _REFUSAL = re.compile(r"\b(non (?:posso|riesco|sono in grado|ho (?:la possibilit|lo strument|accesso|modo|un modo))|"
                       r"purtroppo|non è possibile)", re.I)
 LIVE_RETRY_S = 20
 _VOICE_TAGS = re.compile(r"<\s*no[ _]speech\s*>|<[a-z_ ]{1,24}>|\{[a-z_ ]{1,24}\}", re.I)
-_LIVE_OWN_TOOLS = {"decide", "close_screen"}   # yes/no on the proposal shown, close what is on screen
+_LIVE_OWN_TOOLS = {"decide", "close_screen",   # yes/no on the proposal shown, close what is on screen
+                   # the register, READ ONLY and instant (no model behind them): the voice answers any day or customer
+                   # by itself and the hologram appears while it speaks
+                   "ledger_report", "ledger_open", "ledger_customer", "ledger_stats", "ledger_prices"}
 
 
 class VoiceRuntime:
@@ -163,6 +181,7 @@ class VoiceRuntime:
         self._tool_text: str | None = None         # a tool call Gemini spoke aloud instead of making it
         self._turn_called = False                  # a tool was called in this turn
         self._singing = False                      # the backing band is playing for this turn
+        self._last_action: str | None = None       # the last «crea / mostrami…» he asked for
         self._forced: str | None = None            # an action Gemini refused or forgot: the brain does it
         self._live_results: dict[str, dict] = {}
         self._pensa_error: str | None = None   # a failed «pensa» is not retried within the same turn
@@ -738,7 +757,7 @@ class VoiceRuntime:
                 return
             self._out_text.append(ev["text"])
             said = "".join(self._out_text).strip().lower().lstrip("[(«\"' ")
-            if (not self._turn_called and self._forced is None and _ACTION.search(self._in_text or "")
+            if (not self._turn_called and self._forced is None and action_intent(self._in_text or "")
                     and _REFUSAL.search(said[:160])):
                 # «non posso mostrarti finestre»: it can — cut the refusal, the brain does it
                 self._forced = self._in_text.strip()
@@ -1187,8 +1206,16 @@ class VoiceRuntime:
         speak = True                                 # it refused: the brain's answer is said instead
         heard_now = self._in_text.strip()
         if forced is None and not self._turn_called and self._tool_text is None and heard_now \
-                and _ACTION.search(heard_now) and not self._babble and not is_babble_text(heard_now):
+                and action_intent(heard_now) and not self._babble and not is_babble_text(heard_now):
             forced, speak = heard_now, not text      # it answered without doing it: do it now (quietly if it spoke)
+        elif (forced is None and not self._turn_called and heard_now and self._last_action
+              and _NOT_SEEN.search(heard_now)):
+            # «non vedo l'immagine», «attendo l'immagine»: it promised and showed nothing — do the last request
+            forced = (f"{self._last_action}\n(Gaetano dice che non lo vede ancora: fallo adesso e mostraglielo; se "
+                      "non è possibile digli il motivo vero)")
+            speak, text = True, ""
+        if heard_now and action_intent(heard_now):
+            self._last_action = heard_now
         self._turn_called = False
         if forced and not self._dead:
             if speak:
