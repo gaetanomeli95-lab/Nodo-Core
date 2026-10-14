@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { calm } from "../../motion";
 import type { PresenceMode } from "../Presence";
 
 type Bins = { input: Uint8Array<ArrayBuffer> | null; output: Uint8Array<ArrayBuffer> | null };
@@ -77,7 +78,7 @@ export function HoloCore({ mode, sampleLevel, spectrum, boot }: {
     const el = ref.current!;
     const gl = el.getContext("webgl2", { premultipliedAlpha: true, antialias: false, alpha: true });
     if (!gl) { el.style.display = "none"; return; }
-    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const reduced = calm;
     const sh = (type: number, src: string) => {
       const s = gl.createShader(type)!; gl.shaderSource(s, src); gl.compileShader(s);
       if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.warn(gl.getShaderInfoLog(s));

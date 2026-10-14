@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { calm } from "../motion";
 
 export type PresenceMode = "rest" | "listen" | "think" | "act" | "speak" | "approve" | "reconnect";
 type Bins = { input: Uint8Array<ArrayBuffer> | null; output: Uint8Array<ArrayBuffer> | null };
@@ -31,7 +32,7 @@ export function Presence({ mode, sampleLevel, spectrum, bodyless = false }: {
     const el = canvas.current!;
     const ctx = el.getContext("2d");
     if (!ctx) return;
-    const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+    const reduced = { matches: calm };
     const N = 96;
     const bars = new Float32Array(N);                 // smoothed ring heights 0..1
     const parts = Array.from({ length: 70 }, (_, i) => ({

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { calm } from "../../motion";
 import { get } from "../../api";
 import type { PresenceMode } from "../Presence";
 import { orbitRadii } from "./mindMotion";
@@ -146,7 +147,7 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
     if (!c) return;
     const ctx = c.getContext("2d");
     if (!ctx) return;
-    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    const reduced = calm;
     let raf = 0, last = performance.now(), energy = 0;
     const sparks: { e: number; u: number; v: number; soft: boolean }[] = [];   // thoughts running along the links
     const dpr = Math.min(window.devicePixelRatio || 1, 1.5);

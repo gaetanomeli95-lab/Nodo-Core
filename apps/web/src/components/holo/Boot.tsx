@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { calm } from "../../motion";
 
 const LINES = ["NODO CORE · avvio dei sistemi", "occhi · orecchie · voce · mani", "memoria e registro collegati",
   "turno di notte in ascolto", "pronta."];
@@ -7,7 +8,7 @@ const LINES = ["NODO CORE · avvio dei sistemi", "occhi · orecchie · voce · m
 export function Boot({ name }: { name: string }) {
   const [step, setStep] = useState(0);
   const [gone, setGone] = useState(() => {
-    try { return sessionStorage.getItem("nodo.booted") === "1" || matchMedia("(prefers-reduced-motion: reduce)").matches; }
+    try { return sessionStorage.getItem("nodo.booted") === "1" || calm; }
     catch { return false; }
   });
   useEffect(() => {

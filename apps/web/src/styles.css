@@ -277,7 +277,7 @@ button:focus-visible,a:focus-visible,input:focus-visible { outline:2px solid #e2
   .stage-footnote span:first-child { max-width:145px; line-height:1.7; }
   .context-sheet { padding:18px; }
 }
-@media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.001ms!important; transition-duration:.001ms!important; scroll-behavior:auto!important; } }
+html.calm *, html.calm *::before, html.calm *::after { animation-duration:.001ms!important; transition-duration:.001ms!important; scroll-behavior:auto!important; }
 
 /* NODO Pulse — compact, database-grounded radar below the living presence, not a dashboard. */
 .pulse {
@@ -362,7 +362,7 @@ button:focus-visible,a:focus-visible,input:focus-visible { outline:2px solid #e2
 .file-chip:hover { border-color: var(--accent); }
 @keyframes row-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @media (max-width: 1100px) { .ledger-grid { grid-template-columns: 1fr; } .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (prefers-reduced-motion: reduce) { .ledger, .ledger-row { animation: none; } }
+html.calm .ledger, html.calm .ledger-row { animation: none; }
 .voice-mode { display: inline-flex; border: 1px solid #344042; border-radius: 7px; overflow: hidden; }
 .voice-mode button { background: none; border: 0; color: #8e9b9d; font: inherit; font-size: 10px; letter-spacing: .08em; padding: 3px 9px; cursor: pointer; }
 .voice-mode button.on { background: #23302e; color: #dfe9e2; }
@@ -408,7 +408,7 @@ button:focus-visible,a:focus-visible,input:focus-visible { outline:2px solid #e2
 @keyframes viewer-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes viewer-rise { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
 @media (max-width: 760px) { .presence-core { height: 280px; } .viewer { height: 92vh; } }
-@media (prefers-reduced-motion: reduce) { .viewer, .viewer-backdrop, .viewer-body img { animation: none; } }
+html.calm :is(.viewer, .viewer-backdrop, .viewer-body img) { animation: none; }
 
 /* ---------------------------------------------------------------- shop trend + drop zone */
 .ledger-trend { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 18px; align-items: start; }
@@ -434,7 +434,7 @@ button:focus-visible,a:focus-visible,input:focus-visible { outline:2px solid #e2
 .trend-side li b { font-weight: 500; }
 @keyframes bar-grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
 @media (max-width: 1100px) { .ledger-trend { grid-template-columns: 1fr; } }
-@media (prefers-reduced-motion: reduce) { .money-chart .bar { animation: none; } }
+html.calm .money-chart .bar { animation: none; }
 .conversation-room { position: relative; }
 .conversation-room.dragging::after { content: ""; position: absolute; inset: 10px; border: 2px dashed #8fe3d8; border-radius: 16px; pointer-events: none; background: #8fe3d80d; }
 .drop-hint { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); z-index: 5; pointer-events: none;

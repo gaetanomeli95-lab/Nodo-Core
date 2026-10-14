@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { calm } from "../../motion";
 
 /** The living background: a slow neural field (nodes that drift and link when close) over a deep starfield.
  *  Very light on the GPU (30 fps, pauses when the window is hidden), static with reduced motion. */
@@ -8,7 +9,7 @@ export function Cosmos() {
     const el = ref.current!;
     const ctx = el.getContext("2d");
     if (!ctx) return;
-    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const reduced = calm;
     let w = 0, h = 0, raf = 0, last = 0;
     const stars = Array.from({ length: 160 }, () => ({ x: Math.random(), y: Math.random(), r: Math.random() * 1.1 + 0.2, t: Math.random() * 6 }));
     const nodes = Array.from({ length: 46 }, () => ({

@@ -1,6 +1,6 @@
 /* =====================================================================================================
    NODO · HOLO — the futuristic layer. Loaded after styles.css: same structure, new skin.
-   Deep space, glass, light that breathes with the voice. Everything respects prefers-reduced-motion.
+   Deep space, glass, light that breathes with the voice. Calm version on request (?calmo): see motion.ts.
    ===================================================================================================== */
 .holo {
   --holo-bg: #04070a; --glass: rgba(14, 22, 28, .58); --glass-strong: rgba(12, 20, 26, .82);
@@ -167,10 +167,17 @@ body { background: #04070a; }
 /* ---- drop zone & small screens */
 .holo .conversation-room.dragging::after { border-color: var(--cyan); box-shadow: inset 0 0 60px #6ff0ff22; }
 @media (max-width: 1200px) { .holo-board { position: static; width: auto; margin: 0 16px 16px; max-height: none; } }
-@media (prefers-reduced-motion: reduce) {
-  .holo-aurora, .holo .nodo-wordmark, .holo .conversation-button::before, .holo-chip i, .holo-eyes .scan, .holo-boot .boot-ring i,
-  .holo .context-sheet, .holo .context-sheet::after, .holo .tab-body.scroll, .holo-board, .holo-board .note { animation: none !important; }
-}
+html.calm .holo-aurora,
+html.calm .holo .nodo-wordmark,
+html.calm .holo .conversation-button::before,
+html.calm .holo-chip i,
+html.calm .holo-eyes .scan,
+html.calm .holo-boot .boot-ring i,
+html.calm .holo .context-sheet,
+html.calm .holo .context-sheet::after,
+html.calm .holo .tab-body.scroll,
+html.calm .holo-board,
+html.calm .holo-board .note { animation: none !important; }
 .holo section.pulse { background: var(--glass) !important; border: 1px solid var(--edge) !important; border-radius: 16px;
   backdrop-filter: blur(14px); box-shadow: 0 10px 40px #0007; animation: holo-in .45s ease-out both; }
 .holo .pulse-eyebrow { font-family: var(--mono); color: var(--cyan); }
@@ -216,39 +223,6 @@ body { background: #04070a; }
 @media (max-width: 760px) { .mind-clock { top: 52px; left: 18px; } .mind-clock b { font-size: 20px; } .mind-log { display: none; }
   .mind-stats { display: none; } }
 
-/* ---------------------------------------------------------------- the opening */
-.intro { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; overflow: hidden; cursor: pointer;
-  background: radial-gradient(ellipse 46% 40% at 50% 58%, rgba(3,8,12,.55), rgba(2,4,7,.985) 78%); transition: opacity .7s ease, filter .7s ease; }
-.intro.p0 { background: #020407; }
-.intro.p3 { opacity: 0; filter: blur(6px); }
-.intro-core { position: absolute; left: 50%; top: 56%; width: 10px; height: 10px; margin: -5px; border-radius: 50%;
-  background: #fff6e6; box-shadow: 0 0 30px 10px #ffd9a0aa, 0 0 120px 40px #46d8e544; opacity: 0; transform: scale(.2); }
-.intro.p1 .intro-core, .intro.p2 .intro-core { animation: core-in .9s cubic-bezier(.2,.9,.2,1) forwards; }
-@keyframes core-in { 0% { opacity: 0; transform: scale(.2); } 40% { opacity: 1; transform: scale(2.6); } 100% { opacity: 1; transform: scale(1); } }
-.intro-wave { position: absolute; left: 50%; top: 56%; width: 180px; height: 180px; margin: -90px; border-radius: 50%;
-  border: 1.5px solid #9ff3ffcc; opacity: 0; box-shadow: 0 0 40px #46d8e5aa, inset 0 0 30px #46d8e566; }
-.intro.p1 .intro-wave, .intro.p2 .intro-wave { animation: shock 1.6s cubic-bezier(.1,.7,.2,1) .15s forwards; }
-.intro.p1 .intro-wave.w2, .intro.p2 .intro-wave.w2 { animation-delay: .45s; border-color: #c9b2ffaa; }
-@keyframes shock { 0% { opacity: .95; transform: scale(.03); } 100% { opacity: 0; transform: scale(11); } }
-.intro-scan { position: absolute; left: 0; right: 0; height: 2px; top: 0; opacity: 0;
-  background: linear-gradient(90deg, transparent, #9ff3ff, transparent); box-shadow: 0 0 24px #46d8e5; }
-.intro.p1 .intro-scan { animation: scan 1.1s ease-in-out .2s forwards; }
-@keyframes scan { 0% { top: 0; opacity: 0; } 15% { opacity: 1; } 100% { top: 100%; opacity: 0; } }
-.intro-title { position: absolute; top: 24%; text-align: center; pointer-events: none; }
-.intro-title h1 { margin: 0; font: 200 clamp(54px, 9vw, 120px)/1 Inter, system-ui, sans-serif; letter-spacing: .5em; padding-left: .5em;
-  color: #eafcff; text-shadow: 0 0 30px #46d8e5aa, 0 0 80px #46d8e544; }
-.intro-title h1 span { display: inline-block; opacity: 0; transform: translateY(18px); filter: blur(10px); }
-.intro.p2 .intro-title h1 span { animation: letter .7s cubic-bezier(.2,.9,.2,1) forwards; }
-@keyframes letter { to { opacity: 1; transform: none; filter: none; } }
-.intro-title p { margin: 22px 0 0; font: 500 12px/1 ui-monospace, Consolas, monospace; letter-spacing: .5em; color: #8fe3d8; opacity: 0; }
-.intro.p2 .intro-title p { animation: chip-in .8s ease-out .6s forwards; }
-.intro-lines { position: absolute; left: 50%; bottom: 9vh; transform: translateX(-50%); margin: 0; padding: 0; list-style: none;
-  display: grid; gap: 6px; min-width: min(460px, 86vw); }
-.intro-lines li { display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; font: 12px/1.4 ui-monospace, Consolas, monospace;
-  color: #b9d9df; animation: chip-in .35s ease-out both; }
-.intro-lines li i { font-style: normal; color: #5f8c95; }
-.intro-lines li b { color: #7ff0c4; font-weight: 600; letter-spacing: .12em; }
-
 /* ---------------------------------------------------------------- la squadra (quartier generale) */
 .team { position: relative; height: 100%; min-height: 560px; overflow: hidden;
   background: radial-gradient(ellipse 70% 55% at 50% 62%, #0f2a33 0%, #071116 55%, #03070a 100%); }
@@ -275,3 +249,10 @@ body { background: #04070a; }
 .team-card li { font: 12px/1.4 ui-monospace, Consolas, monospace; color: #b7d2d8; }
 .team-card li::before { content: "▸ "; color: var(--c); }
 @media (max-width: 760px) { .team-head h2 { font-size: 24px; } .team-card { right: 12px; left: 12px; width: auto; top: auto; bottom: 12px; } }
+
+/* ---------------------------------------------------------------- the opening (Intro.tsx draws it on one canvas) */
+.intro { position: fixed; inset: 0; z-index: 100; background: #010306; cursor: pointer; transition: opacity .75s ease, filter .75s ease; }
+.intro.leaving { opacity: 0; filter: blur(8px) brightness(1.6); }
+.intro-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.intro-skip { position: absolute; right: 26px; bottom: 18px; font: 11px/1 Consolas, ui-monospace, monospace; letter-spacing: .18em;
+  text-transform: uppercase; color: #5f8c95; opacity: .55; pointer-events: none; }
