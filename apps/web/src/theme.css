@@ -190,11 +190,12 @@ body { background: #04070a; }
 /* ---------------------------------------------------------------- la mente: Maria's memory, live */
 .mind { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
 .mind-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-.holo .voice-stage { cursor: grab; }
-.holo .voice-stage:active { cursor: grabbing; }
+.holo .voice-stage { cursor: default; }
+.holo .mind-spacer { cursor: grab; touch-action: pan-y; }
+.holo .mind-spacer:active { cursor: grabbing; }
 .holo .voice-stage :is(button, a, input, textarea, select) { cursor: pointer; }
 .holo .voice-stage :is(input, textarea) { cursor: text; }
-.mind-spacer { height: clamp(260px, 44vh, 480px); pointer-events: none; }
+.mind-spacer { height: clamp(260px, 44vh, 480px); pointer-events: auto; }
 .mind-clock { position: absolute; left: 28px; top: 150px; display: grid; gap: 2px; pointer-events: none; }
 .mind-clock b { font: 600 26px/1 ui-monospace, "JetBrains Mono", Consolas, monospace; letter-spacing: .04em; color: #e8f7fb;
   text-shadow: 0 0 18px #46d8e555; }

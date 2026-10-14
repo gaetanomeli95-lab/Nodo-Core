@@ -86,6 +86,8 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
     app = FastAPI(title="NODO CORE", version="0.2.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.container = container or build_container(settings)
+    from nodo.launch import fingerprint
+    build_id = fingerprint()
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])
     app.include_router(entities.router)
     app.include_router(command.router)
@@ -103,7 +105,8 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
 
     @app.get("/health")
     def health():
-        return {"status": "ok", "mode": settings.mode, "env": settings.env}
+        return {"status": "ok", "service": "nodo-core", "build_id": build_id,
+                "mode": settings.mode, "env": settings.env}
 
     # one process, one URL: serve the built web app (apps/web/dist) when present
     dist = Path(os.environ.get("NODO_WEB_DIST") or Path(__file__).resolve().parents[2] / "web" / "dist")

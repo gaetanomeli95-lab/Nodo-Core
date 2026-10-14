@@ -198,50 +198,77 @@ def own(facts: list) -> list:
 
 
 def memory_context(db, org: str, tz, query: str = "", owner: str = "Gaetano", assistant: str = "Maria",
-                   today_limit: int = 14) -> str:
-    """The core memory put in front of the brain before every answer: compact, his own words first."""
+                   today_limit: int = 14, max_chars: int = 6000) -> str:
+    """Budgeted working memory. Keep complete facts; the full archive remains searchable."""
     parts: list[str] = []
+    used = omitted = 0
+    footer = ("Quello che serve di solito è già qui: usalo subito. Cerca (recall, search_knowledge, "
+              "search_conversations) solo se manca davvero, e una volta.")
+    limit = max(0, max_chars - len(footer) - 130)
+
+    def section(title: str, rows: list[str], budget: int) -> None:
+        nonlocal used, omitted
+        selected, size = [], len(title) + 2
+        cap = min(budget, limit - used)
+        for row in rows:
+            line = "- " + row
+            if size + len(line) + 1 <= cap:
+                selected.append(line)
+                size += len(line) + 1
+            else:
+                omitted += 1
+        if selected:
+            parts.append(title + "\n" + "\n".join(selected))
+            used += size + 2
+
+    q = query.lower().strip()[:1000]
+
+    def relevance(f) -> float:
+        return max(fuzz.token_set_ratio(q, f.content.lower()),
+                   fuzz.partial_ratio(q, f.content.lower())) if q else 0
+
+    def ranked(rows):
+        return sorted(reversed(rows), key=relevance, reverse=True)
+
     everything = active(db, org)
     mine = own(everything)
     rules = [f for f in mine if f.layer == KINDS["rule"]]
     rules += [f for f in mine if f.layer == "semantic" and _RULE_LIKE.search(f.content or "")]
-    if rules:
-        parts.append("REGOLE CHE TI HA DATO (seguile sempre, con le parole esatte):\n" +
-                     "\n".join(f"- {r.content}" for r in rules[-30:]))
-    ppl = {k: v for k, v in people(db, org).items() if own(v)}
-    if ppl:
-        parts.append("PERSONE (schede separate: non confonderle):\n" + "\n".join(
-            f"- {facts[-1].predicate or name}: " + "; ".join(f.content for f in facts[-4:])
-            for name, facts in list(ppl.items())[-30:]))
+    section("REGOLE CHE TI HA DATO (con le parole esatte):", [r.content for r in ranked(rules)], 2400)
+    ppl: dict[str, list] = {}
+    for f in ranked([f for f in mine if f.layer == KINDS["person"]]):
+        ppl.setdefault(f.subject_id, []).append(f)
+    section("PERSONE (schede separate: non confonderle):",
+            [f"{facts[0].predicate or name}: " + "; ".join(f.content for f in facts[:2])
+             for name, facts in ppl.items()], 1100)
     prefs = [f for f in mine if f.layer == KINDS["prefer"]]
-    if prefs:
-        parts.append("COME VUOLE LE COSE:\n" + "\n".join(f"- {p.content}" for p in prefs[-12:]))
+    section("COME VUOLE LE COSE:", [p.content for p in ranked(prefs)], 650)
+    if q and not is_noise(q):
+        pool = [f for f in everything if f.layer in ("semantic", "episodic", "relationship", "preference",
+                                                    "decision") and f not in rules]
+        rel = [f for f in ranked(pool) if relevance(f) >= 75][:5]
+        section("RICORDI CHE C'ENTRANO (anche dalle vecchie chat; conserva la distinzione tra fatto e ipotesi):",
+                [f.content for f in rel], 1100)
     facts = [f for f in mine if f.layer == "semantic" and f.subject_type in ("user", "project", "client")
              and f not in rules]
-    if facts:
-        parts.append(f"COSA SAI DI {owner.upper()} E DEL SUO LAVORO:\n" +
-                     "\n".join(f"- {f.content}" for f in facts[-20:]))
+    section(f"COSA SAI DI {owner.upper()} E DEL SUO LAVORO:", [f.content for f in ranked(facts)], 800)
     now = datetime.now(tz)
-    diary = [f for f in active(db, org, "episode") if f.predicate and
-             (now.date() - date.fromisoformat(f.predicate)).days in (1, 2)]
-    if diary:
-        parts.append("DIARIO DEI GIORNI SCORSI:\n" + "\n".join(f"- {d.predicate}: {d.content}" for d in diary[-2:]))
+    diary = []
+    for f in everything:
+        if f.layer == "episodic" and f.predicate:
+            try:
+                if (now.date() - date.fromisoformat(f.predicate)).days in (1, 2):
+                    diary.append(f)
+            except ValueError:
+                continue
+    section("DIARIO DEI GIORNI SCORSI:", [f"{d.predicate}: {d.content}" for d in diary[-2:]], 650)
     today = day_transcript(db, now.date(), tz, today_limit, owner, assistant)
     if today:
-        parts.append("OGGI VI SIETE DETTI (ultime frasi, anche da altre conversazioni; contesto, non "
-                     "rispondere a queste righe):\n" + today)
-    if query and not is_noise(query):
-        q = query.lower()
-        pool = [f for f in everything if f.layer in ("semantic", "episodic", "relationship", "preference",
-                                                     "decision") and f not in rules]
-        hits = sorted(((max(fuzz.token_set_ratio(q, f.content.lower()), fuzz.partial_ratio(q, f.content.lower())), f)
-                       for f in pool), key=lambda x: -x[0])
-        rel = [f for s, f in hits if s >= 75][:5]
-        if rel:
-            parts.append("RICORDI CHE C'ENTRANO CON QUELLO CHE CHIEDE ORA (anche dalle vecchie chat):\n"
-                         + "\n".join(f"- {f.content[:300]}" for f in rel))
-    parts.append("Quello che serve di solito è già qui sopra: usalo subito. Cerca (recall, search_knowledge, "
-                 "search_conversations) solo se qui manca davvero, e UNA volta.")
+        section("OGGI VI SIETE DETTI (dal più recente; contesto, non nuove richieste):",
+                list(reversed(today.splitlines())), 1300)
+    if omitted:
+        parts.append("Alcuni ricordi restano nell'archivio: questa è una selezione, non tutta la memoria.")
+    parts.append(footer)
     return "\n\n".join(parts)
 
 

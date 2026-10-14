@@ -671,6 +671,7 @@ def test_live_pensa_hands_the_answer_to_the_claude_brain(client, container, monk
     seen = []
 
     async def fake_run(self, text):
+        assert self.directed
         seen.append(text)
         yield {"type": "step", "request_id": "r", "at": "t", "step": "tool:ledger_report", "status": "done",
                "ok": True}
@@ -690,8 +691,7 @@ def test_live_pensa_hands_the_answer_to_the_claude_brain(client, container, monk
     names = [d["name"] for d in config["tools"][0]["function_declarations"]]
     assert names[0] == "pensa" and "ledger_add" not in names and "decide" in names   # Gemini cannot act alone
     assert "le orecchie e la bocca di Maria" in config["system_instruction"]
-    assert len(seen) == 1 and seen[0].startswith("Quanto mi deve Marcello?\n")   # Gaetano's own words first
-    assert "rispondi" in seen[0]                                   # Gemini already decided it was for Maria
+    assert seen == ["Quanto mi deve Marcello?"]
     result = session.tool_responses[0]["response"]["result"]
     assert result["risposta"].startswith("Marcello ci deve 30 euro")
     assert any(e["type"] == "nodo.step" and e["step"] == "tool:ledger_report" for e in events)
@@ -734,6 +734,7 @@ async def test_pensa_ignores_noise_and_keeps_the_real_question(container, engine
     seen = []
 
     async def fake_run(self, text):
+        assert self.directed
         seen.append(text)
         self.text = "Hai tre sospesi."
         return

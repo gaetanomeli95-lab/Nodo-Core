@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { get } from "../../api";
 import type { PresenceMode } from "../Presence";
+import { orbitRadii } from "./mindMotion";
 
 /** Maria's mind, live: the real memory (people, rules, facts, diary, customers, products, the board) as a 3D
  *  constellation that turns slowly around her. When a name is heard or said, its node lights up and the links
@@ -155,6 +156,7 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
 
     const draw = (t: number) => {
       raf = requestAnimationFrame(draw);
+      if (document.hidden) { last = t; return; }
       const dt = Math.min(0.1, (t - last) / 1000);
       if (dt < 1 / 40) return;                           // ~30 fps: plenty, and gentle on a small PC
       last = t;
@@ -168,6 +170,7 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
       const rot = dr.rot + dr.sx * 0.5, tilt = Math.max(-0.2, Math.min(1.1, dr.tilt + dr.sy * 0.25));
       ctx.clearRect(0, 0, W, H);
       const cr = Math.cos(rot), sr = Math.sin(rot), ct = Math.cos(tilt), st = Math.sin(tilt);
+      const orbit = orbitRadii(S, st);
       const proj = (x: number, y: number, z: number) => {
         const x1 = x * cr + z * sr, z1 = -x * sr + z * cr;
         const y2 = y * ct - z1 * st, z2 = y * st + z1 * ct;
@@ -177,10 +180,10 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
       // the orbit: a dashed ring with a few lights running on it
       ctx.save();
       ctx.strokeStyle = "rgba(160,220,235,.22)"; ctx.lineWidth = 1 * dpr; ctx.setLineDash([2 * dpr, 7 * dpr]);
-      ctx.beginPath(); ctx.ellipse(cx, cy + S * 0.05, S * 1.62, S * 1.62 * st * 0.9 + S * 0.08, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(cx, cy + S * 0.05, orbit.x, orbit.y, 0, 0, Math.PI * 2); ctx.stroke();
       ctx.setLineDash([]);
       for (let k = 0; k < 3; k++) {
-        const a = rot * 2 + k * 2.1, ex = cx + Math.cos(a) * S * 1.62, ey = cy + S * 0.05 + Math.sin(a) * (S * 1.62 * st * 0.9 + S * 0.08);
+        const a = rot * 2 + k * 2.1, ex = cx + Math.cos(a) * orbit.x, ey = cy + S * 0.05 + Math.sin(a) * orbit.y;
         ctx.fillStyle = "rgba(190,240,255,.8)"; ctx.beginPath(); ctx.arc(ex, ey, 1.8 * dpr, 0, Math.PI * 2); ctx.fill();
       }
       // thinking: waves of light leave her core and run across the orbit; speaking: they beat with the voice
@@ -292,22 +295,25 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
     return () => { cancelAnimationFrame(raf); ro.disconnect(); };
   }, []);
 
-  useEffect(() => {                                   // the hand turns her mind anywhere on the stage
+  useEffect(() => {                                   // drag only inside the mind's visible area
     const free = (el: EventTarget | null) => el instanceof Element
+      && !!el.closest(".mind-spacer")
       && !el.closest("button, a, input, textarea, select, label, [role=button], .board, .context-sheet, .viewer, .palette, nav, header, aside");
     const down = (e: PointerEvent) => { if (e.button === 0 && free(e.target)) { const d = drag.current; d.on = true; d.x = e.clientX; d.y = e.clientY; } };
     const move = (e: PointerEvent) => {
       const d = drag.current;
-      d.px = e.clientX / window.innerWidth - 0.5; d.py = e.clientY / window.innerHeight - 0.5;
+      if (free(e.target) || d.on) {
+        d.px = e.clientX / window.innerWidth - 0.5; d.py = e.clientY / window.innerHeight - 0.5;
+      }
       if (!d.on) return;
       d.rot += (e.clientX - d.x) * 0.006; d.tilt = Math.max(-0.2, Math.min(1.1, d.tilt + (e.clientY - d.y) * 0.004));
       d.x = e.clientX; d.y = e.clientY;
     };
     const up = () => { drag.current.on = false; };
     window.addEventListener("pointerdown", down); window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up); window.addEventListener("blur", up);
+    window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up); window.addEventListener("blur", up);
     return () => { window.removeEventListener("pointerdown", down); window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up); window.removeEventListener("blur", up); };
+      window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up); window.removeEventListener("blur", up); };
   }, []);
 
   return <div className="mind" aria-hidden="true">

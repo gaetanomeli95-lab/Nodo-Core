@@ -37,8 +37,8 @@ from nodo.providers.base import (
     ToolTurn,
     estimate_tokens,
 )
-from nodo.providers.text_tools import TOOL_PROTOCOL, _parse, _render_transcript  # noqa: F401
 from nodo.providers.cli_process import run_cli
+from nodo.providers.text_tools import TOOL_PROTOCOL, _parse, _render_transcript  # noqa: F401
 
 OPTIONAL_FLAGS = ["--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--effort"]
 

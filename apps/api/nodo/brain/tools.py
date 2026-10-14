@@ -600,14 +600,28 @@ class Toolbox(ExtraTools):
                 "note": f"immagine salvata ({engine}): il link si apre dal pannello o incollandolo nel browser"}
 
 
-def recent_history(s, conv_id: str, limit: int, exclude_request: str | None = None) -> list[dict]:
+def recent_history(s, conv_id: str, limit: int, exclude_request: str | None = None,
+                   max_chars: int = 8000) -> list[dict]:
     rows = s.scalars(select(Message).where(Message.conversation_id == conv_id).order_by(Message.created_at.desc())
                      .limit(limit + 1)).all()
     out = [{"role": "user" if m.role == "user" else "assistant", "content": m.content}
-           for m in reversed(rows) if m.request_id != exclude_request and m.content and m.role in ("user", "nodo")]
+           for m in reversed(rows) if (exclude_request is None or m.request_id != exclude_request)
+           and m.content and m.role in ("user", "nodo")]
     while out and out[0]["role"] != "user":  # start the transcript on a user turn
         out.pop(0)
-    return out[-limit:]
+    kept, used = [], 0
+    for m in reversed(out[-limit:]):
+        content = m["content"]
+        if len(content) > 2400:
+            content = content[:1200] + "\n[Messaggio abbreviato; originale nel diario]\n" + content[-1100:]
+        if used + len(content) > max_chars:
+            break
+        kept.append({**m, "content": content})
+        used += len(content)
+    kept.reverse()
+    while kept and kept[0]["role"] != "user":
+        kept.pop(0)
+    return kept
 
 
 def result_text(data: dict, limit: int = 6000) -> str:

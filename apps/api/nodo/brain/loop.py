@@ -80,15 +80,16 @@ def sentences(text: str) -> list[str]:
 
 
 class Brain:
-    def __init__(self, core, conv, request_id: str, channel: str = "text"):
+    def __init__(self, core, conv, request_id: str, channel: str = "text", *, directed: bool = False):
         self.core, self.conv, self.request_id, self.channel = core, conv, request_id, channel
         self.s, self.org, self.settings = core.s, core.org, core.settings
         self.provider: str | None = None
         self.model: str | None = None
         self.tools_used: list[str] = []
+        self.directed = directed
 
     # ------------------------------------------------------------------ context
-    def snapshot(self, query: str = "") -> str:
+    def snapshot(self, query: str = "", *, max_chars: int = 10000) -> str:
         tz = B.tzinfo(self.settings.timezone)
         now = datetime.now(tz)
         lines = [f"Adesso: {_DAYS[now.weekday()]} {now.day} {_MONTHS[now.month - 1]} {now.year}, ore {now:%H:%M}.",
@@ -155,7 +156,14 @@ class Brain:
         if k["conversations"]:
             lines.append(f"Hai accesso a {k['conversations']} vecchie conversazioni di Gaetano con ChatGPT/Claude "
                          f"(search_knowledge) e a {k['facts']} fatti distillati da esse.")
-        return "\n".join(lines)
+        priority = [mem] if mem else []
+        priority += [line for line in lines if line != "\n" + mem]
+        selected, used = [], 0
+        for line in priority:
+            if used + len(line) + 1 <= max_chars:
+                selected.append(line)
+                used += len(line) + 1
+        return "\n".join(selected)
 
     # ------------------------------------------------------------------ the loop
     async def run(self, text: str) -> AsyncIterator[dict]:
@@ -163,11 +171,31 @@ class Brain:
         model produced anything (nothing has been said yet, so the caller can fall back)."""
         rid = self.request_id
         box = Toolbox(self.core, self.conv, rid, text, self.channel)
+        from nodo.brain.quick_read import answer, match_read
+        if quick := match_read(text):
+            name, args = quick
+            yield _ev("step", rid, step=f"tool:{name}", status="running", arguments=args)
+            result = await box.call(name, args)
+            yield _ev("step", rid, step=f"tool:{name}", status="done", ok="error" not in result)
+            if response := answer(name, result):
+                self.tools_used.append(name)
+                self.provider, self.model, self.text = "nodo", "register-read", response
+                from nodo.brain.surfaces import surface_for
+                if card := surface_for(name, result):
+                    yield _ev("ui.present", rid, **card)
+                for sent in sentences(response):
+                    yield _ev("token", rid, delta=sent + " ")
+                    yield _ev("sentence", rid, text=sent)
+                return
         messages: list[dict] = [{"role": "system", "content": build_persona(self.settings, self.snapshot(text))}]
-        messages += recent_history(self.s, self.conv.id, self.settings.brain_history, exclude_request=rid)
+        if self.directed:
+            messages[0]["content"] += ("\nQuesta richiesta è già stata rivolta a te. Rispondi o chiedi un "
+                                       "chiarimento breve: non usare il segnale di silenzio.")
+        history = recent_history(self.s, self.conv.id, self.settings.brain_history, exclude_request=rid)
+        messages += history
         messages.append({"role": "user", "content": text})
         from nodo.brain.toolsets import pick
-        recent = " ".join(str(m.get("content") or "")[:300] for m in messages[-5:-1])
+        recent = " ".join(str(m.get("content") or "")[:300] for m in history[-4:])
         wanted = pick([sp.name for sp in box.specs()], f"{text} {recent}")
         specs = [sp for sp in box.specs() if sp.name in wanted]     # ~half the tokens: answers come sooner
         started = time.monotonic()
@@ -207,8 +235,8 @@ class Brain:
                 messages.append({"role": "user", "content": fix})
                 continue
             if interim and _SILENCE.fullmatch(interim):
-                interim = ""                     # it chose to stay quiet (Gaetano is talking to someone else)
-                self.silent = True
+                interim = "Non ho capito bene la richiesta. Me la ripeti?" if self.directed else ""
+                self.silent = not self.directed
             if interim:
                 # a short "un attimo, controllo" before tools is spoken right away; the final answer closes the turn
                 said.append(interim)

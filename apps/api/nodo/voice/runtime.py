@@ -17,6 +17,7 @@ import asyncio
 import logging
 import random
 import re
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -123,6 +124,8 @@ class VoiceRuntime:
         self._live_tools: dict[str, asyncio.Task] = {}
         self._live_tool_lock = asyncio.Lock()
         self._think_ids: set[str] = set()         # the «pensa» call in flight (only the newest one runs)
+        self._think_keys: dict[str, tuple] = {}
+        self._think_results: dict[tuple, dict] = {}
         self._superseded: set[str] = set()
         self._live_results: dict[str, dict] = {}
         self._pensa_error: str | None = None   # a failed «pensa» is not retried within the same turn
@@ -195,7 +198,8 @@ class VoiceRuntime:
     async def _set_conversation(self, conversation_id: str | None) -> None:
         """Sync text and voice to the same thread; never switch during an active turn or approval."""
         vs = self.vs
-        if (self._live_recovery and not self._live_recovery.done()) or self._live_tools:
+        if ((self._live_recovery and not self._live_recovery.done()) or
+                any(not task.done() for task in self._live_tools.values())):
             await self._send("error", where="conversation", message="Attendi che NODO finisca il lavoro in corso")
             return
         if vs.turn_active or vs.pending_approval_id or vs.state in (
@@ -516,7 +520,7 @@ class VoiceRuntime:
     async def _start_live(self, resume_model: str | None = None, resume_handle: str | None = None) -> None:
         """Opens the real-time session: persona + tools identical to the text brain, but audio in/out."""
         from nodo.brain.loop import Brain
-        from nodo.brain.persona import LIVE_BRAIN, LIVE_STYLE, build_persona
+        from nodo.brain.persona import build_live_persona
         from nodo.brain.tools import Toolbox, recent_history
 
         rid = f"voice-live-{self.vs.id[:8]}"
@@ -524,7 +528,8 @@ class VoiceRuntime:
             core = self.c.core(sdb)
             conv = core._conversation(self.vs.conversation_id, "voice")
             self.vs.conversation_id = conv.id
-            system = build_persona(self.c.settings, Brain(core, conv, rid, "voice").snapshot()[:6000]) + LIVE_STYLE
+            system = build_live_persona(self.c.settings, Brain(core, conv, rid, "voice").snapshot(),
+                                        delegated=self.c.settings.live_brain)
             hist = recent_history(sdb, conv.id, 8)
             if hist and not resume_handle:
                 system += ("\n\nConversazione recente (contesto, non rispondere a queste righe):\n"
@@ -534,12 +539,11 @@ class VoiceRuntime:
             if self.c.settings.live_brain:
                 # Gemini is fast but shallow and claims things it did not do: it keeps only the ears, the mouth and
                 # the yes/no of a decision; every real answer comes from the Claude brain through «pensa»
-                system += LIVE_BRAIN
                 decls = [THINK_DECL] + [d for d in decls if d["name"] in _LIVE_OWN_TOOLS]
             # the text brain writes «[silenzio]» to stay quiet; a VOICE reads it aloud («silenzio, silenzio…»)
             system = system.replace("scrivi soltanto [silenzio]", "stai zitta, non dire nessuna parola")
-            # Live 3.8 runs tools NON-BLOCKING by default: it kept talking while the brain worked and made answers
-            # up («sto analizzando i dati in tempo reale»), then called pensa again. Every tool waits for its result.
+            # Keep the wait explicit across Live models: the voice must use the actual tool result,
+            # not improvise an answer while the brain is still working.
             decls = [{**d, "behavior": "BLOCKING"} for d in decls]
             sdb.commit()  # Advertise only a durable, valid conversation ID.
         bridge = live_engine.LiveBridge(self.c.settings, self._on_live_event,
@@ -621,18 +625,23 @@ class VoiceRuntime:
             await self._send("nodo.token", delta=ev["text"])
         elif kind == "tool_call":                            # same toolbox and guards as the text brain
             await self._live_finalize_input()
-            ev = {**ev, "user_text": self._in_text}
+            ev = {**ev, "user_text": self._in_text, "generation": self._gen}
             if vs.state != VoiceState.ACTING:
                 await self._live_go(VoiceState.IDLE, VoiceState.UNDERSTANDING,
                                     VoiceState.THINKING, VoiceState.ACTING)
             # Keep receiving interruptions, resumption tokens and GoAway during slow tools.
+            self._live_tools = {key: task for key, task in self._live_tools.items() if not task.done()}
             cid = ev["id"]
             if ev.get("name") == THINK_DECL["name"]:
+                key = self._think_key(ev)
+                ev["request_key"] = key
+                self._think_keys[cid] = key
                 for old_id in [k for k in self._think_ids if k != cid]:
-                    if (task := self._live_tools.get(old_id)) and not task.done():
+                    if (self._think_keys.get(old_id) != key and
+                            (task := self._live_tools.get(old_id)) and not task.done()):
                         self._superseded.add(old_id)
                         task.cancel()
-                self._think_ids = {cid}
+                self._think_ids.add(cid)
             if cid not in self._live_tools or self._live_tools[cid].done():
                 self._live_tools[cid] = asyncio.create_task(self._run_live_tool(ev, self._live))
         elif kind == "interrupted":                          # you spoke over it: Gemini stopped itself
@@ -647,6 +656,7 @@ class VoiceRuntime:
                 except Exception:
                     pass
                 self._gen += 1
+                self._cancel_live_thoughts()
                 await self._send("voice.interrupted", reason="barge_in", during="SPEAKING")
                 await self._set_state(VoiceState.LISTENING)
         elif kind == "turn_complete":
@@ -674,7 +684,8 @@ class VoiceRuntime:
     async def _run_live_tool(self, call: dict, bridge) -> None:
         try:
             async with self._live_tool_lock:
-                if self._live is bridge and not self._dead:
+                if (self._live is bridge and not self._dead and
+                        call.get("generation", self._gen) == self._gen):
                     await self._live_tool_calls([call], bridge)
         except asyncio.CancelledError:
             if call.get("id") in self._superseded:
@@ -695,6 +706,21 @@ class VoiceRuntime:
                 await self._live_dropped(str(e))
         except Exception:
             log.exception("live tool task failed")
+        finally:
+            self._think_ids.discard(call.get("id"))
+            self._think_keys.pop(call.get("id"), None)
+
+    def _think_key(self, call: dict) -> tuple:
+        def key(text):
+            return " ".join(str(text or "").casefold().split()).rstrip(".?!")
+        heard = call.get("user_text", self._in_text)
+        return (self._gen, self.vs.turn_number,
+                key(call.get("args", {}).get("richiesta") or heard), key(heard))
+
+    def _cancel_live_thoughts(self) -> None:
+        for cid in tuple(self._think_ids):
+            if (task := self._live_tools.get(cid)) and not task.done():
+                task.cancel()
 
     async def _live_dropped(self, reason: str) -> None:
         """Single recovery owner; receive callbacks must not reconnect inside their own pump."""
@@ -770,10 +796,16 @@ class VoiceRuntime:
                 if c["id"] and c["id"] in self._live_results:
                     result = self._live_results[c["id"]]
                 elif c["name"] == THINK_DECL["name"]:
+                    key = c.get("request_key") or self._think_key(c)
                     if self._pensa_error:
                         result = {"error": self._pensa_error}
+                    elif key in self._think_results:
+                        result = self._think_results[key]
                     else:
-                        result = await self._live_think(c["args"], bindings)
+                        result = await self._live_think(c["args"], bindings, heard=c.get("user_text"))
+                        self._think_results[key] = result
+                        while len(self._think_results) > 8:
+                            self._think_results.pop(next(iter(self._think_results)))
                         if "error" in result:
                             # A failed brain must not be retried inside the same turn: Gemini would
                             # otherwise re-call pensa forever. Tell it to answer honestly instead.
@@ -812,6 +844,8 @@ class VoiceRuntime:
                     result = {"error": self._pensa_error}
                 else:
                     result = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+            if c.get("generation", self._gen) != self._gen:
+                return  # A reply completed after interruption must not speak over the new question.
             responses.append((c["id"], c["name"], result))
             await self._send("nodo.step", step=f"tool:{c['name']}", status="done",
                              ok="error" not in result)
@@ -830,12 +864,13 @@ class VoiceRuntime:
                                  if k in ("approval_id", "tool", "action", "level", "label", "params",
                                           "site", "preview_url", "pr_url")})
 
-    async def _live_think(self, args: dict, bindings: list[dict]) -> dict:
+    async def _live_think(self, args: dict, bindings: list[dict], *, heard: str | None = None) -> dict:
         """«pensa»: the Claude brain (memory, register, tools, honesty guard) answers; Live only says it."""
         from nodo.brain.loop import Brain, BrainUnavailable
+        from nodo.brain.quick_read import match_read
         from nodo.memory.mind import is_babble
 
-        heard = (self._in_text or "").strip()
+        heard = (self._in_text if heard is None else heard).strip()
         asked = str(args.get("richiesta") or "").strip()
         if not asked and (not heard or is_babble(heard)):
             # a cough, the TV, a customer in Spanish: no brain run (each one costs 15-30 s and blocks the next)
@@ -844,21 +879,20 @@ class VoiceRuntime:
             text = asked
         else:
             text = heard
-            if asked and asked.lower() not in heard.lower():
+            if asked and asked.lower() not in heard.lower() and not match_read(heard):
                 text += f"\n(La voce ha capito così: {asked})"
         # Gemini already decided this was for Maria: the brain must answer, not choose «[silenzio]» because the
         # microphone also caught the shop around him (that silence was read aloud and the question came back
         # again and again: fifteen «sospesi» in ten minutes)
-        text += ("\n(Arriva dalla voce dal vivo, che ha già capito che è una domanda per te: rispondi, breve. "
-                 "Il microfono può aver preso anche rumore o altre persone: ignora quella parte.)")
         rid = f"voice-think-{self.vs.id[:8]}-{self.vs.turn_number}"
         with self._db() as sdb:
             core = self.c.core(sdb)
             conv = core._conversation(self.vs.conversation_id, "voice")
             self.vs.conversation_id = conv.id
-            brain = Brain(core, conv, rid, "voice")
+            brain = Brain(core, conv, rid, "voice", directed=True)
+            started = time.monotonic()
             try:
-                async with asyncio.timeout(self.c.settings.brain_deadline_s + 25):
+                async with asyncio.timeout(self.c.settings.brain_deadline_s):
                     await self._think_events(brain, text, bindings)
             except TimeoutError:
                 log.warning("pensa took too long")
@@ -870,6 +904,9 @@ class VoiceRuntime:
                 log.exception("pensa failed")
                 return {"error": "Il cervello ha avuto un problema tecnico: dillo a Gaetano in una frase, "
                                  "non inventare la risposta."}
+            finally:
+                log.info("pensa finished request=%s elapsed_ms=%.0f provider=%s model=%s tools=%s",
+                         rid, (time.monotonic() - started) * 1000, brain.provider, brain.model, brain.tools_used)
             sdb.commit()
         if getattr(brain, "silent", False) or not (brain.text or "").strip():
             return self._quiet()
@@ -1002,6 +1039,7 @@ class VoiceRuntime:
         except Exception:
             return
         self._gen += 1
+        self._cancel_live_thoughts()
         self._drain_speech_q()
         self._log("voice.interrupt", {"reason": reason, "during": during})
         await self._send("voice.interrupted", reason=reason, during=during)

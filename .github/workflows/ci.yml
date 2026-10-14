@@ -29,3 +29,21 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+
+  windows-voice:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: validate Windows launcher syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD "scripts/avvia-nodo.ps1"), [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
+      - run: pip install -e ".[dev]"
+        working-directory: apps/api
+      - run: pytest -q tests/test_cli_process.py tests/test_launch.py tests/test_brain.py tests/test_cooperation.py
+        working-directory: apps/api

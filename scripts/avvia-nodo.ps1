@@ -22,6 +22,17 @@ $Py = Join-Path $Venv "Scripts\python.exe"
 function Say($msg) { Write-Host "[NODO] $msg" -ForegroundColor Cyan }
 function Warn($msg) { Write-Host "[NODO] $msg" -ForegroundColor Yellow }
 
+# Reopen the unchanged, healthy local instance before dependency checks and migrations.
+if ((Test-Path $Py) -and -not $Demo -and -not $PrepareOnly -and -not $Console) {
+  Push-Location $Api
+  $reuseArgs = @("-m", "nodo.launch", "--port", "$Port")
+  if ($NoBrowser) { $reuseArgs += "--no-browser" }
+  & $Py @reuseArgs
+  $reused = $LASTEXITCODE -eq 0
+  Pop-Location
+  if ($reused) { exit 0 }
+}
+
 # 1. Python 3.12+
 function Find-Python {
   foreach ($v in @("3.13", "3.12")) {
@@ -54,7 +65,12 @@ if (-not (Test-Path $stamp) -or ((Get-Item $pyproject).LastWriteTime -gt (Get-It
   & $Py -m pip install -e ".[browser,live,tray]" --quiet
   if ($LASTEXITCODE -ne 0) { Warn "Installo senza i controlli via browser..."; & $Py -m pip install -e ".[live,tray]" --quiet }
   if ($LASTEXITCODE -ne 0) { Warn "Installo solo il minimo..."; & $Py -m pip install -e . --quiet }
+  $installOk = $LASTEXITCODE -eq 0
   Pop-Location
+  if (-not $installOk) {
+    Warn "Installazione non riuscita: controlla gli errori qui sopra e riprova."
+    Read-Host "Premi Invio per chiudere"; exit 1
+  }
   # 3. Chromium for the browser checks (optional, ~150 MB)
   & $Py -c "import playwright" 2>$null
   if ($LASTEXITCODE -eq 0) {
@@ -116,16 +132,9 @@ Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 $busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
 if ($busy) {
-  foreach ($procId in ($busy | Select-Object -ExpandProperty OwningProcess -Unique)) {
-    $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
-    if ($p) {
-      Warn "C'e' gia' un programma sulla porta $Port ($($p.ProcessName), pid $procId): lo chiudo per avviare NODO aggiornato."
-      Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
-    }
-  }
   Start-Sleep -Seconds 2
   if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
-    Warn "La porta $Port e' ancora occupata: riavvia il PC oppure avvia NODO con  avvia-nodo.bat -Port 8010"
+    Warn "La porta $Port e' occupata da un altro processo: chiudilo oppure avvia NODO con  avvia-nodo.bat -Port 8010"
     Read-Host "Premi Invio per chiudere"; exit 1
   }
 }

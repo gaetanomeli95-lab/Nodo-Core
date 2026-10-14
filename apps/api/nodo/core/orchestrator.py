@@ -103,7 +103,9 @@ class NodoCore:
         outcome = RequestOutcome(request_id, conv.id, "", "general")
         try:
             intent = self.intents.classify(text, conv.active_context)
-            if intent.name != "stop" and self.brain_enabled():
+            from nodo.brain.quick_read import match_read
+            if intent.name != "stop" and (self.brain_enabled() or
+                    (self.settings.brain != "off" and match_read(text))):
                 async for ev in self._brain_turn(text, conv, request_id, channel, outcome):
                     yield ev
                 if outcome.intent == "conversation":  # the brain answered; otherwise fall back to the rules below
