@@ -11,6 +11,7 @@ rule-based pipeline, so NODO always answers.
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
@@ -156,13 +157,18 @@ class Brain:
         messages: list[dict] = [{"role": "system", "content": build_persona(self.settings, self.snapshot(text))}]
         messages += recent_history(self.s, self.conv.id, self.settings.brain_history, exclude_request=rid)
         messages.append({"role": "user", "content": text})
-        specs = box.specs()
+        from nodo.brain.toolsets import pick
+        recent = " ".join(str(m.get("content") or "")[:300] for m in messages[-5:-1])
+        wanted = pick([sp.name for sp in box.specs()], f"{text} {recent}")
+        specs = [sp for sp in box.specs() if sp.name in wanted]     # ~half the tokens: answers come sooner
+        started = time.monotonic()
         said: list[str] = []
         guarded = False
         bound_sent: set[str] = set()
         max_steps = max(1, self.settings.brain_max_steps)
         for step in range(max_steps + 1):
-            last = step == max_steps
+            # never keep Gaetano waiting for minutes: after the deadline, answer with what is known
+            last = step == max_steps or time.monotonic() - started > self.settings.brain_deadline_s
             # release the database while the model thinks (seconds): background jobs and the night shift can write
             self.s.commit()
             # «voce precisa» (the default) wants the BEST brain even on voice: speed is not worth wrong answers

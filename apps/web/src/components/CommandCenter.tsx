@@ -264,6 +264,15 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const mode: PresenceMode = voice.recovering ? "reconnect" : decision ? "approve" : voice.audioPlaying ? "speak"
     : activity ? "act" : busy || ["THINKING", "UNDERSTANDING", "ACTING"].includes(voice.state) ? "think"
     : voice.microphoneOn ? "listen" : voice.state === "TRANSCRIBING" ? "think" : "rest";
+  const stuck = mode === "think" || mode === "act";
+  useEffect(() => {                                   // never «thinking» for minutes: stop, say so, listen again
+    if (!stuck) return;
+    const t = setTimeout(() => {
+      voice.interrupt(); setActivity(null); setBusy(false);
+      setError("Ci stavo mettendo troppo e mi sono fermata. Ripetimelo pure, ti ascolto.");
+    }, 75_000);
+    return () => clearTimeout(t);
+  }, [stuck]);  // eslint-disable-line react-hooks/exhaustive-deps
   const title = { rest: "Sono qui.", listen: "Ti ascolto.", think: "Metto a fuoco.", act: "Ci sto lavorando.",
     speak: "Un passo avanti.", approve: "Decidiamo insieme.", reconnect: "Riprendo il filo." }[mode];
   const subtitle = mode === "reconnect" ? "Sto riconnettendo la voce. Attendi un momento prima di parlare."

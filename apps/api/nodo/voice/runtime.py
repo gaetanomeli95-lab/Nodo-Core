@@ -812,14 +812,12 @@ class VoiceRuntime:
             self.vs.conversation_id = conv.id
             brain = Brain(core, conv, rid, "voice")
             try:
-                async for ev in brain.run(text):
-                    t, body = ev["type"], {k: v for k, v in ev.items() if k not in ("type", "request_id", "at")}
-                    if t == "step":
-                        await self._send("nodo.step", **body)
-                    elif t == "ui.present":
-                        await self._send("ui.present", **body)
-                    elif t == "approval.requested":
-                        bindings.append(body)
+                async with asyncio.timeout(self.c.settings.brain_deadline_s + 25):
+                    await self._think_events(brain, text, bindings)
+            except TimeoutError:
+                log.warning("pensa took too long")
+                return {"error": "Ci sto mettendo troppo: dillo a Gaetano in una frase e chiedigli di riprovare, "
+                                 "non inventare la risposta."}
             except BrainUnavailable:
                 return {"error": "Il cervello non risponde adesso: dillo a Gaetano in una frase, non inventare."}
             except Exception:  # noqa: BLE001 - never let Gemini loop on a raw traceback
@@ -831,6 +829,16 @@ class VoiceRuntime:
             return {"silenzio": True}
         return {"risposta": brain.text,
                 "come": "Dilla con parole tue, naturale e breve, senza aggiungere niente che non c'è qui."}
+
+    async def _think_events(self, brain, text: str, bindings: list[dict]) -> None:
+        async for ev in brain.run(text):
+            t, body = ev["type"], {k: v for k, v in ev.items() if k not in ("type", "request_id", "at")}
+            if t == "step":
+                await self._send("nodo.step", **body)
+            elif t == "ui.present":
+                await self._send("ui.present", **body)
+            elif t == "approval.requested":
+                bindings.append(body)
 
     async def _live_finalize_input(self) -> None:
         if self._in_text.strip() and not self._live_user_emitted:

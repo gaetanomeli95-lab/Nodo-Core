@@ -211,3 +211,13 @@ async def test_saying_ferma_over_maria_stops_her_at_once(container, engine):
     assert any(e["type"] == "voice.interrupted" and e["reason"] == "stop_word" for e in events)
     runtime._live = None
     await runtime.close()
+
+
+def test_the_brain_sees_only_the_tools_that_matter():
+    from nodo.brain.toolsets import ALWAYS, pick
+    names = ["ledger_add", "ledger_update", "sites_status", "create_file", "remember", "now", "projects"]
+    shop = pick(names, "al signor Greco l'Andromeda è costato 150 euro")
+    assert {"ledger_add", "ledger_update", "remember"} <= shop and "sites_status" not in shop
+    chat = pick(names, "ciao Maria come stai?")
+    assert chat == {"remember", "now"} and ALWAYS
+    assert "sites_status" in pick(names, "come stanno i siti?") and "create_file" in pick(names, "fammi un pdf")

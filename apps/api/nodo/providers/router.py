@@ -75,10 +75,10 @@ _LIMIT_RE = re.compile(r"limit|quota|rate.?limit|\b429\b|too many requests|usage
 # dead-end errors (wrong key, model removed, no permission): they will not heal in half an hour, so the
 # provider rests much longer instead of wasting a timeout on every message
 _DEAD_RE = re.compile(r"not.?found|does not exist|no such model|invalid api key|unauthoriz|forbidden|"
-                      r"permission denied|\b401\b|\b403\b|\b404\b", re.I)
+                      r"permission denied|\b401\b|\b403\b|\b404\b|non JSON", re.I)
 # transient trouble (timeout, overload, 5xx): may heal in minutes, so the pause is short
 _TRANSIENT_RE = re.compile(r"timed?\s*out|timeout|non ha risposto|unavailable|overloaded|\b50[0-9]\b|deadline|"
-                           r"non JSON|transport error|getaddrinfo|high demand", re.I)
+                           r"transport error|getaddrinfo|high demand", re.I)
 _cooldown: dict[str, float] = {}
 
 # A voice turn cannot wait minutes while a dead provider burns its own timeout: `prefer_fast`

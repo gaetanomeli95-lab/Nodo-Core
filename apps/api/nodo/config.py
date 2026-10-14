@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     # --- Brain: conversation with tools (nodo/brain) ---
     brain: str = "auto"                         # auto (on when a model with tool calling is available) | on | off
     brain_max_steps: int = 6                    # tool rounds per message
+    brain_deadline_s: float = 40.0             # after this the brain stops using tools and answers
     brain_history: int = 16                     # previous messages of the conversation it remembers
 
     # --- Personal knowledge: imported ChatGPT/Claude exports (docs/CONOSCENZA.md) ---

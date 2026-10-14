@@ -107,6 +107,17 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
     dist = Path(os.environ.get("NODO_WEB_DIST") or Path(__file__).resolve().parents[2] / "web" / "dist")
     if (dist / "index.html").exists():
         from fastapi.staticfiles import StaticFiles
+
+        @app.middleware("http")
+        async def fresh_panel(request, call_next):
+            # the app window (127.0.0.1) kept showing an OLD panel from its cache after an update, while
+            # localhost showed the new one: the page itself is always revalidated; its hashed files can be kept
+            response = await call_next(request)
+            path = request.url.path
+            if not path.startswith("/api"):
+                response.headers["Cache-Control"] = ("public, max-age=31536000, immutable"
+                                                     if path.startswith("/assets/") else "no-cache")
+            return response
         app.mount("/", StaticFiles(directory=dist, html=True), name="web")
 
     return app
