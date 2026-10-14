@@ -86,6 +86,10 @@ THINK_DECL = {
         "required": ["richiesta"]},
 }
 BOARD_EVERY_S = 60
+# jobs that are long for a reason, and how long they may take (seconds) before NODO calls it stuck
+SLOW_TOOLS_S = {"generate_image": 240, "create_document": 150, "create_file": 60, "save_to_desktop": 40,
+                "web_search": 75, "fetch_url": 75, "read_photo": 75, "learn_old_chats": 180, "search_knowledge": 45,
+                "check_sites": 120, "sync_sites": 120}
 
 
 def is_babble_text(text: str) -> bool:
@@ -1055,8 +1059,8 @@ class VoiceRuntime:
                 # the brain has its own deadline (brain_deadline_s): past it, it stops searching and answers with
                 # what it knows. That last answer needs time too (15-20 s on the Claude program): cutting exactly
                 # at the deadline turned every two-search question into «ci sto mettendo troppo»
-                async with asyncio.timeout(self.c.settings.brain_deadline_s + 25):
-                    await self._think_events(brain, text, bindings)
+                async with asyncio.timeout(self.c.settings.brain_deadline_s + 25) as limit:
+                    await self._think_events(brain, text, bindings, limit)
             except TimeoutError:
                 log.warning("pensa took too long")
                 with suppress(Exception):
@@ -1118,9 +1122,17 @@ class VoiceRuntime:
                 await self._live_dropped(str(e))
         await self._send("tts.speak.request", text=line)     # no live voice: the panel says it with server TTS
 
-    async def _think_events(self, brain, text: str, bindings: list[dict]) -> None:
+    async def _think_events(self, brain, text: str, bindings: list[dict], limit=None) -> None:
         async for ev in brain.run(text):
             t, body = ev["type"], {k: v for k, v in ev.items() if k not in ("type", "request_id", "at")}
+            tool = str(body.get("step", "")).removeprefix("tool:")
+            if t == "step" and limit is not None and tool in SLOW_TOOLS_S and body.get("status") == "running":
+                # an image or a document takes the time it takes: the 40-second rule is for thinking, not for
+                # drawing; the wait grows with the job (and the answer after it keeps its own time)
+                loop = asyncio.get_running_loop()
+                want = loop.time() + SLOW_TOOLS_S[tool] + self.c.settings.brain_deadline_s
+                if (limit.when() or 0) < want:
+                    limit.reschedule(want)
             if t == "step":
                 await self._send("nodo.step", **body)
             elif t == "ui.present":

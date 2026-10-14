@@ -7,6 +7,7 @@ import { Viewer, type ViewItem } from "./Viewer";
 import { Board } from "./holo/Board";
 import { INTRO_DONE_EVENT, introDone } from "./holo/Intro";
 import { HoloTable, type HoloSurface } from "./holo/HoloTable";
+import { patienceFor, SLOW_TOOLS, type Work, WorkStage } from "./holo/WorkStage";
 import { MindGraph } from "./holo/MindGraph";
 import { Eyes } from "./holo/Eyes";
 import { Palette, type Action } from "./holo/Palette";
@@ -60,6 +61,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const [diary, setDiary] = useState(false);
   const [writing, setWriting] = useState(false);
   const [activity, setActivity] = useState<string | null>(null);
+  const [work, setWork] = useState<Work | null>(null);          // a long, worth-it job on screen (image, document…)
   const [error, setError] = useState<string | null>(null);
   const [decision, setDecision] = useState<Decision | null>(null);
   const [surface, setSurfaceRaw] = useState<Surface | null>(null);
@@ -69,6 +71,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   useEffect(() => {                         // ?prova: lets a test (or Gaetano) open the viewer by hand
     if (!/[?&]prova\b/.test(location.search)) return;
     (window as unknown as Record<string, unknown>).nodoShow = (item: ViewItem) => setViewing(item);
+    (window as unknown as Record<string, unknown>).nodoWork = (w: Work | null) => setWork(w);
   }, []);
   const onOpenTabRef = useRef(onOpenTab);
   onOpenTabRef.current = onOpenTab;
@@ -130,6 +133,11 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       const name = String(e.step || e.tool || "").replace(/^tool:/, "");
       if (e.status === "running" || e.type === "tool.started") activeTools.current.add(name);
       else activeTools.current.delete(name);
+      if (SLOW_TOOLS[name]) {
+        if (e.status === "running" || e.type === "tool.started")
+          setWork({ tool: name, args: (e.arguments || {}) as Record<string, unknown>, since: Date.now() });
+        else setWork((w) => (w?.tool === name ? null : w));
+      }
       const current = Array.from(activeTools.current).at(-1);
       setActivity(current ? DOING[current] || "Ci lavoro" : null);
     }
@@ -223,13 +231,18 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
           endReply(e);
           if (typeof e.conversation_id === "string") voice.setConversation(e.conversation_id);
         }
-        if (e.type === "step") setActivity(e.status === "running" ? DOING[String(e.step).replace("tool:", "")] || "Ci lavoro" : null);
+        if (e.type === "step") {
+          const tool = String(e.step).replace("tool:", "");
+          setActivity(e.status === "running" ? DOING[tool] || "Ci lavoro" : null);
+          if (SLOW_TOOLS[tool]) setWork(e.status === "running"
+            ? { tool, args: (e.arguments || {}) as Record<string, unknown>, since: Date.now() } : null);
+        }
         if (e.type === "error") setError(String(e.message));
         if (e.type === "ui.present") setSurface({ view: String(e.view), rows: (e.rows as Surface["rows"]) || [], summary: String(e.summary || ""), totals: e.totals as Surface["totals"], title: e.title as string | undefined });
       });
       onRequestDone();
     } catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); setActivity(null); }
+    finally { setBusy(false); setActivity(null); setWork(null); }
   };
   const precise = (voiceConfig?.live_reason || "").startsWith("voce precisa");
   const [modeBusy, setModeBusy] = useState(false);
@@ -292,12 +305,14 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const stuck = mode === "think" || mode === "act";
   useEffect(() => {                                   // never «thinking» for minutes: stop, say so, listen again
     if (!stuck) return;
+    // an image or a document is allowed its time: the patience grows with the job being done
     const t = setTimeout(() => {
-      voice.interrupt(); setActivity(null); setBusy(false);
+      voice.interrupt(); setActivity(null); setBusy(false); setWork(null);
       setError("Ci stavo mettendo troppo e mi sono fermata. Ripetimelo pure, ti ascolto.");
-    }, 75_000);
+    }, patienceFor(work?.tool || null) * 1000);
     return () => clearTimeout(t);
-  }, [stuck]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [stuck, work?.tool]);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!stuck && !busy) setWork(null); }, [stuck, busy]);
   const title = { rest: "Sono qui.", listen: "Ti ascolto.", think: "Metto a fuoco.", act: "Ci sto lavorando.",
     speak: "Un passo avanti.", approve: "Decidiamo insieme.", reconnect: "Riprendo il filo." }[mode];
   const subtitle = mode === "reconnect" ? "Sto riconnettendo la voce. Attendi un momento prima di parlare."
@@ -316,7 +331,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     <Eyes source={eyes} onClose={() => setEyes(null)} onShot={(f, q) => void handOver(f, q || "Guarda e dimmi cosa vedi.")} />
     <Palette actions={actions} onAsk={(t) => void send(t)} />
     {!diary && <Board revision={boardRev} />}
-    <div className={`voice-stage${surface && !decision ? " has-holo" : ""}`}>
+    <div className={`voice-stage${(surface || work) && !decision ? " has-holo" : ""}`}>
       <MindGraph mode={mode} sampleLevel={voice.sampleLevel} heard={voice.partial || lastUser} said={lastNodo}
         activity={activity} revision={turns.length + boardRev} />
       <div className="stage-topline"><span className="eyebrow">IL TUO SPAZIO DI LAVORO</span>
@@ -325,7 +340,8 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         {!voice.connected ? "COLLEGAMENTO IN CORSO" : mode === "rest" ? "PRONTO QUANDO VUOI" : { listen: "IN ASCOLTO", think: "STO PENSANDO", act: "AL LAVORO", speak: "NODO PARLA", approve: "UNA TUA DECISIONE", reconnect: "RICONNESSIONE" }[mode]}</span>
         <h2>{title}</h2><p>{subtitle}</p></div>
       <div className="holo-stage-core mind-spacer" />
-      {activity && <div className="holo-chip" role="status"><i />{activity}</div>}
+      {activity && !work && <div className="holo-chip" role="status"><i />{activity}</div>}
+      {work && !surface && !decision && <WorkStage work={work} />}
       {!decision && !surface && <Subtitles user={lastUser} nodo={lastNodo} partial={voice.partial} />}
       {error && <div className="voice-notice" role="alert"><span>{error}</span><button aria-label="Chiudi avviso" onClick={() => setError(null)}>×</button></div>}
       {decision ? <section className="context-sheet decision-sheet" aria-label="Decisione in attesa">

@@ -937,3 +937,33 @@ def test_a_refused_show_request_is_done_by_the_brain(client, container, monkeypa
     assert any(e["type"] == "voice.interrupted" and e.get("reason") == "quiet" for e in events)
     assert not any(e["type"] == "nodo.response" and "Purtroppo" in e.get("text", "") for e in events)
     assert any("Risultato di pensa" in str(c) for c in session.contents)
+
+
+async def test_drawing_an_image_gets_its_time(container, engine, monkeypatch):
+    """The 40-second rule is for thinking: an image that takes longer is not cut as «ci sto mettendo troppo»."""
+    from nodo.brain import loop
+    from nodo.db.session import session_scope
+    from nodo.voice.runtime import VoiceRuntime
+
+    async def slow_image(self, text):
+        yield {"type": "step", "request_id": "r", "at": "t", "step": "tool:generate_image", "status": "running",
+               "arguments": {"description": "un tubo"}}
+        await asyncio.sleep(0.8)                       # longer than the (shrunk) thinking limit below
+        yield {"type": "step", "request_id": "r", "at": "t", "step": "tool:generate_image", "status": "done"}
+        self.text = "Ecco il tubo."
+
+    async def plain_slow(self, text):
+        await asyncio.sleep(0.8)
+        self.text = "troppo tardi"
+        return
+        yield
+
+    async def emit(event):
+        pass
+    monkeypatch.setattr(container.settings, "brain_deadline_s", -24.6)   # thinking limit = 0.4 s
+    runtime = VoiceRuntime(container.voice_sessions.create(None, "it"), container, emit, session_scope)
+    monkeypatch.setattr(loop.Brain, "run", slow_image)
+    assert (await runtime._live_think({"richiesta": "fammi un'immagine di un tubo"}, [])).get("risposta") == "Ecco il tubo."
+    monkeypatch.setattr(loop.Brain, "run", plain_slow)
+    assert "error" in await runtime._live_think({"richiesta": "quanto ho fatto oggi"}, [])
+    await runtime.close()
