@@ -967,3 +967,23 @@ async def test_drawing_an_image_gets_its_time(container, engine, monkeypatch):
     monkeypatch.setattr(loop.Brain, "run", plain_slow)
     assert "error" in await runtime._live_think({"richiesta": "quanto ho fatto oggi"}, [])
     await runtime.close()
+
+
+def test_maria_sings_over_a_band(client, container):
+    """«Cantami una canzone»: the voice calls «canta», the panel starts the band, she sings, the band fades out."""
+    script = [_sc(input_transcription=SimpleNamespace(text="Maria cantami una canzone sul negozio")),
+              _tc("canta", {"stile": "pop"}, fid="song-1"),
+              _sc(output_transcription=SimpleNamespace(text="Materassi d'oro, sogni di velluto…")),
+              _sc(turn_complete=True)]
+    holder = []
+    container.live_connect = make_connect(script, holder)
+    with client.websocket_connect(WS) as ws:
+        _open_live(ws)
+        events, _ = _recv_until(ws, "voice.turn.done")
+    model, config, session = holder[0]
+    names = [d["name"] for d in config["tools"][0]["function_declarations"]]
+    assert "canta" in names
+    start = next(e for e in events if e["type"] == "music.start")
+    assert start["style"] == "pop"
+    assert any(e["type"] == "music.stop" for e in events)
+    assert session.tool_responses[0]["response"]["result"]["ok"] is True

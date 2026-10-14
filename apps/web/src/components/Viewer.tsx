@@ -22,7 +22,9 @@ export function Viewer({ item, onClose }: { item: ViewItem | null; onClose: () =
     let url: string | null = null, gone = false;
     const name = item.url.split("/").pop() || "";
     const direct = /^https?:/.test(item.url) || item.url.startsWith("/api/v1/view/");   // a link, or a file of the PC
-    if (["video", "audio", "youtube", "web"].includes(item.kind) || (direct && ["image", "pdf"].includes(item.kind))) {
+    if (item.kind === "other") {
+      setSrc(item.url);                                   // a card: open it with its own program on the PC
+    } else if (["video", "audio", "youtube", "web"].includes(item.kind) || (direct && ["image", "pdf"].includes(item.kind))) {
       setSrc(item.url);                                   // streamed as it is (a video can be big: no copy in memory)
     } else if (item.kind === "image" || item.kind === "pdf") {
       fetch(item.url, { headers: authHeaders() }).then((r) => {
@@ -48,9 +50,20 @@ export function Viewer({ item, onClose }: { item: ViewItem | null; onClose: () =
     return () => window.removeEventListener("keydown", esc);
   }, [item, onClose]);
 
+  const [opened, setOpened] = useState<string | null>(null);
+  const [broken, setBroken] = useState(false);              // the browser cannot play this video/audio format
+  useEffect(() => { setOpened(null); setBroken(false); }, [item]);
+  const openOnPc = () => {
+    if (!item) return;
+    const local = item.url.startsWith("/api/v1/view/");
+    if (!local) { window.open(item.url, "_blank"); return; }
+    fetch(`${item.url}/open`, { method: "POST", headers: authHeaders() })
+      .then((r) => r.ok ? setOpened("Aperto sul PC con il suo programma.") : r.json().then((d) => setError(d.detail || "non si apre")))
+      .catch((e) => setError((e as Error).message));
+  };
   if (!item) return null;
   const rows = item.kind === "sheet" && text ? text.split("\n").filter(Boolean) : null;
-  const media = ["video", "youtube", "image"].includes(item.kind);
+  const media = ["video", "youtube", "image"].includes(item.kind) && !broken;
   return <div className={`viewer-backdrop baam${media ? " cinema" : ""}`} onClick={onClose}>
     <i className="baam-flash" /><i className="baam-ring" />
     <section className={`viewer ${item.kind}`} role="dialog" aria-label={item.title} onClick={(e) => e.stopPropagation()}>
@@ -69,8 +82,17 @@ export function Viewer({ item, onClose }: { item: ViewItem | null; onClose: () =
         {!error && !src && text === null && <div className="viewer-loading"><i /><i /><i /></div>}
         {src && item.kind === "image" && <img src={src} alt={item.title} />}
         {src && item.kind === "pdf" && <iframe src={src} title={item.title} />}
-        {src && item.kind === "video" && <video src={src} controls autoPlay playsInline />}
-        {src && item.kind === "audio" && <div className="viewer-audio"><i /><i /><i /><i /><i /><audio src={src} controls autoPlay /></div>}
+        {src && item.kind === "video" && !broken && <video src={src} controls autoPlay playsInline onError={() => setBroken(true)} />}
+        {src && item.kind === "audio" && !broken && <div className="viewer-audio"><i /><i /><i /><i /><i />
+          <audio src={src} controls autoPlay onError={() => setBroken(true)} /></div>}
+        {(item.kind === "other" || broken) && <div className="viewer-card">
+          <div className="viewer-card-icon">{(item.url.split("?")[0].split(".").pop() || "file").slice(0, 4).toUpperCase()}</div>
+          <h4>{item.title}</h4>
+          <p>{broken ? "Questo formato il visore non lo riproduce: lo apro con il programma del PC." :
+            "Questo tipo di file si apre con il suo programma."}</p>
+          <button className="primary" onClick={openOnPc}>Aprilo sul PC ↗</button>
+          {opened && <small>{opened}</small>}
+        </div>}
         {src && item.kind === "youtube" && <iframe className="yt" src={src} title={item.title}
           allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen />}
         {src && item.kind === "web" && <iframe src={src} title={item.title} sandbox="allow-scripts allow-same-origin allow-popups" />}

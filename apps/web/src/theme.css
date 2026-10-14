@@ -440,3 +440,22 @@ html.calm :is(.baam-flash, .baam-ring) { display: none; }
 @keyframes work-pulse { 50% { transform: scale(1.25); } }
 @media (max-width: 900px) { .work-stage { flex-direction: column; } }
 html.calm .work-stage *, html.calm .work-stage { animation: none !important; }
+
+.viewer-card { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; color: #d6eef2; max-width: 460px; }
+.viewer-card-icon { width: 110px; height: 136px; border-radius: 10px; display: grid; place-items: center; font: 700 22px/1 ui-monospace, Consolas, monospace;
+  color: #6ff0ff; border: 1px solid #6ff0ff66; background: linear-gradient(160deg, rgba(110,240,255,.16), rgba(8,22,30,.8));
+  box-shadow: 0 0 40px #46d8e533; animation: baam-in .6s cubic-bezier(.2,1.4,.3,1) both; }
+.viewer-card h4 { margin: 4px 0 0; font-size: 18px; font-weight: 500; }
+.viewer-card p { margin: 0; color: #9fc6cc; font-size: 14px; }
+.viewer-card button { background: #6ff0ff; color: #02161b; border: 0; border-radius: 10px; padding: 11px 20px; font: 600 14px/1 Inter, system-ui, sans-serif; cursor: pointer;
+  box-shadow: 0 0 24px #6ff0ff66; }
+.viewer-card small { color: #7ff0c4; }
+
+/* ---------------------------------------------------------------- Maria sings (music.ts): notes rise from the stage */
+.sing-notes { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 3; }
+.sing-notes i { position: absolute; bottom: 18%; font-style: normal; font-size: 30px; color: #c9a8ff; text-shadow: 0 0 18px #c9a8ff;
+  opacity: 0; animation: note-rise 4.4s ease-out infinite; }
+.sing-notes i:nth-child(odd) { color: #6ff0ff; text-shadow: 0 0 18px #6ff0ff; }
+@keyframes note-rise { 0% { opacity: 0; transform: translateY(0) rotate(-10deg) scale(.7); } 15% { opacity: .95; }
+  100% { opacity: 0; transform: translateY(-46vh) translateX(30px) rotate(14deg) scale(1.2); } }
+html.calm .sing-notes { display: none; }

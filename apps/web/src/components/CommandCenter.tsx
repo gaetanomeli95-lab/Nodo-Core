@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { startMusic, stopMusic } from "../music";
 import { downloadFile, get, post, streamCommand, type NodoEvent, type VoiceConfig, type VoiceEvent } from "../api";
 import { useVoiceSession } from "./Voice";
 import type { PresenceMode } from "./Presence";
@@ -62,6 +63,12 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const [writing, setWriting] = useState(false);
   const [activity, setActivity] = useState<string | null>(null);
   const [work, setWork] = useState<Work | null>(null);          // a long, worth-it job on screen (image, document…)
+  const [singing, setSinging] = useState(false);
+  useEffect(() => {
+    const on = (e: Event) => setSinging(Boolean((e as CustomEvent).detail?.on));
+    window.addEventListener("nodo:music", on);
+    return () => window.removeEventListener("nodo:music", on);
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [decision, setDecision] = useState<Decision | null>(null);
   const [surface, setSurfaceRaw] = useState<Surface | null>(null);
@@ -72,6 +79,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     if (!/[?&]prova\b/.test(location.search)) return;
     (window as unknown as Record<string, unknown>).nodoShow = (item: ViewItem) => setViewing(item);
     (window as unknown as Record<string, unknown>).nodoWork = (w: Work | null) => setWork(w);
+    (window as unknown as Record<string, unknown>).nodoMusic = (on: boolean, style?: string) => on ? startMusic(style) : stopMusic();
   }, []);
   const onOpenTabRef = useRef(onOpenTab);
   onOpenTabRef.current = onOpenTab;
@@ -342,6 +350,8 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       <div className="holo-stage-core mind-spacer" />
       {activity && !work && <div className="holo-chip" role="status"><i />{activity}</div>}
       {work && !surface && !decision && <WorkStage work={work} />}
+      {singing && <div className="sing-notes" aria-hidden="true">{["♪", "♫", "♩", "♬", "♪", "♫", "♬", "♩"].map((n, i) =>
+        <i key={i} style={{ left: `${8 + i * 11.5}%`, animationDelay: `${i * 0.55}s` }}>{n}</i>)}</div>}
       {!decision && !surface && <Subtitles user={lastUser} nodo={lastNodo} partial={voice.partial} />}
       {error && <div className="voice-notice" role="alert"><span>{error}</span><button aria-label="Chiudi avviso" onClick={() => setError(null)}>×</button></div>}
       {decision ? <section className="context-sheet decision-sheet" aria-label="Decisione in attesa">

@@ -20,8 +20,13 @@ KIND_BY_EXT = {
     **dict.fromkeys(("mp4", "webm", "mov", "m4v", "ogv"), "video"),
     **dict.fromkeys(("mp3", "wav", "ogg", "m4a", "aac", "flac"), "audio"),
     "pdf": "pdf", "docx": "doc", "doc": "doc", "xlsx": "sheet", "csv": "sheet", "pptx": "slides",
-    **dict.fromkeys(("txt", "md", "json", "html", "log"), "text"),
+    **dict.fromkeys(("txt", "md", "json", "html", "log", "xml", "ini"), "text"),
+    "svg": "image",
+    # shown as a card that opens them with their own program on the PC (the browser cannot play or read them)
+    **dict.fromkeys(("avi", "mkv", "wmv", "flv", "3gp", "heic", "tif", "tiff", "psd", "doc", "xls", "ppt", "odt",
+                     "ods", "odp", "rtf", "epub", "zip", "rar", "7z", "dwg", "skp", "ai", "eps"), "other"),
 }
+NEVER = ("exe", "bat", "cmd", "ps1", "vbs", "js", "msi", "com", "scr", "lnk", "reg", "dll")   # never shown, never opened
 WORD_KIND = [(re.compile(r"\bvideo|filmat|clip\b|registrazion", re.I), "video"),
              (re.compile(r"\bfoto|immagin|picture|screenshot|logo\b", re.I), "image"),
              (re.compile(r"\bpdf\b", re.I), "pdf"),
@@ -55,7 +60,8 @@ def roots() -> list[Path]:
 
 
 def kind_of(path: Path | str) -> str:
-    return KIND_BY_EXT.get(str(path).rsplit(".", 1)[-1].lower(), "other")
+    ext = str(path).rsplit(".", 1)[-1].lower()
+    return "blocked" if ext in NEVER else KIND_BY_EXT.get(ext, "other")
 
 
 def wanted_kind(text: str) -> str | None:

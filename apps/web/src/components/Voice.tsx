@@ -4,6 +4,7 @@
  * Browser speech APIs do the heavy lifting in FREE mode (stt/tts location === "browser").
  */
 import { useEffect, useRef, useState } from "react";
+import { startMusic, stopMusic } from "../music";
 import { speak as serverSpeak, VoiceSocket, type VoiceConfig, type VoiceEvent } from "../api";
 
 export type VoiceState =
@@ -327,6 +328,13 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
             case "voice.interrupted":
               setPartial("");
               stopLocalAudio();
+              if (e.reason !== "quiet") stopMusic(0.6);
+              break;
+            case "music.start":       // Maria is about to sing: the band starts under her voice
+              startMusic(String(e.style || "pop"), Number(e.bpm) || undefined);
+              break;
+            case "music.stop":
+              stopMusic(Number(e.fade) || 2);
               break;
             case "nodo.response":
               streamingStarted.current = false;

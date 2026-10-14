@@ -85,6 +85,14 @@ THINK_DECL = {
         "richiesta": {"type": "string", "description": "Le parole di Gaetano, così come le ha dette."}},
         "required": ["richiesta"]},
 }
+SING_DECL = {
+    "name": "canta",
+    "description": ("Fa partire la base musicale sotto la tua voce. Chiamalo SUBITO quando Gaetano ti chiede di "
+                    "cantare, di fare una canzone, una serenata, un rap, una ninna nanna; poi canta TU, davvero."),
+    "parameters": {"type": "object", "properties": {
+        "stile": {"type": "string", "description": "pop | ballata | rap | rock | tarantella | ninna nanna | lirica"},
+        "bpm": {"type": "integer", "description": "velocità (facoltativa)"}}},
+}
 BOARD_EVERY_S = 60
 # jobs that are long for a reason, and how long they may take (seconds) before NODO calls it stuck
 SLOW_TOOLS_S = {"generate_image": 240, "create_document": 150, "create_file": 60, "save_to_desktop": 40,
@@ -154,6 +162,7 @@ class VoiceRuntime:
         self._board_due = False
         self._tool_text: str | None = None         # a tool call Gemini spoke aloud instead of making it
         self._turn_called = False                  # a tool was called in this turn
+        self._singing = False                      # the backing band is playing for this turn
         self._forced: str | None = None            # an action Gemini refused or forgot: the brain does it
         self._live_results: dict[str, dict] = {}
         self._pensa_error: str | None = None   # a failed «pensa» is not retried within the same turn
@@ -597,6 +606,7 @@ class VoiceRuntime:
                 # Gemini is fast but shallow and claims things it did not do: it keeps only the ears, the mouth and
                 # the yes/no of a decision; every real answer comes from the Claude brain through «pensa»
                 decls = [THINK_DECL] + [d for d in decls if d["name"] in _LIVE_OWN_TOOLS]
+            decls = [*decls, SING_DECL]
             # the text brain writes «[silenzio]» to stay quiet; a VOICE reads it aloud («silenzio, silenzio…»)
             system = system.replace("scrivi soltanto [silenzio]", "stai zitta, non dire nessuna parola")
             # Keep the wait explicit across Live models: the voice must use the actual tool result,
@@ -926,6 +936,14 @@ class VoiceRuntime:
             try:
                 if c["id"] and c["id"] in self._live_results:
                     result = self._live_results[c["id"]]
+                elif c["name"] == SING_DECL["name"]:
+                    style = str(c["args"].get("stile") or "pop").lower()
+                    bpm = c["args"].get("bpm")
+                    await self._send("music.start", style=style, bpm=bpm if isinstance(bpm, int) else None)
+                    self._singing = True
+                    result = {"ok": True, "nota": ("La base sta suonando. CANTA adesso, davvero: melodia, ritmo, rime, "
+                                                   "vocali allungate, un ritornello che torna. Testo tuo, inventato "
+                                                   "per Gaetano; niente parole parlate prima, parti subito a cantare.")}
                 elif c["name"] == THINK_DECL["name"]:
                     key = c.get("request_key") or self._think_key(c)
                     if self._pensa_error:
@@ -1155,6 +1173,10 @@ class VoiceRuntime:
         self._babble = self._babble_checked = False
         from nodo.brain.loop import _SILENCE
         text = _VOICE_TAGS.sub("", text).strip()   # «<no speech>{pause}»: the model's markers are not words
+        if self._singing:
+            self._singing = False
+            with suppress(Exception):
+                await self._send("music.stop", fade=3)
         forced, self._forced = self._forced, None
         speak = True                                 # it refused: the brain's answer is said instead
         heard_now = self._in_text.strip()

@@ -89,6 +89,11 @@ def html_to_text(raw: str) -> str:
     return re.sub(r"\n\s*\n+", "\n\n", text).strip()
 
 
+
+_TAB_FILLER = {"mostrami", "mostra", "fammi", "vedere", "apri", "aprimi", "vai", "su", "sul", "sulla", "nella", "nel",
+               "il", "lo", "la", "le", "i", "gli", "l", "un", "una", "di", "del", "della", "mio", "mia", "tutto", "tutta",
+               "ora", "adesso", "per", "favore", "maria", "nodo", "e", "a", "in"}
+
 class ExtraTools(LedgerTools):
     """Mixed into Toolbox: `_register_extra()` is called at the end of `_register()`."""
 
@@ -560,8 +565,12 @@ class ExtraTools(LedgerTools):
 
     async def show_on_screen(self, what: str) -> dict:
         w = (what or "").strip().lower()
+        # a panel tab only when that is ALL he asked for («il registro», «apri la squadra»): «la presentazione del
+        # negozio» is a file, not the register tab
+        rest = [x for x in re.findall(r"[a-zàèéìòù]+", w) if x not in _TAB_FILLER]
         for word, tab in self._TABS.items():
-            if word in w.split() or w == word:
+            if rest and all(x == word or x in ("scheda", "pagina", "tab", "quartier", "generale") for x in rest) \
+                    and word in rest:
                 return {"shown": word, "tab": tab, "note": "è sullo schermo; dì in una frase cosa sta guardando"}
         from nodo import media
         if link := media.from_url(what):
@@ -607,8 +616,8 @@ class ExtraTools(LedgerTools):
                         "candidates": [r["title"] for r in (cands or pool[:5])]}
         url = hit["uri"] or ""
         ext = url.rsplit(".", 1)[-1].lower() if "." in url else ""
-        kind = {"png": "image", "jpg": "image", "jpeg": "image", "webp": "image", "gif": "image", "pdf": "pdf",
-                "docx": "doc", "xlsx": "sheet", "pptx": "slides", "csv": "sheet"}.get(ext, "text")
+        from nodo import media
+        kind = {"html": "web", "htm": "web"}.get(ext) or media.KIND_BY_EXT.get(ext, "text")
         return {"shown": hit["title"], "url": url, "kind": kind,
                 "note": "è sullo schermo in grande; quando dice «chiudi» usa close_screen"}
 
