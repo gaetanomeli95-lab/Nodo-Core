@@ -53,3 +53,22 @@ async def test_chatgpt_export_on_the_desktop_is_found_and_learned(container, db,
     assert res["imported"][0]["conversations"] == 1 and started
     again = await finder.import_found(container, db, org, [desk])
     assert again["imported"] == [] and "conosco già" in again["message"]
+
+
+async def test_the_team_shows_who_did_what(client, container, db):
+    from nodo.app import ensure_workspace
+    from nodo.brain.tools import Toolbox
+    ensure_workspace(db)
+    core = container.core(db)
+    conv = core._conversation(None, "text")
+    box = Toolbox(core, conv, "req-team", "segna una vendita", "text")
+    await box.call("ledger_add", {"kind": "vendita", "item": "rete a doghe", "amount": 40, "counterpart": "Rossi"})
+    await box.call("board_pin", {"text": "Chiamare Arrisal"})
+    db.commit()
+    t = client.get("/api/v1/team").json()
+    by = {a["id"]: a for a in t["agents"]}
+    assert by["contabile"]["today"] == 1 and by["contabile"]["status"] == "al lavoro"
+    assert by["contabile"]["last"]["what"] == "ha segnato nel registro"
+    assert by["agenda"]["today"] == 1 and "1 note sulla lavagna" in by["agenda"]["facts"]
+    assert by["ricercatrice"]["today"] == 0 and by["ricercatrice"]["status"] == "pronta"
+    assert t["leader"]["today"] == 2

@@ -195,9 +195,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   useEffect(() => {
     if (!introOver || !voice.connected || !voiceConfig || helloSent.current) return;
     helloSent.current = true;
-    let already = false;
-    try { already = sessionStorage.getItem("nodo.hello") === "1"; sessionStorage.setItem("nodo.hello", "1"); } catch { /* ignore */ }
-    if (already || voiceConfig.engine === "browser") { autoHello.current = false; return; }
+    if (voiceConfig.engine === "browser") { autoHello.current = false; return; }
     if (!voice.microphoneOn) voice.pressStart();          // opens the live conversation (asks for the mic only once)
     setTimeout(() => voiceRef.current.greet(), 700);
   }, [introOver, voice.connected, voiceConfig]);  // eslint-disable-line react-hooks/exhaustive-deps

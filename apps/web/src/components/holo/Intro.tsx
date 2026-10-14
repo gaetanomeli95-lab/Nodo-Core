@@ -7,9 +7,8 @@ import { get } from "../../api";
  *  no rights to pay). At the end the panel fires `nodo:intro-done` and Maria says hello and starts listening. */
 
 const DONE = "nodo:intro-done";
-export const introDone = () => {
-  try { return sessionStorage.getItem("nodo.booted") === "1"; } catch { return true; }
-};
+let played = false;           // once per page load: every time the NODO window opens (no stale browser storage)
+export const introDone = () => played || /[?&]nointro\b/.test(location.search);
 
 function playIntro(): (() => void) | null {
   let ctx: AudioContext;
@@ -92,7 +91,7 @@ export function Intro({ name }: { name: string }) {
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const finish = () => {
-    try { sessionStorage.setItem("nodo.booted", "1"); } catch { /* ignore */ }
+    played = true;
     setGone(true);
     window.dispatchEvent(new Event(DONE));
   };

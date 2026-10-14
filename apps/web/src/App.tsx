@@ -8,14 +8,15 @@ import { StatePanel, TracePanel } from "./components/Panels";
 import { SetupView } from "./components/Setup";
 import { SitesView } from "./components/Sites";
 import { Intro } from "./components/holo/Intro";
+import { TeamView } from "./components/holo/Team";
 import { Cosmos } from "./components/holo/Cosmos";
 
-type Tab = "command" | "ledger" | "night" | "sites" | "memory" | "setup";
+type Tab = "command" | "team" | "ledger" | "night" | "sites" | "memory" | "setup";
 
 function initialTab(): Tab {
   try {
     const fromHash = location.hash.slice(1) as Tab;
-    if (["command", "ledger", "night", "sites", "memory", "setup"].includes(fromHash)) return fromHash;
+    if (["command", "team", "ledger", "night", "sites", "memory", "setup"].includes(fromHash)) return fromHash;
     return "command";
   } catch { return "command"; }
 }
@@ -57,7 +58,7 @@ export default function App() {
 
   const critical = sites.filter((s) => s.status === "critical").length;
   const tabs: [Tab, string, number][] = [
-    ["command", "Presenza", 0], ["ledger", "Registro", 0], ["night", "Notte", pending.length], ["sites", "Siti", critical], ["memory", "Memoria", 0],
+    ["command", "Presenza", 0], ["team", "Squadra", 0], ["ledger", "Registro", 0], ["night", "Notte", pending.length], ["sites", "Siti", critical], ["memory", "Memoria", 0],
     ["setup", "Accessi", 0],
   ];
 
@@ -80,8 +81,9 @@ export default function App() {
         </nav>
         <div className={tab === "command" ? "tab-body" : "tab-body hidden"}>
           <CommandCenter voiceConfig={voice} onTrace={setTrace} onActiveContext={setActiveContext} onRequestDone={refresh}
-            onOpenTab={(t) => setTab((["command", "ledger", "night", "sites", "memory", "setup"].includes(t) ? t : "command") as Tab)} />
+            onOpenTab={(t) => setTab((["command", "team", "ledger", "night", "sites", "memory", "setup"].includes(t) ? t : "command") as Tab)} />
         </div>
+        {tab === "team" && <div className="tab-body holo-enter" key="team"><TeamView /></div>}
         {tab === "ledger" && <div className="tab-body scroll holo-enter" key="ledger"><LedgerView /></div>}
         {tab === "night" && <div className="tab-body scroll"><NightView onChanged={refresh} /></div>}
         {tab === "sites" && <div className="tab-body scroll"><SitesView onChanged={refresh} /></div>}

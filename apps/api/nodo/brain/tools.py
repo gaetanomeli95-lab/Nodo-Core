@@ -158,14 +158,21 @@ class Toolbox(ExtraTools):
         tool = self.tools.get(name)
         if tool is None:
             return {"error": f"strumento sconosciuto: {name}"}
+        clean = {k: v for k, v in (args or {}).items() if v not in (None, "")}
         try:
-            clean = {k: v for k, v in (args or {}).items() if v not in (None, "")}
-            return await tool.handler(**clean)
+            out = await tool.handler(**clean)
         except TypeError as e:
-            return {"error": f"parametri non validi per {name}: {e}"}
+            out = {"error": f"parametri non validi per {name}: {e}"}
         except Exception as e:  # a failing tool must never break the conversation
             log.exception("brain tool %s failed", name)
-            return {"error": f"{type(e).__name__}: {str(e)[:300]}"}
+            out = {"error": f"{type(e).__name__}: {str(e)[:300]}"}
+        try:    # the team view shows who did what: one light row per action (written at the next commit)
+            self.core.events.emit("agent.work", {"tool": name, "ok": "error" not in (out or {}),
+                                                 "what": str(clean)[:160]},
+                                  request_id=self.request_id, organization_id=self.org)
+        except Exception:  # noqa: BLE001
+            pass
+        return out
 
     # ------------------------------------------------------------------ helpers
     def _tz(self):

@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from nodo.api import board, command, entities, files, greeting, knowledge, ledger, night, pulse, voice, voice_ws
 from nodo.api import mind as mind_api
+from nodo.api import team as team_api
 from nodo.app import build_container
 from nodo.config import Settings, get_settings
 from nodo.db.session import get_engine, session_scope
@@ -98,6 +99,7 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
     app.include_router(ledger.router)
     app.include_router(board.router)
     app.include_router(mind_api.router)
+    app.include_router(team_api.router)
 
     @app.get("/health")
     def health():
