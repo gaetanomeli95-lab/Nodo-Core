@@ -4,6 +4,7 @@
  * Browser speech APIs do the heavy lifting in FREE mode (stt/tts location === "browser").
  */
 import { useEffect, useRef, useState } from "react";
+import { lite } from "../motion";
 import { startMusic, stopMusic } from "../music";
 import { speak as serverSpeak, VoiceSocket, type VoiceConfig, type VoiceEvent } from "../api";
 
@@ -111,12 +112,16 @@ class ChunkPlayer {
 
 /** Streaming PCM playback for Gemini Live audio (`audio/pcm;rate=24000`): chunks are scheduled
  *  back-to-back on an AudioContext so speech starts with the first chunk and has no gaps. */
+const LEAD_S = lite ? 0.32 : 0.18;      // cushion before her voice starts
+const REFILL_S = lite ? 0.2 : 0.12;     // cushion after a late chunk
+
 class PcmPlayer {
   private ctx: AudioContext | null = null;
   private next = 0;
   private sources = new Set<AudioBufferSourceNode>();
   private analyser: AnalyserNode | null = null;
   private samples = new Float32Array(256);
+  private quiet = 0;
   constructor(private onPlaying: (playing: boolean) => void) {}
 
   async unlock() {
@@ -157,17 +162,29 @@ class PcmPlayer {
     const s = this.ctx.createBufferSource();
     s.buffer = buf;
     s.connect(this.analyser);
-    const t = Math.max(this.ctx.currentTime + 0.02, this.next);
+    // a small cushion before the first piece of each sentence (and after a hiccup): chunks that arrive a little
+    // late — a slow PC, Wi-Fi, the microphone starting — no longer leave holes in her voice («ci sono dei blocchi»)
+    const now = this.ctx.currentTime;
+    const starving = this.next < now + 0.01;
+    const t = starving ? now + (this.sources.size ? REFILL_S : LEAD_S) : this.next;
     s.start(t);
     this.next = t + buf.duration;
     this.sources.add(s);
+    if (this.quiet) { clearTimeout(this.quiet); this.quiet = 0; }
     this.onPlaying(true);
-    s.onended = () => { this.sources.delete(s); if (!this.sources.size) this.onPlaying(false); };
+    s.onended = () => {
+      this.sources.delete(s);
+      // «stopped speaking» only after a real pause: a 100 ms gap must not flip the whole screen to «thinking»
+      if (!this.sources.size && !this.quiet) this.quiet = window.setTimeout(() => {
+        this.quiet = 0; if (!this.sources.size) this.onPlaying(false);
+      }, 350);
+    };
   }
 
   stop() {
     for (const s of this.sources) { try { s.stop(); } catch { /* already ended */ } }
     this.sources.clear();
+    if (this.quiet) { clearTimeout(this.quiet); this.quiet = 0; }
     this.next = this.ctx ? this.ctx.currentTime : 0;
     this.onPlaying(false);
   }
@@ -631,6 +648,8 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   sayAloudRef.current = sayAloud;
   /** «Ciao Gaetano, eccomi»: Maria opens the conversation herself, in her own voice. */
   const greet = (text = "") => sock.current?.send({ type: "greet", text });
+  /** Ready her voice (the speaker) without opening the microphone: the hello can start during the intro. */
+  const prepareVoice = () => pcm.current.unlock().catch(() => undefined);
 
   const toggleMic = () => { pressStart(); if (engine === "browser") pressStop(); };
   const endConversation = () => {
@@ -658,7 +677,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   });
 
   return { state, connected, partial, engine, liveOn, audioPlaying, recovering, pressStart, pressStop,
-    interrupt, answer, sendText, speak, sayAloud, greet, toggleMic, endConversation, setConversation, microphoneOn: liveOn || capturing,
+    interrupt, answer, sendText, speak, sayAloud, greet, prepareVoice, toggleMic, endConversation, setConversation, microphoneOn: liveOn || capturing,
     sampleLevel: () => ({ input: inputLevel.current, output: Math.max(pcm.current.level(), player.current.level()) }),
     /** Frequency bins (0-255) of what NODO hears and says, for the visuals. null = nothing playing / no mic. */
     spectrum: () => {

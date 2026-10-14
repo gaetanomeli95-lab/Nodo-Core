@@ -481,3 +481,5 @@ html.calm .sing-notes { display: none; }
 .holo-projector i:nth-child(2) { border-top-color: rgba(255,210,122,.8); border-bottom-color: rgba(255,210,122,.8); }
 .holo-nav { color: #ffe3a6; }
 .work-pct { color: #ffd27a; font-weight: 700; }
+
+html.lite .intro.leaving { filter: none; }   /* a full-screen blur while her voice starts: the small PC stuttered */

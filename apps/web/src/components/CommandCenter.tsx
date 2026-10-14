@@ -216,19 +216,26 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   // No click, no scrolling: what you see on video is the program waking up and talking to you.
   const autoHello = useRef(true);
   const [introOver, setIntroOver] = useState(() => introDone());
+  const [introAlmost, setIntroAlmost] = useState(() => introDone());
   useEffect(() => {
-    const on = () => setIntroOver(true);
-    window.addEventListener(INTRO_DONE_EVENT, on);
-    window.addEventListener(ALMOST_EVENT, on);          // greet while the intro closes: no silent gap after it
-    return () => { window.removeEventListener(INTRO_DONE_EVENT, on); window.removeEventListener(ALMOST_EVENT, on); };
+    const done = () => { setIntroOver(true); setIntroAlmost(true); };
+    const almost = () => setIntroAlmost(true);
+    window.addEventListener(INTRO_DONE_EVENT, done);
+    window.addEventListener(ALMOST_EVENT, almost);
+    return () => { window.removeEventListener(INTRO_DONE_EVENT, done); window.removeEventListener(ALMOST_EVENT, almost); };
   }, []);
   const helloSent = useRef(false);
-  useEffect(() => {
-    if (!introOver || !voice.connected || !voiceConfig || helloSent.current) return;
+  useEffect(() => {                 // the hello: asked while the intro closes, so it arrives with no silent gap
+    if (!introAlmost || !voice.connected || !voiceConfig || helloSent.current) return;
     helloSent.current = true;
     if (voiceConfig.engine === "browser") { autoHello.current = false; return; }
-    if (!voice.microphoneOn) voice.pressStart();          // opens the live conversation (asks for the mic only once)
-    setTimeout(() => voiceRef.current.greet(), 250);
+    void voice.prepareVoice().then(() => voiceRef.current.greet());
+  }, [introAlmost, voice.connected, voiceConfig]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const micOpened = useRef(false);
+  useEffect(() => {                 // the microphone only once the intro is gone: starting it is a heavy moment
+    if (!introOver || !voice.connected || !voiceConfig || micOpened.current || voiceConfig.engine === "browser") return;
+    micOpened.current = true;
+    if (!voice.microphoneOn) window.setTimeout(() => voice.pressStart(), voice.audioPlaying ? 2500 : 400);
   }, [introOver, voice.connected, voiceConfig]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const send = async (requested?: string) => {
