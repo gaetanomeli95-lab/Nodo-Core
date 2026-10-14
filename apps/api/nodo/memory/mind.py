@@ -274,6 +274,9 @@ def memory_listing(db, org: str) -> str:
                      for f in rows[-120:]) or "(vuota)"
 
 
+_ONE_AT_A_TIME = asyncio.Semaphore(1)   # one archivist at a time: the PC is small and the voice comes first
+
+
 async def archive_turns(container, db, conversation_id: str) -> list[str]:
     """The archivist: reads what was said since its last pass in this conversation and updates the memory."""
     from nodo.providers.base import ChatMessage
@@ -303,9 +306,13 @@ async def archive_turns(container, db, conversation_id: str) -> list[str]:
                               transcript="\n".join(lines)[-9000:])
     reply = ""
     try:
-        async for ch in core.router.stream([ChatMessage("user", prompt)],
-                                           RouteRequest(purpose="memory", min_reasoning=3), request_id="mind"):
-            reply += ch.delta or ""
+        # prefer_fast: an API model (seconds, nothing running on the PC) before a CLI that starts a whole program
+        # on Gaetano's small PC and competes with the voice for CPU and memory
+        async with _ONE_AT_A_TIME:
+            async for ch in core.router.stream([ChatMessage("user", prompt)],
+                                               RouteRequest(purpose="memory", min_reasoning=3, prefer_fast=True),
+                                               request_id="mind"):
+                reply += ch.delta or ""
     except NoEligibleModel:
         return []
     except Exception:  # noqa: BLE001 - memory must never break the conversation
@@ -357,7 +364,7 @@ async def write_diary(container, db, day: date) -> str | None:
 _pending: dict[str, asyncio.Task] = {}
 
 
-def after_turn(container, conversation_id: str | None, delay: float = 8.0, force: bool = False) -> None:
+def after_turn(container, conversation_id: str | None, delay: float = 40.0, force: bool = False) -> None:
     """Called when an exchange ends: the archivist runs a few seconds later (debounced per conversation)."""
     if not conversation_id or not getattr(container.settings, "learn_from_chats", True):
         return

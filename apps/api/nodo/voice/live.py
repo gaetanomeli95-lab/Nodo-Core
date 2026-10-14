@@ -116,7 +116,7 @@ def live_config(settings, system: str, tool_decls: list[dict], handle: str | Non
         "realtime_input_config": {
             "automatic_activity_detection": {
                 "disabled": False,
-                "start_of_speech_sensitivity": "START_SENSITIVITY_LOW",
+                "start_of_speech_sensitivity": getattr(settings, "live_start_sensitivity", "START_SENSITIVITY_HIGH"),
                 "end_of_speech_sensitivity": "END_SENSITIVITY_LOW",
                 "prefix_padding_ms": 100,
                 "silence_duration_ms": 600,

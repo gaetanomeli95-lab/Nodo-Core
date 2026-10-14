@@ -61,6 +61,7 @@ _VOCATIVE = re.compile(r"^\s*(nodo|node|hey nodo|ehi nodo)[,.\s]+", re.IGNORECAS
 _STOP_RE = re.compile(
     r"^\s*((no[, ]+)?(stop|fermati|ferma|basta|annulla|cancel|chiudi|smetti|silenzio|sta zitto|zitto)"
     r"[.\!\s]*)$", re.IGNORECASE)
+_STOP_WORD = re.compile(r"\b(ferma|fermati|basta|stop|zitta|zitto|aspetta|silenzio)\b", re.IGNORECASE)
 _APPROVE_RE = re.compile(
     r"^\s*(sì|si|yes|ok|okay|va bene|conferma|confermo|procedi|vai pure|approvo|d'accordo)[.\!\s]*$",
     re.IGNORECASE)
@@ -123,6 +124,7 @@ class VoiceRuntime:
         self._live_tool_lock = asyncio.Lock()
         self._live_results: dict[str, dict] = {}
         self._pensa_error: str | None = None   # a failed «pensa» is not retried within the same turn
+        self._barge_from: int | None = None    # where Maria started talking in the transcript: «ferma» after it stops her
         self._live_user_emitted = False
 
     # ------------------------------------------------------------- inbound dispatch
@@ -566,6 +568,8 @@ class VoiceRuntime:
                 vs.turn_active = True
             vs.mark("tts_started")
             vs.mark("tts_first_audio")
+            if self._barge_from is None:
+                self._barge_from = len(self._in_text)
             if vs.state != VoiceState.SPEAKING:
                 await self._live_go(VoiceState.UNDERSTANDING, VoiceState.THINKING, VoiceState.SPEAKING)
             await self._send("tts.chunk", audio=protocol.encode_audio(ev["data"]),
@@ -579,6 +583,11 @@ class VoiceRuntime:
             self._in_text += ev["text"]
             vs.mark("transcript_partial_first")
             await self._send("transcript.partial", text=self._in_text)
+            if (self._barge_from is not None and not self._live_muted
+                    and _STOP_WORD.search(self._in_text[self._barge_from:])):
+                # «ferma, ferma»: stop at once, do not wait for Gemini to notice it was interrupted
+                await self.interrupt(reason="stop_word")
+                return
             if vs.state != VoiceState.UNDERSTANDING:
                 await self._live_go(VoiceState.LISTENING, VoiceState.UNDERSTANDING)
         elif kind == "output":                               # Gemini transcribing its own answer
@@ -872,6 +881,7 @@ class VoiceRuntime:
         self._out_text.clear()
         self._live_muted = False
         self._pensa_error = None
+        self._barge_from = None
         self._live_reconnects = 0        # a healthy turn: the next drop deserves a fresh reconnect
         vs.mark("tts_done")
         vs.mark("turn_done")

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { downloadFile, get, post, streamCommand, type NodoEvent, type VoiceConfig, type VoiceEvent } from "../api";
 import { useVoiceSession } from "./Voice";
-import { Presence, type PresenceMode } from "./Presence";
+import type { PresenceMode } from "./Presence";
 import { Pulse } from "./Pulse";
 import { Viewer, type ViewItem } from "./Viewer";
 import { Board } from "./holo/Board";
-import { HoloCore } from "./holo/HoloCore";
+import { MindGraph } from "./holo/MindGraph";
 import { Eyes } from "./holo/Eyes";
 import { Palette, type Action } from "./holo/Palette";
 import { Subtitles } from "./holo/Subtitles";
@@ -15,7 +15,7 @@ type Decision = { id: string; label: string; site?: string; preview?: string; pr
 type Surface = { view: string; rows: Record<string, unknown>[]; summary: string };
 const DOING: Record<string, string> = {
   night_report: "Rileggo il turno di notte", sites_status: "Guardo i tuoi siti", check_sites: "Controllo i siti",
-  pending_decisions: "Raccolgo le decisioni", decide: "Eseguo la tua decisione", request_site_change: "Preparo la modifica",
+  pensa: "Ci penso", pending_decisions: "Raccolgo le decisioni", decide: "Eseguo la tua decisione", request_site_change: "Preparo la modifica",
   projects: "Guardo i progetti", today_agenda: "Metto a fuoco le priorità", create_task: "Segno l'attività",
   complete_task: "Aggiorno l'attività", remember: "Aggiorno la memoria", recall: "Cerco nella memoria", save_draft: "Salvo la bozza",
   clients: "Guardo i clienti", create_client: "Creo il cliente", create_project: "Creo il progetto",
@@ -62,8 +62,6 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const [surface, setSurfaceRaw] = useState<Surface | null>(null);
   const [viewing, setViewing] = useState<ViewItem | null>(null);
   const [eyes, setEyes] = useState<"camera" | "screen" | null>(null);
-  const [webgl] = useState(() => { try { return !!document.createElement("canvas").getContext("webgl2"); } catch { return false; } });
-  const [firstBoot] = useState(() => { try { return sessionStorage.getItem("nodo.booted") !== "1"; } catch { return true; } });
   const [boardRev, setBoardRev] = useState(0);
   const onOpenTabRef = useRef(onOpenTab);
   onOpenTabRef.current = onOpenTab;
@@ -285,15 +283,14 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     <Palette actions={actions} onAsk={(t) => void send(t)} />
     {!diary && <Board revision={boardRev} />}
     <div className="voice-stage">
+      <MindGraph mode={mode} sampleLevel={voice.sampleLevel} heard={voice.partial || lastUser} said={lastNodo}
+        activity={activity} revision={turns.length + boardRev} />
       <div className="stage-topline"><span className="eyebrow">IL TUO SPAZIO DI LAVORO</span>
         <button className={`quiet-button ${diary ? "selected" : ""}`} aria-expanded={diary} onClick={() => setDiary(!diary)}>Diario <span>↗</span></button></div>
       <div className="presence-copy" aria-live="polite"><span className={`presence-state ${mode}`}><i />
         {!voice.connected ? "COLLEGAMENTO IN CORSO" : mode === "rest" ? "PRONTO QUANDO VUOI" : { listen: "IN ASCOLTO", think: "STO PENSANDO", act: "AL LAVORO", speak: "NODO PARLA", approve: "UNA TUA DECISIONE", reconnect: "RICONNESSIONE" }[mode]}</span>
         <h2>{title}</h2><p>{subtitle}</p></div>
-      <div className="holo-stage-core">
-        <Presence mode={mode} sampleLevel={voice.sampleLevel} spectrum={voice.spectrum} bodyless={webgl} />
-        {webgl && <HoloCore mode={mode} sampleLevel={voice.sampleLevel} spectrum={voice.spectrum} boot={firstBoot} />}
-      </div>
+      <div className="holo-stage-core mind-spacer" />
       {activity && <div className="holo-chip" role="status"><i />{activity}</div>}
       {!decision && !surface && <Subtitles user={lastUser} nodo={lastNodo} partial={voice.partial} />}
       {error && <div className="voice-notice" role="alert"><span>{error}</span><button aria-label="Chiudi avviso" onClick={() => setError(null)}>×</button></div>}

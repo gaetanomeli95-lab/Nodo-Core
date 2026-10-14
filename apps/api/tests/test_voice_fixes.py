@@ -190,3 +190,24 @@ def test_recording_a_model_call_does_not_take_the_database_lock(db):
     assert any(isinstance(o, InferenceRun) for o in db.new)           # pending, not written: no lock taken
     db.commit()
     assert db.query(InferenceRun).filter_by(error="risposta non JSON").count() == 1
+
+
+async def test_saying_ferma_over_maria_stops_her_at_once(container, engine):
+    from nodo.db.session import session_scope
+    from nodo.voice.runtime import VoiceRuntime
+
+    events = []
+    async def emit(event):
+        events.append(event)
+    runtime = VoiceRuntime(container.voice_sessions.create(None, "it"), container, emit, session_scope)
+    class Bridge:
+        async def close(self):
+            pass
+    runtime._live = Bridge()
+    await runtime._on_live_event({"kind": "input", "text": "Basta che mi dici la giornata"})   # before she talks
+    await runtime._on_live_event({"kind": "audio", "data": b"\x00\x00"})                      # Maria speaks
+    assert not any(e["type"] == "voice.interrupted" for e in events)                          # «basta» was earlier
+    await runtime._on_live_event({"kind": "input", "text": " ferma, ferma"})
+    assert any(e["type"] == "voice.interrupted" and e["reason"] == "stop_word" for e in events)
+    runtime._live = None
+    await runtime.close()

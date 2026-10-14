@@ -77,8 +77,8 @@ _LIMIT_RE = re.compile(r"limit|quota|rate.?limit|\b429\b|too many requests|usage
 _DEAD_RE = re.compile(r"not.?found|does not exist|no such model|invalid api key|unauthoriz|forbidden|"
                       r"permission denied|\b401\b|\b403\b|\b404\b", re.I)
 # transient trouble (timeout, overload, 5xx): may heal in minutes, so the pause is short
-_TRANSIENT_RE = re.compile(r"timed?\s*out|timeout|non ha risposto|unavailable|overloaded|\b50[0-9]\b|deadline",
-                           re.I)
+_TRANSIENT_RE = re.compile(r"timed?\s*out|timeout|non ha risposto|unavailable|overloaded|\b50[0-9]\b|deadline|"
+                           r"non JSON|transport error|getaddrinfo|high demand", re.I)
 _cooldown: dict[str, float] = {}
 
 # A voice turn cannot wait minutes while a dead provider burns its own timeout: `prefer_fast`
@@ -225,11 +225,14 @@ class ModelRouter:
         """One function-calling step on the best eligible tool-capable model, with fallback."""
         req.needs_tools = True
         errors: list[str] = []
-        for cand in self.eligible(req):
+        cands = self.eligible(req)
+        # resting providers go LAST instead of never: if every good one is resting, a slow answer beats none
+        cands = [c for c in cands if not self._paused(c.descriptor.provider)] + \
+                [c for c in cands if self._paused(c.descriptor.provider)]
+        for cand in cands:
             d = cand.descriptor
             provider = self.providers[d.provider]
-            if not hasattr(provider, "complete_tools") or self._paused(d.provider) \
-                    or not await provider.available():
+            if not hasattr(provider, "complete_tools") or not await provider.available():
                 continue
             self.last_decision = cand
             t0 = time.perf_counter()
