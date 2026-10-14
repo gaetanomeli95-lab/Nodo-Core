@@ -20,7 +20,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 import uuid
@@ -39,6 +38,7 @@ from nodo.providers.base import (
     estimate_tokens,
 )
 from nodo.providers.text_tools import TOOL_PROTOCOL, _parse, _render_transcript  # noqa: F401
+from nodo.providers.cli_process import run_cli
 
 OPTIONAL_FLAGS = ["--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--effort"]
 
@@ -101,11 +101,9 @@ class ClaudeCodeProvider:
         env.pop("ANTHROPIC_API_KEY", None)        # make sure the subscription login is used
         return env
 
-    def _exec(self, args: list[str], stdin: bytes | None, timeout: float,
-              cwd: Path | None = None) -> subprocess.CompletedProcess:
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
-        return subprocess.run(args, input=stdin, capture_output=True, env=self._env(), cwd=cwd or self._cwd,
-                              timeout=timeout, creationflags=flags)
+    async def _exec(self, args: list[str], stdin: bytes | None, timeout: float,
+                    cwd: Path | None = None) -> subprocess.CompletedProcess:
+        return await run_cli(args, stdin, timeout, env=self._env(), cwd=cwd or self._cwd)
 
     async def available(self) -> bool:
         if not self.executable:
@@ -114,7 +112,7 @@ class ClaudeCodeProvider:
             return self._auth_ok
         self._auth_checked_at = time.monotonic()
         try:
-            proc = await asyncio.to_thread(self._exec, [self.executable, "auth", "status"], None, 30)
+            proc = await self._exec([self.executable, "auth", "status"], None, 30)
             out = proc.stdout.decode("utf-8", "replace")
             info = json.loads(out[out.index("{"):]) if "{" in out else {}
             self._auth_ok = proc.returncode == 0 and bool(info.get("loggedIn", True))
@@ -136,7 +134,7 @@ class ClaudeCodeProvider:
                 if effort and "--effort" not in self._dropped:
                     args += ["--effort", effort]   # conversation: answer fast; code (stream) keeps the default
                 try:
-                    proc = await asyncio.to_thread(self._exec, args, prompt.encode("utf-8"), self.timeout)
+                    proc = await self._exec(args, prompt.encode("utf-8"), self.timeout)
                 except subprocess.TimeoutExpired as e:
                     raise ProviderError("Claude (abbonamento) non ha risposto in tempo") from e
                 except OSError as e:
@@ -179,7 +177,7 @@ class ClaudeCodeProvider:
                     "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"]
             for _ in range(len(OPTIONAL_FLAGS) + 1):
                 try:
-                    proc = await asyncio.to_thread(self._exec, args, task.encode("utf-8"), timeout, workdir)
+                    proc = await self._exec(args, task.encode("utf-8"), timeout, workdir)
                 except subprocess.TimeoutExpired as e:
                     raise ProviderError("il lavoro ha richiesto troppo tempo e l'ho interrotto") from e
                 except OSError as e:

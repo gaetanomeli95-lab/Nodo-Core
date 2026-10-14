@@ -13,12 +13,10 @@ subscription stops answering (limits, login expired) NODO simply moves on to the
 """
 from __future__ import annotations
 
-import asyncio
 import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 import uuid
@@ -80,10 +78,9 @@ class CodexCliProvider:
         env["NO_COLOR"] = "1"
         return env
 
-    def _exec(self, args: list[str], stdin: bytes | None, timeout: float) -> subprocess.CompletedProcess:
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
-        return subprocess.run(args, input=stdin, capture_output=True, env=self._env(), cwd=self._cwd,
-                              timeout=timeout, creationflags=flags)
+    async def _exec(self, args: list[str], stdin: bytes | None, timeout: float) -> subprocess.CompletedProcess:
+        from nodo.providers.cli_process import run_cli
+        return await run_cli(args, stdin, timeout, env=self._env(), cwd=self._cwd)
 
     async def available(self) -> bool:
         if not self.executable:
@@ -92,7 +89,7 @@ class CodexCliProvider:
             return self._auth_ok
         self._auth_checked_at = time.monotonic()
         try:
-            proc = await asyncio.to_thread(self._exec, [self.executable, "login", "status"], None, 30)
+            proc = await self._exec([self.executable, "login", "status"], None, 30)
             out = (proc.stdout + proc.stderr).decode("utf-8", "replace").lower()
             self._auth_ok = proc.returncode == 0 and "not logged" not in out
         except (OSError, subprocess.TimeoutExpired):
@@ -116,7 +113,7 @@ class CodexCliProvider:
                     args += ["--model", model]
                 args.append("-")                       # prompt from stdin
                 try:
-                    proc = await asyncio.to_thread(self._exec, args, prompt.encode("utf-8"), self.timeout)
+                    proc = await self._exec(args, prompt.encode("utf-8"), self.timeout)
                 except subprocess.TimeoutExpired as e:
                     raise ProviderError("ChatGPT (abbonamento) non ha risposto in tempo") from e
                 except OSError as e:
