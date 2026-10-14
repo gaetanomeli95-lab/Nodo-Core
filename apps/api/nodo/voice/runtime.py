@@ -578,7 +578,7 @@ class VoiceRuntime:
                     await self._send(t, **{k: v for k, v in e.items() if k not in ("type", "request_id", "at")})
 
     # ------------------------------------------------------------- Gemini Live engine
-    def _live_context(self, resume_handle: str | None) -> tuple[str, list[dict]]:
+    def _live_context(self, resume_handle: str | None) -> tuple[str, list[dict], str]:
         from nodo.brain.board import board_for
         from nodo.brain.loop import Brain
         from nodo.brain.persona import build_live_persona
@@ -587,8 +587,10 @@ class VoiceRuntime:
         rid = f"voice-live-{self.vs.id[:8]}"
         with self._db() as sdb:
             core = self.c.core(sdb)
-            conv = core._conversation(self.vs.conversation_id, "voice")
-            self.vs.conversation_id = conv.id
+            asked = self.vs.conversation_id
+            conv = core._conversation(asked, "voice")
+            if self.vs.conversation_id == asked:      # the panel may have switched thread while this ran
+                self.vs.conversation_id = conv.id
             # the shop, already read: the voice answers register questions from here in a second
             board = board_for(core.org)
             board.refresh(sdb, core.org, self.c.settings, self._now())
@@ -613,20 +615,24 @@ class VoiceRuntime:
             # not improvise an answer while the brain is still working.
             decls = [{**d, "behavior": "BLOCKING"} for d in decls]
             sdb.commit()  # Advertise only a durable, valid conversation ID.
-        return system, decls
+        return system, decls, conv.id
 
     async def _start_live(self, resume_model: str | None = None, resume_handle: str | None = None) -> None:
         """Opens the real-time session: persona + tools identical to the text brain, but audio in/out."""
         started = time.monotonic()
         # the database work (memory, lavagna viva, history) runs in a worker thread: on the shop laptop it took
         # seconds INSIDE the connection timeout and blocked everything else while it ran
-        system, decls = await asyncio.to_thread(self._live_context, resume_handle)
+        system, decls, built_for = await asyncio.to_thread(self._live_context, resume_handle)
         prepared = time.monotonic()
         bridge = live_engine.LiveBridge(self.c.settings, self._on_live_event,
                                        getattr(self.c, "live_connect", None))
         try:
             await bridge.start(system, decls, self.vs.language, exclude=self._live_failed_models,
                                resume_model=resume_model, resume_handle=resume_handle)
+            if self.vs.conversation_id != built_for:
+                # the thread changed while connecting: this session has the other thread in its head
+                await bridge.close()
+                return
             self._live = bridge
             log.info("live ready on %s: context %.0f ms, connection %.0f ms", bridge.model,
                      (prepared - started) * 1000, (time.monotonic() - prepared) * 1000)
