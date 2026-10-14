@@ -7,7 +7,7 @@ import { NightView } from "./components/Night";
 import { StatePanel, TracePanel } from "./components/Panels";
 import { SetupView } from "./components/Setup";
 import { SitesView } from "./components/Sites";
-import { Boot } from "./components/holo/Boot";
+import { Intro } from "./components/holo/Intro";
 import { Cosmos } from "./components/holo/Cosmos";
 
 type Tab = "command" | "ledger" | "night" | "sites" | "memory" | "setup";
@@ -64,7 +64,7 @@ export default function App() {
   return (
     <main className={`layout presence-layout holo ${details ? "show-details" : ""}`}>
       <Cosmos />
-      <Boot name="NODO" />
+      <Intro name="NODO" />
       <StatePanel system={system} projects={projects} tasks={tasks} activeContext={activeContext} sites={sites}
                   pending={pending.length} onOpen={(t) => setTab(t as Tab)} />
       <div className="center">

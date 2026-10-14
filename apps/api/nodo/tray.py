@@ -138,8 +138,13 @@ def open_panel(port: int) -> None:
         if exe:
             try:
                 # the app window may speak at once: NODO greets you while it appears
-                subprocess.Popen([exe, f"--app={url}", "--autoplay-policy=no-user-gesture-required"],
-                                 creationflags=NO_WINDOW)
+                # its OWN browser profile: if Edge is already open, flags given to a second window are ignored
+                # (no sound at start); a separate profile is a separate process that honours them, and it
+                # remembers the microphone permission for NODO alone
+                profile = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "NODO" / "finestra"
+                subprocess.Popen([exe, f"--app={url}", "--autoplay-policy=no-user-gesture-required",
+                                  f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
+                                  "--window-size=1440,900"], creationflags=NO_WINDOW)
                 return
             except OSError:
                 break

@@ -163,6 +163,8 @@ class VoiceRuntime:
                 await self.interrupt(reason=msg.reason)
             elif isinstance(msg, ApprovalAnswer):
                 await self._answer_approval(msg.approval_id, msg.decision)
+            elif isinstance(msg, protocol.Greet):
+                await self._greet(msg.text)
         except InterruptRequested:
             pass
         except Exception as e:  # the session must survive a single bad message
@@ -852,6 +854,19 @@ class VoiceRuntime:
             self._log("voice.babble_ignored", {"text": heard[:60]})
             return True
         return False
+
+    async def _greet(self, text: str) -> None:
+        """Opening line in Maria's live voice. Not saved as something Gaetano said; her answer is kept."""
+        owner = self.c.settings.owner_name
+        line = (text or f"Ciao {owner}, eccomi. In cosa posso esserti utile oggi?").strip()[:200]
+        if self._live_wanted and await self._ensure_live() and self._live is not None:
+            try:
+                await self._live.inject(f"[{owner} ha appena aperto NODO. Salutalo adesso, calda e naturale, "
+                                        f"dicendo esattamente: «{line}». Poi ascolta.]", respond=True)
+                return
+            except live_engine.LiveDropped as e:
+                await self._live_dropped(str(e))
+        await self._send("tts.speak.request", text=line)     # no live voice: the panel says it with server TTS
 
     async def _think_events(self, brain, text: str, bindings: list[dict]) -> None:
         async for ev in brain.run(text):

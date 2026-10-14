@@ -305,6 +305,9 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
               speechQueue.current.push(e.text as string);
               if (!speaking.current) browserTtsNext();
               break;
+            case "tts.speak.request":   // the server has no live voice right now: say it with her neural voice
+              void sayAloudRef.current(e.text as string);
+              break;
             case "voice.engine": {     // live session died mid-conversation
               setRecovering(false);
               const next = asEngine(e.engine);
@@ -616,6 +619,11 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     } catch { speak(text); }
   };
 
+  const sayAloudRef = useRef(sayAloud);
+  sayAloudRef.current = sayAloud;
+  /** «Ciao Gaetano, eccomi»: Maria opens the conversation herself, in her own voice. */
+  const greet = (text = "") => sock.current?.send({ type: "greet", text });
+
   const toggleMic = () => { pressStart(); if (engine === "browser") pressStop(); };
   const endConversation = () => {
     sock.current?.send({ type: "interrupt", reason: "microphone_off" });
@@ -642,7 +650,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   });
 
   return { state, connected, partial, engine, liveOn, audioPlaying, recovering, pressStart, pressStop,
-    interrupt, answer, sendText, speak, sayAloud, toggleMic, endConversation, setConversation, microphoneOn: liveOn || capturing,
+    interrupt, answer, sendText, speak, sayAloud, greet, toggleMic, endConversation, setConversation, microphoneOn: liveOn || capturing,
     sampleLevel: () => ({ input: inputLevel.current, output: Math.max(pcm.current.level(), player.current.level()) }),
     /** Frequency bins (0-255) of what NODO hears and says, for the visuals. null = nothing playing / no mic. */
     spectrum: () => {

@@ -140,7 +140,24 @@ if ($Tray) {
   exit 0
 }
 Say "NODO e' acceso su $url  (chiudi questa finestra per spegnerlo)"
-if (-not $NoBrowser) { Start-Job -ScriptBlock { param($u) Start-Sleep 4; Start-Process $u } -ArgumentList $url | Out-Null }
+if (-not $NoBrowser) {
+  # opens the moment NODO answers (not after a fixed wait), as an app window with its own profile: sound and the
+  # greeting work at once even if Edge is already open, and the microphone permission is remembered
+  Start-Job -ScriptBlock {
+    param($u)
+    for ($i = 0; $i -lt 120; $i++) {
+      try { Invoke-WebRequest "$u/health" -UseBasicParsing -TimeoutSec 1 | Out-Null; break } catch { Start-Sleep -Milliseconds 400 }
+    }
+    $prof = Join-Path $env:LOCALAPPDATA "NODO\finestra"
+    $browsers = @("${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe", "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+                  "$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe")
+    $exe = $browsers | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+    if ($exe) {
+      Start-Process $exe -ArgumentList @("--app=$u", "--autoplay-policy=no-user-gesture-required", "--user-data-dir=$prof",
+                                        "--no-first-run", "--no-default-browser-check", "--window-size=1440,900")
+    } else { Start-Process $u }
+  } -ArgumentList $url | Out-Null
+}
 Push-Location $Api
 # il log resta anche in apps/api/nodo.log: utile per capire cosa e' successo dopo un errore
 $log = Join-Path $Api "nodo.log"
@@ -148,7 +165,8 @@ try { $fs = [IO.File]::Open($log, 'Append', 'Write', 'ReadWrite'); $fs.Close() }
 catch { $log = Join-Path $Api ("nodo-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log") }  # nodo.log locked by another program
 # se NODO si ferma da solo (errore imprevisto) riparte dopo 10 secondi: di notte nessuno può riavviarlo
 while ($true) {
-  & $Py -m uvicorn nodo.main:app --host 127.0.0.1 --port $Port 2>&1 | Tee-Object -FilePath $log -Append
+  # UTF-8 log (Tee-Object wrote UTF-16 into the same file the app writes in UTF-8: an unreadable mix)
+  & $Py -m uvicorn nodo.main:app --host 127.0.0.1 --port $Port 2>&1 | ForEach-Object { $line = "$_"; Write-Host $line; [IO.File]::AppendAllText($log, $line + "`r`n") }
   Warn "NODO si e' fermato (codice $LASTEXITCODE). Riparto tra 10 secondi... (chiudi la finestra per spegnerlo)"
   Start-Sleep -Seconds 10
 }

@@ -64,8 +64,14 @@ class SessionEnd(BaseModel):
     type: Literal["session.end"] = "session.end"
 
 
+class Greet(BaseModel):
+    """The panel just opened: Maria says hello in her own voice and keeps listening (no click needed)."""
+    type: Literal["greet"] = "greet"
+    text: str = ""
+
+
 Inbound = SessionStart | ConversationSet | AudioChunk | SpeechEnd | TranscriptPartial | TranscriptFinal | Interrupt \
-    | ApprovalAnswer | SessionEnd
+    | ApprovalAnswer | SessionEnd | Greet
 INBOUND = TypeAdapter(Inbound)  # validates on the `type` literal
 
 

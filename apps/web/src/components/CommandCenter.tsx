@@ -5,6 +5,7 @@ import type { PresenceMode } from "./Presence";
 import { Pulse } from "./Pulse";
 import { Viewer, type ViewItem } from "./Viewer";
 import { Board } from "./holo/Board";
+import { INTRO_DONE_EVENT, introDone } from "./holo/Intro";
 import { MindGraph } from "./holo/MindGraph";
 import { Eyes } from "./holo/Eyes";
 import { Palette, type Action } from "./holo/Palette";
@@ -163,7 +164,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         voiceRef.current.setConversation(g.conversation_id);
         setTurns((ts) => [...ts, { who: "nodo", text: g.text, done: true }]);
         const speakIt = () => {
-          if (spokenGreeting.current === g.text || voiceRef.current.microphoneOn) return;
+          if (spokenGreeting.current === g.text || voiceRef.current.microphoneOn || autoHello.current) return;
           spokenGreeting.current = g.text; void voiceRef.current.sayAloud(g.text);
         };
         // The NODO app window allows sound at once (it is opened with autoplay allowed): she greets you as the
@@ -180,6 +181,26 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       }).catch(() => {});
   }, []);
   useEffect(() => { if (diary) journal.current?.scrollTo(0, journal.current.scrollHeight); }, [turns, diary]);
+
+  // the opening ends -> Maria opens the conversation herself: microphone on, «Ciao Gaetano, eccomi…», listening.
+  // No click, no scrolling: what you see on video is the program waking up and talking to you.
+  const autoHello = useRef(true);
+  const [introOver, setIntroOver] = useState(() => introDone());
+  useEffect(() => {
+    const on = () => setIntroOver(true);
+    window.addEventListener(INTRO_DONE_EVENT, on);
+    return () => window.removeEventListener(INTRO_DONE_EVENT, on);
+  }, []);
+  const helloSent = useRef(false);
+  useEffect(() => {
+    if (!introOver || !voice.connected || !voiceConfig || helloSent.current) return;
+    helloSent.current = true;
+    let already = false;
+    try { already = sessionStorage.getItem("nodo.hello") === "1"; sessionStorage.setItem("nodo.hello", "1"); } catch { /* ignore */ }
+    if (already || voiceConfig.engine === "browser") { autoHello.current = false; return; }
+    if (!voice.microphoneOn) voice.pressStart();          // opens the live conversation (asks for the mic only once)
+    setTimeout(() => voiceRef.current.greet(), 700);
+  }, [introOver, voice.connected, voiceConfig]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const send = async (requested?: string) => {
     const text = (requested ?? input).trim();

@@ -719,3 +719,17 @@ async def test_pensa_silence_and_brain_down(container, engine, monkeypatch):
     monkeypatch.setattr(loop.Brain, "run", down)
     assert "error" in await runtime._live_think({"richiesta": "quanto ho incassato?"}, [])
     await runtime.close()
+
+
+def test_greet_makes_maria_say_hello_in_her_live_voice(client, container):
+    script = [_sc(output_transcription=SimpleNamespace(text="Ciao Gaetano, eccomi.")), _sc(turn_complete=True)]
+    holder = []
+    container.live_connect = make_connect(script, holder)
+    with client.websocket_connect(WS) as ws:
+        ws.send_json({"type": "session.start", "language": "it"})
+        _recv_until(ws, "voice.session.started")
+        ws.send_json({"type": "greet"})
+        _recv_until(ws, "voice.turn.done")
+    session = holder[0][2]
+    said = session.contents[0]["turns"][0]["parts"][0]["text"]
+    assert "Ciao Gaetano, eccomi. In cosa posso esserti utile oggi?" in said and session.contents[0]["turn_complete"]
