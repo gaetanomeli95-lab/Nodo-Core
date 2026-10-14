@@ -122,6 +122,8 @@ class VoiceRuntime:
         self._live_rotation: asyncio.Task | None = None
         self._live_tools: dict[str, asyncio.Task] = {}
         self._live_tool_lock = asyncio.Lock()
+        self._think_ids: set[str] = set()         # the «pensa» call in flight (only the newest one runs)
+        self._superseded: set[str] = set()
         self._live_results: dict[str, dict] = {}
         self._pensa_error: str | None = None   # a failed «pensa» is not retried within the same turn
         self._babble_checked = False             # one look per turn at what was heard
@@ -534,6 +536,8 @@ class VoiceRuntime:
                 # the yes/no of a decision; every real answer comes from the Claude brain through «pensa»
                 system += LIVE_BRAIN
                 decls = [THINK_DECL] + [d for d in decls if d["name"] in _LIVE_OWN_TOOLS]
+            # the text brain writes «[silenzio]» to stay quiet; a VOICE reads it aloud («silenzio, silenzio…»)
+            system = system.replace("scrivi soltanto [silenzio]", "stai zitta, non dire nessuna parola")
             # Live 3.8 runs tools NON-BLOCKING by default: it kept talking while the brain worked and made answers
             # up («sto analizzando i dati in tempo reale»), then called pensa again. Every tool waits for its result.
             decls = [{**d, "behavior": "BLOCKING"} for d in decls]
@@ -605,6 +609,12 @@ class VoiceRuntime:
             if self._live_muted:
                 return
             self._out_text.append(ev["text"])
+            said = "".join(self._out_text).strip().lower().lstrip("[(«\"' ")
+            if said and len(said) <= 12 and "silenzio".startswith(said[:8]) and len(said) >= 4:
+                self._live_muted = True     # it started reading «[silenzio]» aloud: stop relaying at once
+                self._out_text.clear()
+                await self._send("voice.interrupted", reason="quiet", during="SPEAKING")
+                return
             vs.mark("model_first_token")
             if vs.state != VoiceState.SPEAKING:
                 await self._live_go(VoiceState.UNDERSTANDING, VoiceState.THINKING, VoiceState.SPEAKING)
@@ -617,6 +627,12 @@ class VoiceRuntime:
                                     VoiceState.THINKING, VoiceState.ACTING)
             # Keep receiving interruptions, resumption tokens and GoAway during slow tools.
             cid = ev["id"]
+            if ev.get("name") == THINK_DECL["name"]:
+                for old_id in [k for k in self._think_ids if k != cid]:
+                    if (task := self._live_tools.get(old_id)) and not task.done():
+                        self._superseded.add(old_id)
+                        task.cancel()
+                self._think_ids = {cid}
             if cid not in self._live_tools or self._live_tools[cid].done():
                 self._live_tools[cid] = asyncio.create_task(self._run_live_tool(ev, self._live))
         elif kind == "interrupted":                          # you spoke over it: Gemini stopped itself
@@ -661,6 +677,16 @@ class VoiceRuntime:
                 if self._live is bridge and not self._dead:
                     await self._live_tool_calls([call], bridge)
         except asyncio.CancelledError:
+            if call.get("id") in self._superseded:
+                # replaced by a newer question: close the old call so Gemini does not wait on it forever
+                self._superseded.discard(call["id"])
+                if self._live is bridge and bridge is not None and not self._dead:
+                    try:
+                        await bridge.tool_response([(call["id"], call["name"], {
+                            "risposta": "", "nota": "Superata da una domanda più nuova: non dire niente."})])
+                    except Exception:  # noqa: BLE001
+                        pass
+                return
             raise
         except InterruptRequested:
             log.debug("live tool finished after the panel went away")   # the browser closed: nothing to tell
@@ -807,14 +833,24 @@ class VoiceRuntime:
     async def _live_think(self, args: dict, bindings: list[dict]) -> dict:
         """«pensa»: the Claude brain (memory, register, tools, honesty guard) answers; Live only says it."""
         from nodo.brain.loop import Brain, BrainUnavailable
+        from nodo.memory.mind import is_babble
 
         heard = (self._in_text or "").strip()
         asked = str(args.get("richiesta") or "").strip()
-        text = heard or asked
-        if asked and heard and asked.lower() not in heard.lower():
-            text += f"\n(La voce ha capito così: {asked})"
-        if not text:
-            return {"error": "Non ho capito la richiesta: chiedi a Gaetano di ripetere."}
+        if not asked and (not heard or is_babble(heard)):
+            # a cough, the TV, a customer in Spanish: no brain run (each one costs 15-30 s and blocks the next)
+            return self._quiet()
+        if asked and (not heard or is_babble(heard)):
+            text = asked
+        else:
+            text = heard
+            if asked and asked.lower() not in heard.lower():
+                text += f"\n(La voce ha capito così: {asked})"
+        # Gemini already decided this was for Maria: the brain must answer, not choose «[silenzio]» because the
+        # microphone also caught the shop around him (that silence was read aloud and the question came back
+        # again and again: fifteen «sospesi» in ten minutes)
+        text += ("\n(Arriva dalla voce dal vivo, che ha già capito che è una domanda per te: rispondi, breve. "
+                 "Il microfono può aver preso anche rumore o altre persone: ignora quella parte.)")
         rid = f"voice-think-{self.vs.id[:8]}-{self.vs.turn_number}"
         with self._db() as sdb:
             core = self.c.core(sdb)
@@ -835,10 +871,17 @@ class VoiceRuntime:
                 return {"error": "Il cervello ha avuto un problema tecnico: dillo a Gaetano in una frase, "
                                  "non inventare la risposta."}
             sdb.commit()
-        if getattr(brain, "silent", False):
-            return {"silenzio": True}
+        if getattr(brain, "silent", False) or not (brain.text or "").strip():
+            return self._quiet()
         return {"risposta": brain.text,
                 "come": "Dilla con parole tue, naturale e breve, senza aggiungere niente che non c'è qui."}
+
+    def _quiet(self) -> dict:
+        """Nothing to say this turn: whatever Gemini says next is not relayed (no «silenzio» read aloud) and
+        «pensa» cannot be called again until Gaetano speaks again."""
+        self._live_muted = True
+        self._pensa_error = "Non c'è niente da dire: resta zitta e NON richiamare pensa finché Gaetano non riparla."
+        return {"risposta": "", "nota": "Niente da dire: non parlare."}
 
     def _babble_gate(self) -> bool:
         """Before Maria answers: was that «turn» really Gaetano talking to her? «de», «y», «Ich», «Bam Bam», a

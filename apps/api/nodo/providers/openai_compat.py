@@ -151,10 +151,14 @@ def groq_descriptors(model: str) -> list[ModelDescriptor]:
                             max_sensitivity=Sensitivity.INTERNAL, daily_quota=1000)]
 
 
-def gemini_descriptors(model: str) -> list[ModelDescriptor]:
-    """Google Gemini through its OpenAI-compatible endpoint. The free tier covers Flash models (with daily limits)."""
+def gemini_descriptors(model: str, provider: str = "gemini") -> list[ModelDescriptor]:
+    """Google Gemini through its OpenAI-compatible endpoint. The free tier covers Flash models (with daily limits).
+    Flash-Lite is a little less sharp but has its OWN free quota: when Flash says «quota finita» (429) it keeps the
+    answers at 2-3 seconds instead of falling to the Claude program on the PC (15-20 s per step)."""
     flash = "flash" in model
-    return [ModelDescriptor(provider="gemini", model=model, reasoning=4, coding=4 if not flash else 3, vision=True,
+    lite = "lite" in model
+    return [ModelDescriptor(provider=provider, model=model, reasoning=3 if lite else 4,
+                            coding=4 if not flash else 3, vision=True,
                             tool_calling=True, context_window=1_000_000, latency_class="low",
                             tier="free" if flash else "paid", cost_in_per_1k=0 if flash else 0.00125,
                             cost_out_per_1k=0 if flash else 0.01, max_sensitivity=Sensitivity.INTERNAL,

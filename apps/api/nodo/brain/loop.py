@@ -130,7 +130,16 @@ class Brain:
                 lines.append(f"Registro di {self.settings.ledger_business}, da fare: "
                              + "; ".join(f"{sentence(r)} ({r.day})" for r in todo[:6]) + ".")
             if open_pay:
-                lines.append("Pagamenti sospesi: " + "; ".join(sentence(r) for r in open_pay[:6]) + ".")
+                # the whole list, with the total: «quali sono i sospesi?» is answered straight from here, without a
+                # tool round (on the Claude program that round alone is 15 seconds)
+                total = sum((r.amount or 0) for r in open_pay)
+                full = len(open_pay) <= 15
+                lines.append(f"Pagamenti sospesi ({len(open_pay)}, in tutto {total:.2f} €"
+                             + ("; elenco COMPLETO, rispondi da qui senza strumenti" if full else
+                                "; i primi 15, per gli altri usa ledger_open") + "): "
+                             + "; ".join(sentence(r) for r in open_pay[:15]) + ".")
+            else:
+                lines.append(f"Pagamenti sospesi nel registro di {self.settings.ledger_business}: nessuno.")
         except Exception:  # noqa: BLE001 - the snapshot must never fail because of the register
             pass
         from nodo.brain.background import _running

@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     ollama_tools: bool = True                  # when Ollama is set, also use it as a brain that can use tools
     gemini_api_key: str | None = None            # Google AI Studio key: free tier on Flash models
     gemini_model: str = "gemini-3.5-flash"     # 2.5 is closed to keys created after the 3.x rollout
+    gemini_lite_model: str = "gemini-3.5-flash-lite"   # own free quota: the backup when Flash answers 429
     gemini_reasoning: str = "none"             # none | low | medium | high: hidden thinking eats max_tokens (verified: empty answers)
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-sonnet-4-5"

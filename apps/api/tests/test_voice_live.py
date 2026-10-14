@@ -690,7 +690,8 @@ def test_live_pensa_hands_the_answer_to_the_claude_brain(client, container, monk
     names = [d["name"] for d in config["tools"][0]["function_declarations"]]
     assert names[0] == "pensa" and "ledger_add" not in names and "decide" in names   # Gemini cannot act alone
     assert "le orecchie e la bocca di Maria" in config["system_instruction"]
-    assert seen == ["Quanto mi deve Marcello?"]                     # the brain gets Gaetano's own words
+    assert len(seen) == 1 and seen[0].startswith("Quanto mi deve Marcello?\n")   # Gaetano's own words first
+    assert "rispondi" in seen[0]                                   # Gemini already decided it was for Maria
     result = session.tool_responses[0]["response"]["result"]
     assert result["risposta"].startswith("Marcello ci deve 30 euro")
     assert any(e["type"] == "nodo.step" and e["step"] == "tool:ledger_report" for e in events)
@@ -711,7 +712,10 @@ async def test_pensa_silence_and_brain_down(container, engine, monkeypatch):
     monkeypatch.setattr(loop.Brain, "run", quiet)
     runtime = VoiceRuntime(container.voice_sessions.create(None, "it"), container, emit, session_scope)
     runtime._in_text = "Mi dica signora, lo viene a ritirare lei?"
-    assert await runtime._live_think({}, []) == {"silenzio": True}
+    quiet_result = await runtime._live_think({}, [])
+    assert quiet_result["risposta"] == "" and "silenzio" not in str(quiet_result)   # never a word to read aloud
+    assert runtime._live_muted and runtime._pensa_error                           # and no second pensa this turn
+    runtime._live_muted, runtime._pensa_error = False, None
 
     async def down(self, text):
         raise loop.BrainUnavailable("nessun modello")
@@ -719,6 +723,50 @@ async def test_pensa_silence_and_brain_down(container, engine, monkeypatch):
     monkeypatch.setattr(loop.Brain, "run", down)
     assert "error" in await runtime._live_think({"richiesta": "quanto ho incassato?"}, [])
     await runtime.close()
+
+
+async def test_pensa_ignores_noise_and_keeps_the_real_question(container, engine, monkeypatch):
+    """The shop around him: Spanish from a customer, the TV. Noise alone never wakes the brain (15-30 s each);
+    noise plus a clear request from Gemini sends the REQUEST, not the noise."""
+    from nodo.brain import loop
+    from nodo.db.session import session_scope
+    from nodo.voice.runtime import VoiceRuntime
+    seen = []
+
+    async def fake_run(self, text):
+        seen.append(text)
+        self.text = "Hai tre sospesi."
+        return
+        yield
+
+    async def emit(event):
+        pass
+    monkeypatch.setattr(loop.Brain, "run", fake_run)
+    runtime = VoiceRuntime(container.voice_sessions.create(None, "it"), container, emit, session_scope)
+    runtime._in_text = "de la"
+    result = await runtime._live_think({}, [])
+    assert seen == [] and result["risposta"] == ""
+    runtime._live_muted, runtime._pensa_error = False, None
+    runtime._in_text = "y vale"
+    result = await runtime._live_think({"richiesta": "quali sono i pagamenti sospesi"}, [])
+    assert seen[0].startswith("quali sono i pagamenti sospesi") and "vale" not in seen[0]
+    assert result["risposta"] == "Hai tre sospesi."
+    await runtime.close()
+
+
+def test_live_reading_silenzio_aloud_is_cut(client, container):
+    """If Gemini starts saying «[silenzio]» the audio stops at once and nothing is kept as her answer."""
+    script = [_sc(input_transcription=SimpleNamespace(text="Mi dica, signora")),
+              _sc(output_transcription=SimpleNamespace(text="[silenzio")),
+              _sc(output_transcription=SimpleNamespace(text="]")),
+              _sc(turn_complete=True)]
+    holder = []
+    container.live_connect = make_connect(script, holder)
+    with client.websocket_connect(WS) as ws:
+        _open_live(ws)
+        events, _ = _recv_until(ws, "voice.turn.done")
+    assert any(e["type"] == "voice.interrupted" and e.get("reason") == "quiet" for e in events)
+    assert not any(e["type"] == "nodo.response" for e in events)
 
 
 def test_greet_makes_maria_say_hello_in_her_live_voice(client, container):
