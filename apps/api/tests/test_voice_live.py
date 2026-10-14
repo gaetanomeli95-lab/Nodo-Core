@@ -752,6 +752,10 @@ async def test_pensa_ignores_noise_and_keeps_the_real_question(container, engine
     result = await runtime._live_think({"richiesta": "quali sono i pagamenti sospesi"}, [])
     assert seen[0].startswith("quali sono i pagamenti sospesi") and "vale" not in seen[0]
     assert result["risposta"] == "Hai tre sospesi."
+    # the shop around a register question: Gemini's clean version goes to the brain (instant register read)
+    runtime._in_text = "allora mi senti quali sono i sospesi"
+    await runtime._live_think({"richiesta": "quali sono i sospesi"}, [])
+    assert seen[-1] == "quali sono i sospesi"
     await runtime.close()
 
 
@@ -782,3 +786,37 @@ def test_greet_makes_maria_say_hello_in_her_live_voice(client, container):
     session = holder[0][2]
     said = session.contents[0]["turns"][0]["parts"][0]["text"]
     assert "Ciao Gaetano, eccomi. In cosa posso esserti utile oggi?" in said and session.contents[0]["turn_complete"]
+
+
+def test_ferma_during_pensa_tells_gemini_so_maria_is_not_left_deaf(client, container, monkeypatch):
+    """«Ferma» while the brain works: the brain stops AND Gemini gets an answer for its waiting (BLOCKING) call;
+    without it the voice waited forever and Maria stopped answering."""
+    import time
+
+    from nodo.brain import loop
+
+    async def slow(self, text):
+        await asyncio.sleep(30)
+        yield {}
+
+    monkeypatch.setattr(loop.Brain, "run", slow)
+    script = [_sc(input_transcription=SimpleNamespace(text="quanto ho incassato questa settimana")),
+              _tc("pensa", {"richiesta": "quanto ho incassato questa settimana"}, fid="call-9")]
+    holder = []
+    container.live_connect = make_connect(script, holder)
+    with client.websocket_connect(WS) as ws:
+        _open_live(ws)
+        for _ in range(300):
+            e = ws.receive_json()
+            if e["type"] == "nodo.step" and e.get("step") == "tool:pensa" and e.get("status") == "running":
+                break
+        ws.send_json({"type": "interrupt"})
+        _recv_until(ws, "voice.interrupted")
+        session = holder[0][2]
+        for _ in range(100):
+            if session.tool_responses:
+                break
+            time.sleep(0.05)
+    assert session.tool_responses, "Gemini never got an answer for the stopped call"
+    r = session.tool_responses[0]
+    assert r["id"] == "call-9" and "fermata" in r["response"]["result"]["nota"]

@@ -127,6 +127,7 @@ class VoiceRuntime:
         self._think_keys: dict[str, tuple] = {}
         self._think_results: dict[tuple, dict] = {}
         self._superseded: set[str] = set()
+        self._stopped_gens: set[int] = set()    # turns WE stopped («Ferma»): Gemini does not know, it must be told
         self._live_results: dict[str, dict] = {}
         self._pensa_error: str | None = None   # a failed «pensa» is not retried within the same turn
         self._babble_checked = False             # one look per turn at what was heard
@@ -684,19 +685,21 @@ class VoiceRuntime:
     async def _run_live_tool(self, call: dict, bridge) -> None:
         try:
             async with self._live_tool_lock:
-                if (self._live is bridge and not self._dead and
-                        call.get("generation", self._gen) == self._gen):
-                    await self._live_tool_calls([call], bridge)
+                if self._live is bridge and not self._dead:
+                    if call.get("generation", self._gen) == self._gen:
+                        await self._live_tool_calls([call], bridge)
+                    elif call.get("generation") in self._stopped_gens:
+                        await self._close_call(call, bridge, "Gaetano ti ha fermata: non dire niente e ascoltalo.")
         except asyncio.CancelledError:
             if call.get("id") in self._superseded:
                 # replaced by a newer question: close the old call so Gemini does not wait on it forever
                 self._superseded.discard(call["id"])
-                if self._live is bridge and bridge is not None and not self._dead:
-                    try:
-                        await bridge.tool_response([(call["id"], call["name"], {
-                            "risposta": "", "nota": "Superata da una domanda più nuova: non dire niente."})])
-                    except Exception:  # noqa: BLE001
-                        pass
+                await self._close_call(call, bridge, "Superata da una domanda più nuova: non dire niente.")
+                return
+            if call.get("generation") in self._stopped_gens:
+                # «Ferma» from the panel or the stop word: Gemini never saw an interruption and, with BLOCKING
+                # tools, would wait for this result forever (Maria deaf until the session restarts)
+                await self._close_call(call, bridge, "Gaetano ti ha fermata: non dire niente e ascoltalo.")
                 return
             raise
         except InterruptRequested:
@@ -709,6 +712,11 @@ class VoiceRuntime:
         finally:
             self._think_ids.discard(call.get("id"))
             self._think_keys.pop(call.get("id"), None)
+
+    async def _close_call(self, call: dict, bridge, note: str) -> None:
+        if self._live is bridge and bridge is not None and not self._dead and call.get("id"):
+            with suppress(Exception):
+                await bridge.tool_response([(call["id"], call["name"], {"risposta": "", "nota": note})])
 
     def _think_key(self, call: dict) -> tuple:
         def key(text):
@@ -845,7 +853,11 @@ class VoiceRuntime:
                 else:
                     result = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
             if c.get("generation", self._gen) != self._gen:
-                return  # A reply completed after interruption must not speak over the new question.
+                # A reply completed after interruption must not speak over the new question; if WE stopped it,
+                # Gemini still waits for an answer to this call
+                if c.get("generation") in self._stopped_gens:
+                    await self._close_call(c, bridge, "Gaetano ti ha fermata: non dire niente e ascoltalo.")
+                return
             responses.append((c["id"], c["name"], result))
             await self._send("nodo.step", step=f"tool:{c['name']}", status="done",
                              ok="error" not in result)
@@ -875,7 +887,9 @@ class VoiceRuntime:
         if not asked and (not heard or is_babble(heard)):
             # a cough, the TV, a customer in Spanish: no brain run (each one costs 15-30 s and blocks the next)
             return self._quiet()
-        if asked and (not heard or is_babble(heard)):
+        if asked and (not heard or is_babble(heard) or (match_read(asked) and not match_read(heard))):
+            # noise only, or the shop around a register question («y vale quali sono i sospesi»): Gemini's clean
+            # version is the question, and an exact register read answers it at once without any model
             text = asked
         else:
             text = heard
@@ -892,7 +906,10 @@ class VoiceRuntime:
             brain = Brain(core, conv, rid, "voice", directed=True)
             started = time.monotonic()
             try:
-                async with asyncio.timeout(self.c.settings.brain_deadline_s):
+                # the brain has its own deadline (brain_deadline_s): past it, it stops searching and answers with
+                # what it knows. That last answer needs time too (15-20 s on the Claude program): cutting exactly
+                # at the deadline turned every two-search question into «ci sto mettendo troppo»
+                async with asyncio.timeout(self.c.settings.brain_deadline_s + 25):
                     await self._think_events(brain, text, bindings)
             except TimeoutError:
                 log.warning("pensa took too long")
@@ -1038,6 +1055,9 @@ class VoiceRuntime:
             vs.interrupt()
         except Exception:
             return
+        self._stopped_gens.add(self._gen)
+        while len(self._stopped_gens) > 20:
+            self._stopped_gens.discard(min(self._stopped_gens))
         self._gen += 1
         self._cancel_live_thoughts()
         self._drain_speech_q()
