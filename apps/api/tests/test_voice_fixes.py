@@ -221,3 +221,47 @@ def test_the_brain_sees_only_the_tools_that_matter():
     chat = pick(names, "ciao Maria come stai?")
     assert chat == {"remember", "now"} and ALWAYS
     assert "sites_status" in pick(names, "come stanno i siti?") and "create_file" in pick(names, "fammi un pdf")
+
+
+async def test_babble_is_not_answered_nor_saved(container, engine):
+    from nodo.db.session import session_scope
+    from nodo.voice.runtime import VoiceRuntime
+
+    events = []
+    async def emit(event):
+        events.append(event)
+    runtime = VoiceRuntime(container.voice_sessions.create(None, "it"), container, emit, session_scope)
+    class Bridge:
+        async def close(self):
+            pass
+    runtime._live = Bridge()
+    await runtime._on_live_event({"kind": "input", "text": "Schon, ich wünsche dir auch einen schönen Abend."})
+    await runtime._on_live_event({"kind": "audio", "data": b"\x00\x00"})
+    await runtime._on_live_event({"kind": "output", "text": "Grazie, anche a te!"})
+    assert not any(e["type"] == "tts.chunk" for e in events) and runtime._babble
+    await runtime._on_live_event({"kind": "turn_complete"})
+    events.clear()
+    await runtime._on_live_event({"kind": "input", "text": "Maria, quanto mi deve Marcello?"})
+    await runtime._on_live_event({"kind": "audio", "data": b"\x00\x00"})
+    assert any(e["type"] == "tts.chunk" for e in events)                 # a real question is answered
+    runtime._live = None
+    await runtime.close()
+
+
+def test_core_memory_keeps_his_rules_and_not_the_old_chats_flood(db):
+    from datetime import UTC
+
+    from nodo.app import ensure_workspace
+    from nodo.db.models import MemoryFact
+    from nodo.memory import mind
+    org = ensure_workspace(db)[0].id
+    db.add(MemoryFact(organization_id=org, subject_type="user", subject_id=org, layer="semantic",
+                      content="Quando Gaetano dice che è arrivato Marcello Lo Monaco, Maria deve rispondere «minchia»",
+                      source_type="conversation"))
+    for i in range(90):
+        db.add(MemoryFact(organization_id=org, subject_type="user", subject_id=org, layer="preference",
+                          content=f"Per le copertine TikTok numero {i} vuole lo stile rosso", source_type="document"))
+    db.commit()
+    ctx = mind.memory_context(db, org, UTC, "chi è arrivato")
+    assert "REGOLE" in ctx and "Marcello Lo Monaco, Maria deve rispondere" in ctx.split("PERSONE")[0]
+    assert "copertine TikTok numero 5" not in ctx and len(ctx) < 4000

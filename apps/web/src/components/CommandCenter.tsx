@@ -176,7 +176,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
           if (allowed || (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive) speakIt();
           else { window.addEventListener("pointerdown", once); window.addEventListener("keydown", once); }
         };
-        setTimeout(tryNow, 2400);                                         // after the particles have assembled
+        setTimeout(tryNow, 1700);                                         // after the particles have assembled
       }).catch(() => {});
   }, []);
   useEffect(() => { if (diary) journal.current?.scrollTo(0, journal.current.scrollHeight); }, [turns, diary]);

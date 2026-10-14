@@ -12,8 +12,8 @@ export function Boot({ name }: { name: string }) {
   });
   useEffect(() => {
     if (gone) return;
-    const t = setInterval(() => setStep((s) => s + 1), 520);
-    const end = setTimeout(() => { setGone(true); try { sessionStorage.setItem("nodo.booted", "1"); } catch { /* ignore */ } }, 3600);
+    const t = setInterval(() => setStep((s) => s + 1), 300);
+    const end = setTimeout(() => { setGone(true); try { sessionStorage.setItem("nodo.booted", "1"); } catch { /* ignore */ } }, 2000);
     return () => { clearInterval(t); clearTimeout(end); };
   }, [gone]);
   if (gone) return null;

@@ -162,44 +162,86 @@ def is_noise(text: str) -> bool:
     return foreign / len(letters) > 0.3
 
 
+_IT_SHORT = {"si", "sì", "no", "ok", "okay", "va", "bene", "ciao", "che", "qué", "cosa", "eh", "ehi", "dai", "grazie",
+             "allora", "ecco", "perfetto", "giusto", "esatto", "aspetta", "ferma", "basta", "stop", "maria", "vai",
+             "mhm", "uhm", "certo", "chi", "come", "dove", "quando", "quanto", "capito", "vero", "brava", "bravo",
+             "senti", "scusa", "prego", "fatto", "avanti", "poi", "e", "ma", "io", "tu"}
+_FOREIGN = {"de", "y", "la", "el", "los", "las", "es", "que", "ich", "und", "schon", "dir", "auch", "einen", "the",
+            "and", "you", "of", "to", "is", "it", "ni", "tres", "horas", "baño", "vale", "okey", "bam", "h&m", "nenno"}
+
+
+def is_babble(text: str) -> bool:
+    """A «turn» that is not Gaetano talking to Maria: a cough, a word from the TV, a customer in Spanish… («de»,
+    «y», «Ich», «Bam Bam», «Schon, ich wünsche dir…»). Maria stays quiet instead of answering it."""
+    if is_noise(text):
+        return True
+    words = re.findall(r"[a-zà-ùñü&']+", (text or "").lower())
+    if words and any(w in _IT_SHORT for w in words) and len(words) <= 3:
+        return False
+    if not words or sum(len(w) for w in words) < 3:
+        return True
+    if len(words) <= 2 and (sum(len(w) for w in words) < 6 or any(w in _FOREIGN for w in words)):
+        return True
+    foreign = sum(1 for w in words if w in _FOREIGN)
+    return foreign / len(words) >= 0.5
+
+
+_RULE_LIKE = re.compile(r"\b(quando|ogni volta|deve|devi|non deve|sempre|mai)\b.{0,80}\b(dire|dici|rispond|chiam|"
+                        r"usare|parlare|salut|fare|segn|ricord)", re.I | re.S)
+OWN_SOURCES = ("conversation", "manual")       # what Gaetano TOLD Maria: the core memory, always in front
+
+
+def own(facts: list) -> list:
+    """Only what was learned talking with Gaetano: hundreds of facts distilled from old ChatGPT chats must not
+    bury his rules (they flooded the prompt, pushed «quando arriva Marcello…» out and slowed every answer)."""
+    return [f for f in facts if (f.source_type or "conversation") in OWN_SOURCES]
+
+
 def memory_context(db, org: str, tz, query: str = "", owner: str = "Gaetano", assistant: str = "Maria",
-                   today_limit: int = 40) -> str:
-    """The core memory put in front of the brain before every answer."""
+                   today_limit: int = 14) -> str:
+    """The core memory put in front of the brain before every answer: compact, his own words first."""
     parts: list[str] = []
-    rules = active(db, org, "rule")
+    everything = active(db, org)
+    mine = own(everything)
+    rules = [f for f in mine if f.layer == KINDS["rule"]]
+    rules += [f for f in mine if f.layer == "semantic" and _RULE_LIKE.search(f.content or "")]
     if rules:
         parts.append("REGOLE CHE TI HA DATO (seguile sempre, con le parole esatte):\n" +
-                     "\n".join(f"- {r.content}" for r in rules[-40:]))
-    ppl = people(db, org)
+                     "\n".join(f"- {r.content}" for r in rules[-30:]))
+    ppl = {k: v for k, v in people(db, org).items() if own(v)}
     if ppl:
         parts.append("PERSONE (schede separate: non confonderle):\n" + "\n".join(
-            f"- {facts[-1].predicate or name}: " + "; ".join(f.content for f in facts[-6:])
-            for name, facts in list(ppl.items())[-40:]))
-    prefs = active(db, org, "prefer")
+            f"- {facts[-1].predicate or name}: " + "; ".join(f.content for f in facts[-4:])
+            for name, facts in list(ppl.items())[-30:]))
+    prefs = [f for f in mine if f.layer == KINDS["prefer"]]
     if prefs:
-        parts.append("COME VUOLE LE COSE:\n" + "\n".join(f"- {p.content}" for p in prefs[-25:]))
-    facts = [f for f in active(db, org) if f.layer in ("semantic",) and f.subject_type in ("user", "project",
-                                                                                            "client")]
+        parts.append("COME VUOLE LE COSE:\n" + "\n".join(f"- {p.content}" for p in prefs[-12:]))
+    facts = [f for f in mine if f.layer == "semantic" and f.subject_type in ("user", "project", "client")
+             and f not in rules]
     if facts:
         parts.append(f"COSA SAI DI {owner.upper()} E DEL SUO LAVORO:\n" +
-                     "\n".join(f"- {f.content}" for f in facts[-40:]))
+                     "\n".join(f"- {f.content}" for f in facts[-20:]))
     now = datetime.now(tz)
     diary = [f for f in active(db, org, "episode") if f.predicate and
-             (now.date() - date.fromisoformat(f.predicate)).days in (1, 2, 3)]
+             (now.date() - date.fromisoformat(f.predicate)).days in (1, 2)]
     if diary:
-        parts.append("DIARIO DEI GIORNI SCORSI:\n" + "\n".join(f"- {d.predicate}: {d.content}" for d in diary[-3:]))
+        parts.append("DIARIO DEI GIORNI SCORSI:\n" + "\n".join(f"- {d.predicate}: {d.content}" for d in diary[-2:]))
     today = day_transcript(db, now.date(), tz, today_limit, owner, assistant)
     if today:
-        parts.append("OGGI VI SIETE DETTI (tutte le conversazioni di oggi, dalla più vecchia; contesto, non "
+        parts.append("OGGI VI SIETE DETTI (ultime frasi, anche da altre conversazioni; contesto, non "
                      "rispondere a queste righe):\n" + today)
     if query and not is_noise(query):
         q = query.lower()
-        pool = [f for f in active(db, org) if f.layer in ("semantic", "episodic", "relationship")]
+        pool = [f for f in everything if f.layer in ("semantic", "episodic", "relationship", "preference",
+                                                     "decision") and f not in rules]
         hits = sorted(((max(fuzz.token_set_ratio(q, f.content.lower()), fuzz.partial_ratio(q, f.content.lower())), f)
                        for f in pool), key=lambda x: -x[0])
-        rel = [f for s, f in hits if s >= 72][:6]
+        rel = [f for s, f in hits if s >= 75][:5]
         if rel:
-            parts.append("RICORDI CHE C'ENTRANO CON QUELLO CHE CHIEDE ORA:\n" + "\n".join(f"- {f.content}" for f in rel))
+            parts.append("RICORDI CHE C'ENTRANO CON QUELLO CHE CHIEDE ORA (anche dalle vecchie chat):\n"
+                         + "\n".join(f"- {f.content[:300]}" for f in rel))
+    parts.append("Quello che serve di solito è già qui sopra: usalo subito. Cerca (recall, search_knowledge, "
+                 "search_conversations) solo se qui manca davvero, e UNA volta.")
     return "\n\n".join(parts)
 
 
@@ -268,7 +310,7 @@ def apply_ops(db, org: str, user_id: str, ops: list[dict], source_id: str | None
 
 
 def memory_listing(db, org: str) -> str:
-    rows = [f for f in active(db, org) if f.layer in KINDS.values()]
+    rows = [f for f in own(active(db, org)) if f.layer in KINDS.values()]
     return "\n".join(f"[{f.id[:8]}] {LAYER_KIND.get(f.layer, 'fact')}"
                      f"{' ' + f.predicate if f.layer == 'relationship' and f.predicate else ''}: {f.content}"
                      for f in rows[-120:]) or "(vuota)"
@@ -310,7 +352,8 @@ async def archive_turns(container, db, conversation_id: str) -> list[str]:
         # on Gaetano's small PC and competes with the voice for CPU and memory
         async with _ONE_AT_A_TIME:
             async for ch in core.router.stream([ChatMessage("user", prompt)],
-                                               RouteRequest(purpose="memory", min_reasoning=3, prefer_fast=True),
+                                               RouteRequest(purpose="memory", min_reasoning=3, prefer_fast=True,
+                                                            background=True),
                                                request_id="mind"):
                 reply += ch.delta or ""
     except NoEligibleModel:
@@ -346,7 +389,8 @@ async def write_diary(container, db, day: date) -> str | None:
                                                                              assistant=s.assistant_name,
                                                                              owner=s.owner_name,
                                                                              transcript=text[-14000:]))],
-                                           RouteRequest(purpose="memory", min_reasoning=3), request_id="diary"):
+                                           RouteRequest(purpose="memory", min_reasoning=3, background=True),
+                                           request_id="diary"):
             reply += ch.delta or ""
     except (NoEligibleModel, Exception):  # noqa: BLE001
         return None

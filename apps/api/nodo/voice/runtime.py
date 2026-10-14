@@ -124,6 +124,8 @@ class VoiceRuntime:
         self._live_tool_lock = asyncio.Lock()
         self._live_results: dict[str, dict] = {}
         self._pensa_error: str | None = None   # a failed «pensa» is not retried within the same turn
+        self._babble_checked = False             # one look per turn at what was heard
+        self._babble = False
         self._barge_from: int | None = None    # where Maria started talking in the transcript: «ferma» after it stops her
         self._live_user_emitted = False
 
@@ -236,7 +238,7 @@ class VoiceRuntime:
         try:
             async with self._live_connect_lock:
                 if self._live is None:
-                    await asyncio.wait_for(self._start_live(), timeout=35)
+                    await asyncio.wait_for(self._start_live(), timeout=self.c.settings.live_connect_timeout)
             return True
         except Exception as e:
             log.warning("live voice engine failed to start: %s", live_engine.safe_error(e))
@@ -530,6 +532,9 @@ class VoiceRuntime:
                 # the yes/no of a decision; every real answer comes from the Claude brain through «pensa»
                 system += LIVE_BRAIN
                 decls = [THINK_DECL] + [d for d in decls if d["name"] in _LIVE_OWN_TOOLS]
+            # Live 3.8 runs tools NON-BLOCKING by default: it kept talking while the brain worked and made answers
+            # up («sto analizzando i dati in tempo reale»), then called pensa again. Every tool waits for its result.
+            decls = [{**d, "behavior": "BLOCKING"} for d in decls]
             sdb.commit()  # Advertise only a durable, valid conversation ID.
         bridge = live_engine.LiveBridge(self.c.settings, self._on_live_event,
                                        getattr(self.c, "live_connect", None))
@@ -560,6 +565,8 @@ class VoiceRuntime:
         vs, kind = self.vs, ev["kind"]
         if self._dead:
             return
+        if kind in ("audio", "output") and not self._live_muted and self._babble_gate():
+            return
         if kind == "audio":
             if self._live_muted:
                 return
@@ -580,6 +587,7 @@ class VoiceRuntime:
                 vs.turn_active = True
                 vs.mark("speech_started")
                 self._in_text = ""
+                self._babble = self._babble_checked = False
             self._in_text += ev["text"]
             vs.mark("transcript_partial_first")
             await self._send("transcript.partial", text=self._in_text)
@@ -707,7 +715,7 @@ class VoiceRuntime:
                     if self._dead:
                         return
                     async with self._live_connect_lock:
-                        await asyncio.wait_for(self._start_live(model, handle), timeout=35)
+                        await asyncio.wait_for(self._start_live(model, handle), timeout=self.c.settings.live_connect_timeout)
                     await self._live_go(VoiceState.IDLE, VoiceState.LISTENING)
                     return
                 except Exception as e:
@@ -830,6 +838,21 @@ class VoiceRuntime:
         return {"risposta": brain.text,
                 "come": "Dilla con parole tue, naturale e breve, senza aggiungere niente che non c'è qui."}
 
+    def _babble_gate(self) -> bool:
+        """Before Maria answers: was that «turn» really Gaetano talking to her? «de», «y», «Ich», «Bam Bam», a
+        customer in Spanish… then she keeps quiet (her answer is dropped) and the line is not saved."""
+        if self._babble_checked:
+            return False
+        self._babble_checked = True
+        from nodo.memory.mind import is_babble
+        heard = self._in_text.strip()
+        if heard and is_babble(heard):
+            self._live_muted = True
+            self._babble = True
+            self._log("voice.babble_ignored", {"text": heard[:60]})
+            return True
+        return False
+
     async def _think_events(self, brain, text: str, bindings: list[dict]) -> None:
         async for ev in brain.run(text):
             t, body = ev["type"], {k: v for k, v in ev.items() if k not in ("type", "request_id", "at")}
@@ -850,6 +873,9 @@ class VoiceRuntime:
         await self._live_finalize_input()
         vs.mark("model_done")
         text = "".join(self._out_text).strip()
+        if self._babble:                   # noise, not a turn: nothing to keep
+            self._in_text, text = "", ""
+        self._babble = self._babble_checked = False
         from nodo.brain.loop import _SILENCE
         if _SILENCE.fullmatch(text):
             text = ""          # «[silenzio]» is a choice, not words: never keep it as something Maria said

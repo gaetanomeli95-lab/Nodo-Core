@@ -39,6 +39,7 @@ class RouteRequest:
     needs_tools: bool = False
     prefer_local: bool = False
     prefer_fast: bool = False   # voice turns: a quick answer matters more than the smartest one
+    background: bool = False    # memory/distillation: never start a CLI program (Claude/ChatGPT) on the small PC
     exclude: set[str] = field(default_factory=set)
 
 
@@ -80,6 +81,8 @@ _DEAD_RE = re.compile(r"not.?found|does not exist|no such model|invalid api key|
 _TRANSIENT_RE = re.compile(r"timed?\s*out|timeout|non ha risposto|unavailable|overloaded|\b50[0-9]\b|deadline|"
                            r"transport error|getaddrinfo|high demand", re.I)
 _cooldown: dict[str, float] = {}
+# providers that run a whole program on Gaetano's PC for every call (seconds of CPU and hundreds of MB each)
+LOCAL_PROGRAMS = {"claude-subscription", "chatgpt-subscription"}
 
 # A voice turn cannot wait minutes while a dead provider burns its own timeout: `prefer_fast`
 # bounds each attempt to this many seconds (per chunk for streams), then the router moves on.
@@ -114,7 +117,7 @@ class ModelRouter:
     def eligible(self, req: RouteRequest) -> list[RouteDecision]:
         out: list[RouteDecision] = []
         for d in self.catalog():
-            if d.id in req.exclude:
+            if d.id in req.exclude or (req.background and d.provider in LOCAL_PROGRAMS):
                 continue
             if SENSITIVITY_RANK[Sensitivity(d.max_sensitivity)] < SENSITIVITY_RANK[req.sensitivity]:
                 continue

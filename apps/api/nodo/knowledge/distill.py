@@ -50,6 +50,27 @@ def running(source_id: str) -> bool:
     return t is not None and not t.done()
 
 
+def _quiet(settings) -> bool:
+    """Reading old chats is night work, or work for when Gaetano has not spoken for 15 minutes."""
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import func, select
+
+    from nodo.db.models import Message
+    from nodo.db.session import session_scope
+    from nodo.night.briefing import tzinfo
+    now = datetime.now(UTC)
+    if 1 <= now.astimezone(tzinfo(settings.timezone)).hour < 7:
+        return True
+    with session_scope() as db:
+        last = db.scalar(select(func.max(Message.created_at)))
+    if last is None:
+        return True
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=UTC)
+    return now - last > timedelta(minutes=15)
+
+
 def start(c, source_id: str) -> asyncio.Task:
     if running(source_id):
         return _jobs[source_id]
@@ -70,11 +91,14 @@ async def run(c, source_id: str) -> dict:
         docs = _pending_documents(db, source_id, int(getattr(settings, "knowledge_distill_max", 300)))
     status, note = "done", None
     try:
-        pause = 0.0 if settings.env == "TEST" else float(getattr(settings, "knowledge_distill_pause", 8.0))
+        pause = 0.0 if settings.env == "TEST" else float(getattr(settings, "knowledge_distill_pause", 20.0))
         for n, doc_id in enumerate(docs):
             if n and pause:
                 # slow and steady: hundreds of chats must not eat the free quota Maria needs to talk to Gaetano
+                # (today they did: Gemini hit 429 and every answer fell back to the slow brain)
                 await asyncio.sleep(pause)
+                while settings.env != "TEST" and not _quiet(settings):
+                    await asyncio.sleep(120)
             with session_scope() as db:
                 src = db.get(KnowledgeSource, source_id)
                 if src is None or src.status == "stopped":
@@ -122,7 +146,7 @@ async def extract(core, doc: Document, body: str, *, max_facts: int = MAX_FACTS)
     when = (doc.summary or "").split("] ", 1)[-1].split(" — ", 1)[0] if doc.summary else "data sconosciuta"
     prompt = PROMPT.format(max_facts=max_facts, title=doc.title, when=when, body=body)
     req = RouteRequest(purpose="memory", sensitivity=Sensitivity.INTERNAL, min_reasoning=2,
-                       prefer_fast=True)   # an API model: hundreds of chats must not run Claude on the small PC
+                       prefer_fast=True, background=True)   # an API model: hundreds of chats must not run Claude on the small PC
     text = ""
     async for ch in core.router.stream([ChatMessage("user", prompt)], req, request_id=f"knowledge-{doc.id[:8]}",
                                        temperature=0.1, max_tokens=900):

@@ -181,6 +181,9 @@ class NightScheduler:
         from nodo.db.session import session_scope
         if self.state().running:
             return
+        born = getattr(self, "_born", None) or setattr(self, "_born", now) or now
+        if self.settings.env != "TEST" and now - born < timedelta(seconds=90):
+            return          # the first minute and a half belongs to Gaetano: a fast start, no background work
         last = getattr(self, "_last_learn", None)
         if self.settings.learn_from_chats and (last is None or now - last >= timedelta(minutes=5)):
             self._last_learn = now

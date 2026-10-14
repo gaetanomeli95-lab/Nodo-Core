@@ -83,13 +83,13 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
   mode: PresenceMode; sampleLevel: Level; heard?: string; said?: string; activity?: string | null; revision?: number;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const graph = useRef<ReturnType<typeof layout> | null>(null);
+  const graph = useRef<(ReturnType<typeof layout> & { born?: number }) | null>(null);
   const live = useRef({ mode, sampleLevel });
   live.current = { mode, sampleLevel };
   const [stats, setStats] = useState<Record<string, number>>({});
   const [log, setLog] = useState<{ t: string; text: string; hot?: boolean }[]>([]);
   const [now, setNow] = useState(() => new Date());
-  const drag = useRef({ on: false, x: 0, y: 0, rot: 0, tilt: 0.32 });
+  const drag = useRef({ on: false, x: 0, y: 0, rot: 0, tilt: 0.32, px: 0, py: 0, sx: 0, sy: 0 });
 
   const note = (text: string, hot = false) => setLog((l) => [{ t: new Date().toTimeString().slice(0, 8), text, hot },
     ...l.filter((x) => x.text !== text)].slice(0, 6));
@@ -101,7 +101,7 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
     get<Graph>("/api/v1/mind/graph").then((g) => {
       if (!alive || !g?.nodes?.length) return;
       const old = graph.current;
-      const next = layout(g);
+      const next = Object.assign(layout(g), { born: old ? (old as { born?: number }).born ?? 0 : performance.now() });
       if (old) next.pts.forEach((p) => { const o = old.idx.get(p.id); if (o !== undefined) { p.hot = old.pts[o].hot; p.seen = old.pts[o].seen; } });
       graph.current = next;
       setStats(g.stats || {});
@@ -147,7 +147,6 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
     if (!ctx) return;
     const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     let raf = 0, last = performance.now(), energy = 0;
-    let anchor: { y: number; h: number } | null = null, frame = 0;
     const sparks: { e: number; u: number; v: number; soft: boolean }[] = [];   // thoughts running along the links
     const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     const fit = () => { const r = c.getBoundingClientRect(); c.width = Math.max(1, r.width * dpr); c.height = Math.max(1, r.height * dpr); };
@@ -163,14 +162,12 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
       const lv = lvl(); energy += (Math.max(lv.input, lv.output) - energy) * 0.3;
       const dr = drag.current;
       if (!dr.on && !reduced) dr.rot += dt * (MODE_SPIN[m] ?? 0.05);
-      if (!anchor || ++frame % 30 === 0) {               // centre the mind on the empty space of the stage
-        const sp = c.parentElement?.parentElement?.querySelector(".mind-spacer") as HTMLElement | null;
-        const cb = c.getBoundingClientRect(), sb = sp?.getBoundingClientRect();
-        anchor = sb && sb.height ? { y: (sb.top + sb.height / 2 - cb.top) * dpr, h: sb.height * dpr } : { y: c.height / 2, h: c.height * 0.6 };
-      }
-      const W = c.width, H = c.height, cx = W / 2, cy = anchor.y, S = Math.min(W * 0.32, anchor.h * 0.8, H * 0.4);
+      // the mind lives on the screen, not on the page: it never slides away when cards appear while she works
+      dr.sx += (dr.px - dr.sx) * 0.05; dr.sy += (dr.py - dr.sy) * 0.05;          // follows the hand, gently
+      const W = c.width, H = c.height, cx = W / 2, cy = H * 0.56, S = Math.min(W * 0.3, H * 0.34);
+      const rot = dr.rot + dr.sx * 0.5, tilt = Math.max(-0.2, Math.min(1.1, dr.tilt + dr.sy * 0.25));
       ctx.clearRect(0, 0, W, H);
-      const cr = Math.cos(dr.rot), sr = Math.sin(dr.rot), ct = Math.cos(dr.tilt), st = Math.sin(dr.tilt);
+      const cr = Math.cos(rot), sr = Math.sin(rot), ct = Math.cos(tilt), st = Math.sin(tilt);
       const proj = (x: number, y: number, z: number) => {
         const x1 = x * cr + z * sr, z1 = -x * sr + z * cr;
         const y2 = y * ct - z1 * st, z2 = y * st + z1 * ct;
@@ -183,13 +180,34 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
       ctx.beginPath(); ctx.ellipse(cx, cy + S * 0.05, S * 1.62, S * 1.62 * st * 0.9 + S * 0.08, 0, 0, Math.PI * 2); ctx.stroke();
       ctx.setLineDash([]);
       for (let k = 0; k < 3; k++) {
-        const a = dr.rot * 2 + k * 2.1, ex = cx + Math.cos(a) * S * 1.62, ey = cy + S * 0.05 + Math.sin(a) * (S * 1.62 * st * 0.9 + S * 0.08);
+        const a = rot * 2 + k * 2.1, ex = cx + Math.cos(a) * S * 1.62, ey = cy + S * 0.05 + Math.sin(a) * (S * 1.62 * st * 0.9 + S * 0.08);
         ctx.fillStyle = "rgba(190,240,255,.8)"; ctx.beginPath(); ctx.arc(ex, ey, 1.8 * dpr, 0, Math.PI * 2); ctx.fill();
+      }
+      // thinking: waves of light leave her core and run across the orbit; speaking: they beat with the voice
+      if (m === "think" || m === "act" || m === "speak" || m === "listen") {
+        const n = m === "speak" || m === "listen" ? 2 : 3, period = m === "speak" || m === "listen" ? 1700 : 1150;
+        for (let k = 0; k < n; k++) {
+          const u = ((t / period) + k / n) % 1, rx = S * (0.15 + u * 1.55), ry = rx * (st * 0.9) + S * 0.05 * u;
+          ctx.strokeStyle = m === "think" || m === "act" ? `rgba(190,160,255,${0.32 * (1 - u)})`
+            : `rgba(150,235,255,${(0.18 + energy * 0.6) * (1 - u)})`;
+          ctx.lineWidth = (1 + (1 - u) * 1.5) * dpr;
+          ctx.beginPath(); ctx.ellipse(cx, cy + S * 0.05, rx, Math.max(1, ry), 0, 0, Math.PI * 2); ctx.stroke();
+        }
       }
       ctx.restore();
       if (!g) return;
+      if ((m === "think" || m === "act") && !reduced) {    // she is searching: her attention sweeps the hubs
+        const hubs = g.pts.filter((p) => p.kind === "hub");
+        if (hubs.length) hubs[Math.floor(t / 380) % hubs.length].seen = t - 4200;
+      }
+      const born = g.born ?? 0;
+      const grow = (i: number) => {                       // at start the memories fly out of her core and settle
+        const k = Math.min(1, Math.max(0, (t - born - (hash(g.pts[i].id) % 900)) / 1500));
+        return 1 - Math.pow(1 - k, 3);
+      };
       const br = reduced ? 0 : 0.012;
-      const pr = g.pts.map((p, i) => proj(p.x + Math.sin(t / 1700 + i) * br, p.y + Math.cos(t / 2100 + i * 1.3) * br, p.z));
+      const pr = g.pts.map((p, i) => { const k = grow(i);
+        return proj((p.x + Math.sin(t / 1700 + i) * br) * k, (p.y + Math.cos(t / 2100 + i * 1.3) * br) * k, p.z * k); });
       // links: faint by default, bright and pulsing near what Maria is remembering now (additive light)
       ctx.globalCompositeOperation = "lighter";
       ctx.lineWidth = 0.7 * dpr;
@@ -274,16 +292,26 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
     return () => { cancelAnimationFrame(raf); ro.disconnect(); };
   }, []);
 
-  const down = (e: React.PointerEvent) => { drag.current = { ...drag.current, on: true, x: e.clientX, y: e.clientY }; };
-  const move = (e: React.PointerEvent) => {
-    const d = drag.current; if (!d.on) return;
-    d.rot += (e.clientX - d.x) * 0.006; d.tilt = Math.max(-0.2, Math.min(1.1, d.tilt + (e.clientY - d.y) * 0.004));
-    d.x = e.clientX; d.y = e.clientY;
-  };
-  const up = () => { drag.current.on = false; };
+  useEffect(() => {                                   // the hand turns her mind anywhere on the stage
+    const free = (el: EventTarget | null) => el instanceof Element
+      && !el.closest("button, a, input, textarea, select, label, [role=button], .board, .context-sheet, .viewer, .palette, nav, header, aside");
+    const down = (e: PointerEvent) => { if (e.button === 0 && free(e.target)) { const d = drag.current; d.on = true; d.x = e.clientX; d.y = e.clientY; } };
+    const move = (e: PointerEvent) => {
+      const d = drag.current;
+      d.px = e.clientX / window.innerWidth - 0.5; d.py = e.clientY / window.innerHeight - 0.5;
+      if (!d.on) return;
+      d.rot += (e.clientX - d.x) * 0.006; d.tilt = Math.max(-0.2, Math.min(1.1, d.tilt + (e.clientY - d.y) * 0.004));
+      d.x = e.clientX; d.y = e.clientY;
+    };
+    const up = () => { drag.current.on = false; };
+    window.addEventListener("pointerdown", down); window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up); window.addEventListener("blur", up);
+    return () => { window.removeEventListener("pointerdown", down); window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up); window.removeEventListener("blur", up); };
+  }, []);
 
   return <div className="mind" aria-hidden="true">
-    <canvas ref={canvas} className="mind-canvas" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerLeave={up} />
+    <canvas ref={canvas} className="mind-canvas" />
     <div className="mind-clock"><b>{now.toTimeString().slice(0, 8)}</b>
       <span>{DAYS[now.getDay()]} {now.getDate()} {MONTHS[now.getMonth()]}</span>
       {!!stats.nodi && <div className="mind-stats">
