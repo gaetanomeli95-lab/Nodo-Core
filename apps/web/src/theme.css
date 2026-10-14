@@ -263,3 +263,13 @@ html.lite .holo-aurora { filter: none; animation: none; opacity: .45; }
 html.lite .holo-core-glow { filter: none; opacity: .5; }
 html.lite .holo .tabs { background: rgba(6,12,16,.92) !important; }
 html.lite .holo :is(.context-sheet, .holo-board, section.pulse) { background: rgba(8,16,22,.94) !important; }
+
+/* ---------------------------------------------------------------- Presenza is ONE screen: nothing to scroll.
+   The mind takes whatever room is left; the radar card lives in «Dettagli»; the footer is one quiet line. */
+.holo .conversation-room { overflow: hidden; }
+.holo .voice-stage { height: 100%; min-height: 0; padding-bottom: 10px; }
+.holo .voice-stage > .mind-spacer { flex: 1 1 auto; height: auto; min-height: 90px; }
+.holo .voice-stage > section.pulse { display: none; }
+.holo .voice-stage > .voice-controls { margin-bottom: 8px; }
+.holo .voice-stage > .stage-footnote { padding-top: 6px; }
+.holo .voice-stage > .stage-footnote .voice-mode { display: none; }   /* one voice: live, with the brain behind it */

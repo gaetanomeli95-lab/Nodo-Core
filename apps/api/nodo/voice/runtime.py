@@ -86,6 +86,7 @@ THINK_DECL = {
         "required": ["richiesta"]},
 }
 BOARD_EVERY_S = 60
+LIVE_RETRY_S = 20
 _VOICE_TAGS = re.compile(r"<\s*no[ _]speech\s*>|<[a-z_ ]{1,24}>|\{[a-z_ ]{1,24}\}", re.I)
 _LIVE_OWN_TOOLS = {"decide", "close_screen"}   # yes/no on the proposal shown, close what is on screen
 
@@ -193,8 +194,9 @@ class VoiceRuntime:
         self._live_reconnects = 0
         self._live_used = False
         self._live_wanted = self._want_live()
-        # the live session opens lazily on the first real input: no idle sessions dying every 20s
         engine = "live" if self._live_wanted else self._fallback_engine()
+        if self._live_wanted and self._live is None:
+            asyncio.get_running_loop().call_soon(lambda: asyncio.ensure_future(self._prewarm()))
         self._log("voice.session.started", {"language": vs.language, "engine": engine})
         quota_active = engine != "live" and live_engine.quota_note(self.c.settings) is not None
         await self._send("voice.session.started", state=str(vs.state), conversation_id=vs.conversation_id,
@@ -249,16 +251,27 @@ class VoiceRuntime:
             return False
         if self._live_recovery and not self._live_recovery.done():
             return False  # don't replay stale microphone audio into a new turn
-        try:
-            async with self._live_connect_lock:
-                if self._live is None:
-                    await asyncio.wait_for(self._start_live(), timeout=self.c.settings.live_connect_timeout)
-            return True
-        except Exception as e:
-            log.warning("live voice engine failed to start: %s", live_engine.safe_error(e))
-            self._live = None
-            await self._fallback_live(live_engine.safe_error(e))
-            return False
+        error: Exception | None = None
+        for attempt in (1, 2):           # one slow handshake (it happened on the shop laptop) is not a verdict
+            try:
+                async with self._live_connect_lock:
+                    if self._live is None:
+                        await asyncio.wait_for(self._start_live(), timeout=self.c.settings.live_connect_timeout)
+                return True
+            except Exception as e:
+                error = e
+                log.warning("live voice engine failed to start (try %s): %s", attempt, live_engine.safe_error(e))
+                self._live = None
+                if self._dead or live_engine.error_kind(str(e)) in ("auth", "quota", "configuration"):
+                    break
+                await asyncio.sleep(1)
+        await self._fallback_live(live_engine.safe_error(error))
+        return False
+
+    async def _prewarm(self) -> None:
+        """«Load everything first»: the live voice connects while the opening plays, so the first word is heard."""
+        with suppress(Exception):
+            await self._ensure_live()
 
     async def _fallback_live(self, reason: str) -> None:
         quota = live_engine._is_quota_error(reason)
@@ -277,6 +290,18 @@ class VoiceRuntime:
         await self._send("voice.engine", engine=engine, reason="quota" if quota else "connection")
         if self.vs.state not in (VoiceState.CLOSED, VoiceState.WAITING_FOR_APPROVAL):
             await self._set_state(VoiceState.IDLE)
+        if not quota and not self._dead:
+            asyncio.get_running_loop().call_later(LIVE_RETRY_S, lambda: asyncio.ensure_future(self._rearm_live()))
+
+    async def _rearm_live(self) -> None:
+        if self._dead or self._live is not None or self._live_wanted or not self._want_live():
+            return
+        if self.vs.turn_active or self.vs.state not in (VoiceState.IDLE, VoiceState.LISTENING):
+            asyncio.get_running_loop().call_later(5, lambda: asyncio.ensure_future(self._rearm_live()))
+            return
+        self._live_wanted = True
+        if await self._ensure_live():
+            await self._send("voice.engine", engine="live", reason="back")
 
     async def _on_audio(self, msg: protocol.AudioChunk) -> None:
         vs = self.vs
@@ -523,8 +548,7 @@ class VoiceRuntime:
                     await self._send(t, **{k: v for k, v in e.items() if k not in ("type", "request_id", "at")})
 
     # ------------------------------------------------------------- Gemini Live engine
-    async def _start_live(self, resume_model: str | None = None, resume_handle: str | None = None) -> None:
-        """Opens the real-time session: persona + tools identical to the text brain, but audio in/out."""
+    def _live_context(self, resume_handle: str | None) -> tuple[str, list[dict]]:
         from nodo.brain.board import board_for
         from nodo.brain.loop import Brain
         from nodo.brain.persona import build_live_persona
@@ -558,12 +582,23 @@ class VoiceRuntime:
             # not improvise an answer while the brain is still working.
             decls = [{**d, "behavior": "BLOCKING"} for d in decls]
             sdb.commit()  # Advertise only a durable, valid conversation ID.
+        return system, decls
+
+    async def _start_live(self, resume_model: str | None = None, resume_handle: str | None = None) -> None:
+        """Opens the real-time session: persona + tools identical to the text brain, but audio in/out."""
+        started = time.monotonic()
+        # the database work (memory, lavagna viva, history) runs in a worker thread: on the shop laptop it took
+        # seconds INSIDE the connection timeout and blocked everything else while it ran
+        system, decls = await asyncio.to_thread(self._live_context, resume_handle)
+        prepared = time.monotonic()
         bridge = live_engine.LiveBridge(self.c.settings, self._on_live_event,
                                        getattr(self.c, "live_connect", None))
         try:
             await bridge.start(system, decls, self.vs.language, exclude=self._live_failed_models,
                                resume_model=resume_model, resume_handle=resume_handle)
             self._live = bridge
+            log.info("live ready on %s: context %.0f ms, connection %.0f ms", bridge.model,
+                     (prepared - started) * 1000, (time.monotonic() - prepared) * 1000)
             if self._board_task is None or self._board_task.done():
                 self._board_task = asyncio.create_task(self._board_loop())
             await self._send("voice.conversation", conversation_id=self.vs.conversation_id)

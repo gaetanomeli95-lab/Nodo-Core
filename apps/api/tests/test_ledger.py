@@ -220,7 +220,9 @@ def test_voice_mode_can_be_switched_from_the_panel(client, tmp_path, monkeypatch
     assert "NODO_VOICE_ENGINE=precise" in (tmp_path / ".env").read_text()
     from nodo.config import Settings
     from nodo.voice.live import missing_reason
-    assert missing_reason(Settings(voice_engine="precise", gemini_api_key="k", env="LOCAL")).startswith("voce precisa")
+    # «precisa» keeps the live voice (it already hands real questions to the main brain): it never mutes him
+    assert not (missing_reason(Settings(voice_engine="precise", gemini_api_key="k", env="LOCAL")) or "").startswith(
+        "voce precisa")
 
 
 def test_the_spoken_recap_sounds_like_a_person(db, seeded):

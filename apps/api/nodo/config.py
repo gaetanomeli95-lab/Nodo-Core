@@ -107,7 +107,7 @@ class Settings(BaseSettings):
     voice_engine: str = "precise"     # precise (Gemini ears/mouth, Claude brain with full memory) | auto (Gemini Live) | browser
     gemini_live_model: str = ""       # empty = try the built-in ladder of Live models
     live_start_sensitivity: str = "START_SENSITIVITY_HIGH"   # HIGH: «ferma» over Maria's voice is heard (LOW missed it)
-    live_connect_timeout: float = 15.0   # Live usually opens in 1-3 s: do not keep him waiting 35 s on a bad try
+    live_connect_timeout: float = 25.0   # Live usually opens in 1-3 s: do not keep him waiting 35 s on a bad try
     live_brain: bool = True           # Live = ears and mouth; anything real goes to the Claude brain via «pensa»
     live_voice: str = "Kore"          # Gemini voice: Puck | Charon | Kore | Fenrir | Aoede | ...
 

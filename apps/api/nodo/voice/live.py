@@ -138,8 +138,9 @@ def missing_reason(settings, container=None) -> str | None:
         return None                                     # test hook: a fake engine was injected
     if (settings.voice_engine or "auto") == "browser":
         return "disattivata (NODO_VOICE_ENGINE=browser)"
-    if settings.voice_engine == "precise":
-        return "voce precisa attiva: risponde il cervello principale (Claude), qualche secondo in più"
+    # «precisa» no longer switches the live voice off: the live voice already hands every real question to the
+    # main brain («pensa») and reads the shop from the lavagna viva. Without Live, on spent free quotas, the
+    # «precise» chain (cloud speech-to-text + text-to-speech) simply could not hear him at all.
     if settings.env in ("TEST", "DEMO"):
         return "disattivata in test/demo"
     if not settings.gemini_api_key:

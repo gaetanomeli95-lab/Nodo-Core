@@ -844,3 +844,28 @@ async def test_lavagna_viva_has_the_shop_ready(container, engine):
         assert "LAVAGNA VIVA" in text and "SOSPESI (1" in text and "Softcomfort" in text and "110" in text
         assert "Morpheus Memory" in text and "420" in text and "OGGI:" in text
         assert not b.refresh(db, org, container.settings, now)      # nothing changed: nothing to send
+
+
+def test_a_slow_first_handshake_is_retried_not_given_up(client, container, monkeypatch):
+    """On the shop laptop one Live handshake timed out and the voice fell back for good to a chain that could not
+    hear him. Now a second try comes first."""
+    monkeypatch.setattr(container.settings, "live_connect_timeout", 0.5)
+    script = [_sc(input_transcription=SimpleNamespace(text="ciao")), _sc(turn_complete=True)]
+    calls = []
+
+    class Hang:
+        async def __aenter__(self):
+            await asyncio.sleep(5)
+
+        async def __aexit__(self, *a):
+            return False
+
+    def connect(api_key, model, config):
+        calls.append(model)
+        return Hang() if len(calls) == 1 else _CM(FakeLiveSession(script))
+    container.live_connect = connect
+    with client.websocket_connect(WS) as ws:
+        _open_live(ws)
+        events, _ = _recv_until(ws, "voice.connection")
+    assert len(calls) >= 2
+    assert not any(e["type"] == "voice.engine" for e in events)

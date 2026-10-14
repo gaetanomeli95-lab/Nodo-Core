@@ -144,7 +144,7 @@ def open_panel(port: int) -> None:
                 profile = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "NODO" / "finestra"
                 subprocess.Popen([exe, f"--app={url}", "--autoplay-policy=no-user-gesture-required",
                                   f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
-                                  "--window-size=1440,900"], creationflags=NO_WINDOW)
+                                  "--start-fullscreen"], creationflags=NO_WINDOW)   # F11 to leave
                 return
             except OSError:
                 break
