@@ -384,3 +384,7 @@ html.calm .holo-tile, html.calm .holo-kpi, html.calm .holo-table { animation: no
 @keyframes eq { from { transform: scaleY(.25); } to { transform: scaleY(1); } }
 .viewer-open { color: #8fe3d8; font-size: 12px; align-self: center; text-decoration: none; border: 1px solid #3c5b5b; border-radius: 8px; padding: 7px 12px; }
 html.calm :is(.baam-flash, .baam-ring) { display: none; }
+.viewer-body > img, .viewer-body > video { max-height: calc(88vh - 110px); width: auto; }
+.baam.cinema .viewer-body > img, .baam.cinema .viewer-body > video { max-height: calc(92vh - 110px); }
+.viewer-corner.tl, .viewer-corner.tr { top: 0; } .viewer-corner.bl, .viewer-corner.br { bottom: 0; }
+.viewer-corner.tl, .viewer-corner.bl { left: 0; } .viewer-corner.tr, .viewer-corner.br { right: 0; }

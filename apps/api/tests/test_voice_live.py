@@ -903,3 +903,37 @@ def test_a_spoken_pensa_call_is_made_for_real_and_never_said(client, container, 
     assert seen and "gatto" in seen[0]
     assert any("Risultato di pensa" in str(c) and "creato l'immagine" in str(c) for c in session.contents)
     assert not any(e["type"] == "nodo.response" and "pensa(" in e.get("text", "") for e in events)
+
+
+def test_a_refused_show_request_is_done_by_the_brain(client, container, monkeypatch):
+    """«Mostrami l'ultima foto» → «purtroppo non posso mostrare finestre»: the refusal is cut, the brain shows it."""
+    import time
+
+    from nodo.brain import loop
+    seen = []
+
+    async def fake_run(self, text):
+        seen.append(text)
+        yield {"type": "ui.present", "request_id": "r", "at": "t", "view": "viewer",
+               "rows": [{"title": "foto", "url": "/api/v1/view/x/foto.jpg", "kind": "image"}], "summary": ""}
+        self.text = "Ecco la foto sullo schermo."
+
+    monkeypatch.setattr(loop.Brain, "run", fake_run)
+    script = [_sc(input_transcription=SimpleNamespace(text="mostrami l'ultima foto del desktop")),
+              _sc(output_transcription=SimpleNamespace(text="Purtroppo non ho la possibilità di mostrare finestre.")),
+              _sc(turn_complete=True)]
+    holder = []
+    container.live_connect = make_connect(script, holder)
+    with client.websocket_connect(WS) as ws:
+        _open_live(ws)
+        events, _ = _recv_until(ws, "voice.turn.done")
+        more, _ = _recv_until(ws, "ui.present")
+        session = holder[0][2]
+        for _ in range(100):
+            if any("Risultato di pensa" in str(c) for c in session.contents):
+                break
+            time.sleep(0.05)
+    assert seen and "ultima foto" in seen[0]
+    assert any(e["type"] == "voice.interrupted" and e.get("reason") == "quiet" for e in events)
+    assert not any(e["type"] == "nodo.response" and "Purtroppo" in e.get("text", "") for e in events)
+    assert any("Risultato di pensa" in str(c) for c in session.contents)

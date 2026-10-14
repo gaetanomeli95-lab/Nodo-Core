@@ -66,6 +66,10 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const [viewing, setViewing] = useState<ViewItem | null>(null);
   const [eyes, setEyes] = useState<"camera" | "screen" | null>(null);
   const [boardRev, setBoardRev] = useState(0);
+  useEffect(() => {                         // ?prova: lets a test (or Gaetano) open the viewer by hand
+    if (!/[?&]prova\b/.test(location.search)) return;
+    (window as unknown as Record<string, unknown>).nodoShow = (item: ViewItem) => setViewing(item);
+  }, []);
   const onOpenTabRef = useRef(onOpenTab);
   onOpenTabRef.current = onOpenTab;
   /** «Sul tavolo» cards, plus the screen commands: show a file big, open a tab, close what is shown. */

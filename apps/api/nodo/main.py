@@ -56,6 +56,11 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
     for noisy in ("httpx", "httpcore"):   # their INFO lines print full URLs: secret calendar link, Telegram token
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
+    class _NoHealth(logging.Filter):      # the tray asks «are you up?» every few seconds: 400 useless lines an hour
+        def filter(self, record: logging.LogRecord) -> bool:
+            return "/health" not in record.getMessage()
+    logging.getLogger("uvicorn.access").addFilter(_NoHealth())
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         from nodo.db.models import Base

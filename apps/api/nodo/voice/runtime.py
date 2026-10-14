@@ -86,7 +86,20 @@ THINK_DECL = {
         "required": ["richiesta"]},
 }
 BOARD_EVERY_S = 60
+
+
+def is_babble_text(text: str) -> bool:
+    from nodo.memory.mind import is_babble
+    return is_babble(text)
+
+
 _SPOKEN_CALL = re.compile(r"(?:pensa|think)\s*\(", re.I)
+# «mostrami la foto…», «fammi un'immagine…», «crea un documento…»: things only the brain can do
+_ACTION = re.compile(r"\b(mostra\w*|fa(?:mmi|i|mme) (?:vedere|sentire)|apri(?:mi)?\b|crea\w*|disegn\w*|genera\w*|"
+                     r"fa(?:mmi|i) (?:un|una|un')\s*(?:immagin|foto|disegn|document|pdf|excel|tabell|letter|"
+                     r"preventiv|logo|volantin|video|present)|prepara\w* (?:un|una|il|la)|salva\w* sul desktop)", re.I)
+_REFUSAL = re.compile(r"\b(non (?:posso|riesco|sono in grado|ho (?:la possibilit|lo strument|accesso|modo|un modo))|"
+                      r"purtroppo|non è possibile)", re.I)
 LIVE_RETRY_S = 20
 _VOICE_TAGS = re.compile(r"<\s*no[ _]speech\s*>|<[a-z_ ]{1,24}>|\{[a-z_ ]{1,24}\}", re.I)
 _LIVE_OWN_TOOLS = {"decide", "close_screen"}   # yes/no on the proposal shown, close what is on screen
@@ -136,6 +149,8 @@ class VoiceRuntime:
         self._board_version = ""                  # the lavagna viva the live voice has in front of it
         self._board_due = False
         self._tool_text: str | None = None         # a tool call Gemini spoke aloud instead of making it
+        self._turn_called = False                  # a tool was called in this turn
+        self._forced: str | None = None            # an action Gemini refused or forgot: the brain does it
         self._live_results: dict[str, dict] = {}
         self._pensa_error: str | None = None   # a failed «pensa» is not retried within the same turn
         self._babble_checked = False             # one look per turn at what was heard
@@ -683,6 +698,7 @@ class VoiceRuntime:
                 vs.mark("speech_started")
                 self._in_text = ""
                 self._babble = self._babble_checked = False
+                self._turn_called = False
             self._in_text += ev["text"]
             vs.mark("transcript_partial_first")
             await self._send("transcript.partial", text=self._in_text)
@@ -702,6 +718,14 @@ class VoiceRuntime:
                 return
             self._out_text.append(ev["text"])
             said = "".join(self._out_text).strip().lower().lstrip("[(«\"' ")
+            if (not self._turn_called and self._forced is None and _ACTION.search(self._in_text or "")
+                    and _REFUSAL.search(said[:160])):
+                # «non posso mostrarti finestre»: it can — cut the refusal, the brain does it
+                self._forced = self._in_text.strip()
+                self._live_muted = True
+                self._out_text.clear()
+                await self._send("voice.interrupted", reason="quiet", during="SPEAKING")
+                return
             if _SPOKEN_CALL.match(said):
                 # it SAID «pensa(richiesta=…)» instead of calling the tool: silence it, and make the call ourselves
                 self._tool_text = "".join(self._out_text)
@@ -720,6 +744,7 @@ class VoiceRuntime:
             await self._send("nodo.token", delta=ev["text"])
         elif kind == "tool_call":                            # same toolbox and guards as the text brain
             await self._live_finalize_input()
+            self._turn_called = True
             ev = {**ev, "user_text": self._in_text, "generation": self._gen}
             if vs.state != VoiceState.ACTING:
                 await self._live_go(VoiceState.IDLE, VoiceState.UNDERSTANDING,
@@ -970,7 +995,7 @@ class VoiceRuntime:
                                  if k in ("approval_id", "tool", "action", "level", "label", "params",
                                           "site", "preview_url", "pr_url")})
 
-    async def _spoken_call(self, request: str, heard: str) -> None:
+    async def _spoken_call(self, request: str, heard: str, speak: bool = True) -> None:
         """Gemini spoke the «pensa» call instead of making it: do the call, then hand it the answer to say."""
         bindings: list[dict] = []
         try:
@@ -983,8 +1008,12 @@ class VoiceRuntime:
         if not answer or self._live is None or self._dead:
             return
         with suppress(Exception):
-            await self._live.inject(f"[Risultato di pensa per «{request[:200]}»: {answer}\nDillo adesso a Gaetano, "
-                                    "con parole tue, senza aggiungere niente.]", respond=True)
+            if speak:
+                await self._live.inject(f"[Risultato di pensa per «{request[:200]}»: {answer}\nDillo adesso a "
+                                        "Gaetano, con parole tue, senza aggiungere niente.]", respond=True)
+            else:                                # it already answered aloud: the screen shows it, no second speech
+                await self._live.inject(f"[Risultato di pensa per «{request[:200]}» (già sullo schermo, non "
+                                        f"rispondere a questo messaggio): {answer}]", respond=False)
         for b in bindings:
             if b["approval_id"] != self.vs.pending_approval_id:
                 self.vs.pending_approval_id = b["approval_id"]
@@ -1114,6 +1143,18 @@ class VoiceRuntime:
         self._babble = self._babble_checked = False
         from nodo.brain.loop import _SILENCE
         text = _VOICE_TAGS.sub("", text).strip()   # «<no speech>{pause}»: the model's markers are not words
+        forced, self._forced = self._forced, None
+        speak = True                                 # it refused: the brain's answer is said instead
+        heard_now = self._in_text.strip()
+        if forced is None and not self._turn_called and self._tool_text is None and heard_now \
+                and _ACTION.search(heard_now) and not self._babble and not is_babble_text(heard_now):
+            forced, speak = heard_now, not text      # it answered without doing it: do it now (quietly if it spoke)
+        self._turn_called = False
+        if forced and not self._dead:
+            if speak:
+                text = ""
+            asyncio.get_running_loop().call_soon(
+                lambda: asyncio.ensure_future(self._spoken_call(forced, forced, speak=speak)))
         if self._tool_text is not None:
             spoken, self._tool_text = self._tool_text, None
             m = re.search(r"richiesta\s*=\s*[\"«']?(.+?)[\"»']?\s*\)?\s*$", spoken, re.S)
