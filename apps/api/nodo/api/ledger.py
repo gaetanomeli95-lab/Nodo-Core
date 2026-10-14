@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from nodo.api.deps import auth, container, get_db, org_id
 from nodo.app import Container
-from nodo.ledger import Ledger, parse_day, sentence, stats, view
+from nodo.ledger import Ledger, due, parse_day, sentence, stats, view
 from nodo.night.briefing import tzinfo
 
 router = APIRouter(prefix="/api/v1/ledger", dependencies=[Depends(auth)])
@@ -43,7 +43,7 @@ def open_items(c: Container = Depends(container), db: Session = Depends(get_db),
     sospesi, todo = led.open_payments(), led.pending_work()
     return {"business": c.settings.ledger_business,
             "sospesi": [{**view(r), "sentence": sentence(r)} for r in sospesi],
-            "totale_sospeso": round(sum(r.amount or 0 for r in sospesi), 2),
+            "totale_sospeso": round(sum(due(r) for r in sospesi), 2),
             "da_fare": [{**view(r), "sentence": sentence(r)} for r in todo]}
 
 

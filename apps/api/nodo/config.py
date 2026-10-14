@@ -130,6 +130,7 @@ class Settings(BaseSettings):
 
     # --- Night shift (docs/NIGHT_SHIFT.md) ---
     night_enabled: bool = True                  # background scheduler inside the API process
+    guard_word: str = ""        # «parola d'ordine»: when set, rules/people/preferences change by VOICE only if it is said
     owner_name: str = "Gaetano"                 # how NODO greets you
     assistant_name: str = "Maria"               # the name Gaetano gives NODO when he talks to it
     ledger_business: str = "CF Materassi"       # the shop whose register NODO keeps (sales, deliveries, expenses)

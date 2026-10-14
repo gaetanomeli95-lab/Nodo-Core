@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import select
 
 from nodo.greeting import build_greeting
-from nodo.ledger import Ledger, norm_size, parse_day, size_label
+from nodo.ledger import Ledger, norm_size, parse_day, sentence, size_label
 from tests.test_brain_extra import box  # noqa: F401  (fixture)
 
 TODAY = date(2026, 10, 13)
@@ -391,3 +391,31 @@ def test_board_api(client):
     assert client.post(f"/api/v1/board/{n['id']}/done").json()["ok"]
     assert client.get("/api/v1/board").json()["notes"] == []
     assert client.post("/api/v1/board", json={"text": "  "}).status_code == 400
+
+
+def test_acconti_and_saldo_are_counted_once_and_the_rest_stays_open(db, seeded):
+    """«Ha lasciato 100 di acconto», then «ha saldato»: the money counts the day it comes in, never twice."""
+    led = Ledger(db, seeded, "CF Materassi", today=TODAY)
+    sale = led.add(kind="vendita", item="materasso Morpheus Memory due strati", size="160x190", unit_price=420,
+                   counterpart="Rossi", payment="sospeso")
+    res = led.pay("Rossi", 100)
+    assert res["rows"] == [sale] and res["still_due"] == 320 and sale.payment == "sospeso"
+    rep = led.report(TODAY, TODAY)["totals"]
+    assert rep["incassato"] == 100 and rep["da_incassare_sospeso"] == 320
+    assert "acconti 100 euro, restano 320 euro" in sentence(sale)
+    res = led.pay("rossi", 320, day="domani")
+    assert res["still_due"] == 0 and sale.payment == "pagato"
+    from datetime import timedelta
+    tomorrow = TODAY + timedelta(days=1)
+    assert led.report(tomorrow, tomorrow)["totals"]["incassato"] == 320
+    assert led.report(TODAY, tomorrow)["totals"]["incassato"] == 420          # not 840
+    card = led.customer("Rossi")
+    assert card["found"] and card["spent"] == 420 and card["due"] == 0
+
+
+def test_customer_card_and_unknown_payer(db, seeded):
+    led = Ledger(db, seeded, "CF Materassi", today=TODAY)
+    led.add(kind="vendita", item="rete a doghe", size="80x190", amount=40, counterpart="Enrico Patti")
+    assert led.customer("Patti")["pieces"] == 1
+    res = led.pay("Signor Nessuno", 50)
+    assert res["rows"] == [] and res["incasso"].amount == 50

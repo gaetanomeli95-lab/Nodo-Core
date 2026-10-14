@@ -5,6 +5,7 @@ const ICON: Record<string, string> = { ok: "✓", missing: "–", error: "✕", 
 
 // keys you can paste here: saved into apps/api/.env and activated without restarting NODO
 const KEYS = [
+  { name: "NODO_GUARD_WORD", label: "Parola d'ordine — a voce, regole e persone cambiano solo se la dici (scrivila qui, non a voce davanti agli altri)" },
   { name: "NODO_GEMINI_API_KEY", label: "Gemini — voce dal vivo + cervello gratis (aistudio.google.com)" },
   { name: "NODO_CEREBRAS_API_KEY", label: "Cerebras — cervello di riserva gratis, velocissimo (cloud.cerebras.ai)" },
   { name: "NODO_MISTRAL_API_KEY", label: "Mistral — cervello di riserva gratis (console.mistral.ai)" },

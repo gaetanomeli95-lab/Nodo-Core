@@ -31,7 +31,7 @@ def _shop_lines(s: Session, org: str, settings, today) -> list[str]:
     """The shop first: yesterday in numbers, what is still to deliver, who still has to pay."""
     from datetime import timedelta
 
-    from nodo.ledger import Ledger, euro, sentence
+    from nodo.ledger import Ledger, due, euro, sentence
     biz = settings.ledger_business or "il negozio"
     led = Ledger(s, org, biz, today=today)
     out: list[str] = []
@@ -53,7 +53,7 @@ def _shop_lines(s: Session, org: str, settings, today) -> list[str]:
                                                 for r in todo[:4]) + ".")
     open_pay = led.open_payments()
     if open_pay:
-        tot = sum(r.amount or 0 for r in open_pay)
+        tot = sum(due(r) for r in open_pay)
         out.append(f"Aspetti ancora {euro(tot)} da " + _names(sorted({r.counterpart or 'un cliente'
                                                                           for r in open_pay})) + ".")
     return out

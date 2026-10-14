@@ -24,7 +24,7 @@ def test_database_made_by_create_all_is_stamped_then_upgraded(tmp_path, monkeypa
     Base.metadata.create_all(eng)                       # every table, as the running app does
     _run(monkeypatch, url)
     with eng.connect() as c:
-        assert c.execute(text("select version_num from alembic_version")).scalar() == "a7d2e9c4b1f8"
+        assert c.execute(text("select version_num from alembic_version")).scalar() == "b8e1f2a3c4d5"
     _run(monkeypatch, url)                              # and a second run is a no-op
 
 

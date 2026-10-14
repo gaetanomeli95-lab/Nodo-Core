@@ -28,7 +28,7 @@ def _cap(text: str, n: int) -> str:
 
 
 def build(db, org: str, settings, now: datetime) -> str:
-    from nodo.ledger import Ledger, euro, price_history, sentence, size_label
+    from nodo.ledger import Ledger, due, euro, price_history, sentence, size_label
 
     today: date = now.date()
     biz = settings.ledger_business or "il negozio"
@@ -51,7 +51,7 @@ def build(db, org: str, settings, now: datetime) -> str:
 
     open_pay = led.open_payments()
     if open_pay:
-        tot = sum(r.amount or 0 for r in open_pay)
+        tot = sum(due(r) for r in open_pay)
         out.append(f"SOSPESI ({len(open_pay)}, in tutto {euro(tot)}): "
                    + _cap("; ".join(f"{sentence(r).rstrip('.')} (dal {r.day[8:10]}/{r.day[5:7]})"
                                      for r in open_pay), 1500) + ".")

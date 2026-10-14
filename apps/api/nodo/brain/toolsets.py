@@ -14,9 +14,10 @@ ALWAYS = {"now", "remember", "recall", "forget", "search_conversations", "search
 GROUPS: list[tuple[re.Pattern, set[str]]] = [
     (re.compile(r"\d|euro|€|vend|segn|regist|client|materass|ret[ei]\b|cuscin|sospes|consegn|spes[ae]|incass|prezz|"
                 r"listin|credit|deve|debit|pagat|ritir|sostitu|ordin|arianna|andromeda|morph|morf|softcomfort|"
-                r"negozio|giornata|chiusura|conti|uscit|entrat|cancella|correggi|sbagliat|scontr", re.I),
+                r"negozio|giornata|chiusura|conti|uscit|entrat|cancella|correggi|sbagliat|scontr|accont|capar|saldat|"
+                r"anticip|bonific|bancomat|contanti|scheda|ha preso|comprat", re.I),
      {"ledger_add", "ledger_update", "ledger_report", "ledger_prices", "ledger_close_day", "ledger_stats",
-      "ledger_open"}),
+      "ledger_open", "ledger_pay", "ledger_customer"}),
     (re.compile(r"\bsit[oi]\b|vercel|github|deploy|domini|ssl|certificat|codice|notte|url|http|www|pagina|online|"
                 r"\bnodo\b|aggiornament|errore del sito|pb.?care|careprogram", re.I),
      {"night_report", "sites_status", "check_sites", "sync_sites", "request_site_change", "list_site_files",

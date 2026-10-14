@@ -22,7 +22,7 @@ AGENTS = [
      "does": "Segna vendite, spese, consegne, sospesi e crediti del negozio; controlla i conti, avvisa se qualcosa "
              "non torna e chiude la giornata.",
      "tools": {"ledger_add", "ledger_update", "ledger_report", "ledger_prices", "ledger_close_day", "ledger_stats",
-               "ledger_open"}},
+               "ledger_open", "ledger_pay", "ledger_customer"}},
     {"id": "archivista", "name": "Archivista", "color": "#9fd8ff",
      "replaces": "Segretaria con la memoria di ferro",
      "does": "Ricorda persone, regole, preferenze e scherzi; rilegge le vostre conversazioni e le vecchie chat di "
@@ -56,6 +56,7 @@ AGENTS = [
 ]
 NAMES = {"read_photo": "ha guardato una foto", "ledger_add": "ha segnato nel registro",
          "ledger_update": "ha corretto il registro", "ledger_report": "ha fatto i conti",
+         "ledger_pay": "ha segnato un incasso", "ledger_customer": "ha aperto la scheda di un cliente",
          "remember": "ha memorizzato", "recall": "ha ripescato un ricordo", "search_conversations": "ha riletto le "
          "conversazioni", "search_knowledge": "ha cercato nelle vecchie chat", "web_search": "ha cercato sul web",
          "create_document": "ha creato un documento", "create_file": "ha creato un file",
@@ -88,12 +89,12 @@ def team_state(db: Session, org: str, settings, files=None) -> dict:
         })
     by = {a["id"]: a for a in out}
     try:
-        from nodo.ledger import Ledger
+        from nodo.ledger import Ledger, due
         from nodo.night.briefing import tzinfo
         led = Ledger(db, org, settings.ledger_business, today=datetime.now(tzinfo(settings.timezone)).date())
         open_pay = led.open_payments()
         by["contabile"]["facts"] = [f"{len(open_pay)} sospesi aperti",
-                                    f"{sum((r.amount or 0) for r in open_pay):.0f} € da incassare",
+                                    f"{sum(due(r) for r in open_pay):.0f} € da incassare",
                                     f"{len(led.pending_work())} cose da fare"]
         by["contabile"]["business"] = settings.ledger_business
     except Exception:  # noqa: BLE001 - one broken number must not hide the team

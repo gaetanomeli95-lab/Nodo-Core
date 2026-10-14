@@ -3,7 +3,19 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from nodo.ledger import KINDS, Ledger, check_entry, day_check, euro, parse_day, price_history, sentence, stats, view
+from nodo.ledger import (
+    KINDS,
+    Ledger,
+    check_entry,
+    day_check,
+    due,
+    euro,
+    parse_day,
+    price_history,
+    sentence,
+    stats,
+    view,
+)
 
 _STR = {"type": "string"}
 _NUM = {"type": "number"}
@@ -12,7 +24,8 @@ _ENTRY = {
     "type": "object",
     "properties": {
         "kind": {**_STR, "description": "vendita | sostituzione | spesa | credito (qualcuno deve soldi al negozio, "
-                                        "non è una vendita: «Marcello ci deve 30 euro») | nota"},
+                                        "non è una vendita: «Marcello ci deve 30 euro») | nota. Per i soldi che "
+                                        "ARRIVANO da un cliente (acconto, saldo di un sospeso) usa ledger_pay"},
         "item": {**_STR, "description": "cosa, col nome COMPLETO del modello: «materasso Morpheus Memory due strati», "
                                         "«rete a doghe», «rete con tavola», per le spese la voce: «palestra», "
                                         "«stipendio», «pulizie», «fornitore Arrisal»"},
@@ -91,6 +104,25 @@ class LedgerTools:
                                   "«com'è andato il mese / la settimana?», «cosa vendiamo di più?».",
                   {"type": "object", "properties": {"days": {"type": "integer", "description": "7, 30, 90…"}}},
                   self.ledger_stats)
+        self._add("ledger_pay", f"Soldi RICEVUTI da un cliente di {biz}: un acconto, una caparra o il saldo di un "
+                                "sospeso («Softcomfort mi ha dato 200 euro», «Rossi ha saldato», «ha lasciato 100 "
+                                "di acconto»). Il programma li segna come incasso del giorno e li scala da quello che "
+                                "quel cliente deve, dal più vecchio; dice quanto resta. Per una vendita con acconto: "
+                                "prima ledger_add con payment sospeso, poi ledger_pay con l'acconto.",
+                  {"type": "object", "properties": {
+                      "customer": {**_STR, "description": "chi paga"},
+                      "amount": {**_NUM, "description": "quanto ha dato, in euro (per «ha saldato» usa quanto "
+                                                         "deve: lo trovi in ledger_customer)"},
+                      "entry": {**_STR, "description": "la vendita precisa, se lo dice («quello del materasso»)"},
+                      "day": {**_STR, "description": "oggi (default) o quando ha pagato"},
+                      "note": {**_STR, "description": "contanti, bancomat, bonifico…"}},
+                   "required": ["customer", "amount"]}, self.ledger_pay)
+        self._add("ledger_customer", f"Scheda di un cliente di {biz}: tutto quello che ha comprato (quando, cosa, "
+                                     "misura, prezzo), quanto ha speso, quanto deve ancora, acconti, note e "
+                                     "indirizzi. Per «cosa ha preso Rossi?», «quanto mi deve Softcomfort?», «chi è "
+                                     "la signora Silvana?».",
+                  {"type": "object", "properties": {"name": {**_STR, "description": "nome del cliente, anche parziale"}},
+                   "required": ["name"]}, self.ledger_customer)
         self._add("ledger_open", f"Cosa resta aperto nel registro di {biz}: pagamenti sospesi (chi deve ancora "
                                  "pagare e quanto) e consegne/lavori da fare.", {"type": "object", "properties": {}},
                   self.ledger_open)
@@ -238,11 +270,44 @@ class LedgerTools:
         st.pop("series")
         return {**st, "say": say, "note": "i grafici sono nella scheda Registro; puoi mostrarla con show_on_screen"}
 
+    async def ledger_pay(self, customer: str, amount: float, entry: str | None = None, day: str | None = None,
+                         note: str | None = None) -> dict:
+        led = self._ledger()
+        try:
+            res = led.pay(customer, amount, day=day, entry=entry, note=note)
+        except (ValueError, TypeError) as ex:
+            return {"saved": False, "error": str(ex)}
+        inc, rows = res["incasso"], res["rows"]
+        out = {"saved": True, "incasso": sentence(inc), "day": inc.day,
+               "covered": [{"row": sentence(r), "day": r.day} for r in rows],
+               "still_due": res["still_due"],
+               "say": (f"Segnato: {euro(inc.amount)} da {inc.counterpart}. "
+                       + ("Ora è tutto saldato." if res["still_due"] <= 0 and rows else
+                          f"Deve ancora {euro(res['still_due'])}." if rows else
+                          "Non aveva sospesi: li tengo come credito a suo favore, dimmi se va bene."))}
+        if res["left_over"] > 0 and rows:
+            out["check"] = f"ha dato {euro(res['left_over'])} più di quanto doveva: è un anticipo o un errore?"
+        return out
+
+    async def ledger_customer(self, name: str) -> dict:
+        led = self._ledger()
+        card = led.customer(name)
+        if not card["found"]:
+            return {"error": f"non trovo «{name}» tra i clienti del registro", "similar": card["similar"]}
+        rows = card["rows"]
+        return {"customer": card["name"], "spent": card["spent"], "pieces": card["pieces"], "due": card["due"],
+                "first": card["first"], "last": card["last"], "notes": card["notes"],
+                "history": [{"row": sentence(r), "day": r.day, "kind": r.kind, "amount": r.amount,
+                             "payment": r.payment} for r in rows[-25:]],
+                "also_similar": card["others"],
+                "say": (f"{card['name']}: {card['pieces']} pezzi in tutto, {euro(card['spent'])} di acquisti"
+                        + (f", deve ancora {euro(card['due'])}" if card["due"] else ", nessun sospeso") + ".")}
+
     async def ledger_open(self) -> dict:
         led = self._ledger()
         sospesi = led.open_payments()
         todo = led.pending_work()
         return {"pagamenti_sospesi": [{"row": sentence(r), "day": r.day} for r in sospesi],
-                "totale_sospeso": round(sum(r.amount or 0 for r in sospesi), 2),
+                "totale_sospeso": round(sum(due(r) for r in sospesi), 2),
                 "da_fare": [{"row": sentence(r), "day": r.day} for r in todo],
                 "kinds": list(KINDS)}

@@ -7,7 +7,8 @@ import { calm, lite } from "../../motion";
  *  (green incasso, rose sospeso, amber da fare, violet uscita). Pure CSS 3D transforms: the graphics chip
  *  composes them almost for free, so it stays smooth on the shop laptop too. */
 
-export type HoloSurface = { view: string; rows: Record<string, unknown>[]; summary: string; totals?: Record<string, number> };
+export type HoloSurface = { view: string; rows: Record<string, unknown>[]; summary: string; totals?: Record<string, number>;
+  title?: string };
 
 const TONE: Record<string, string> = {
   sospeso: "rose", da_fare: "amber", vendita: "mint", credito: "rose", spesa: "violet", sostituzione: "cyan",

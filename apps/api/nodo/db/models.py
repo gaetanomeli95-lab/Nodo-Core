@@ -366,6 +366,7 @@ class LedgerEntry(Base, TimestampMixin):
     paid_on: Mapped[str | None] = mapped_column(String(10))
     status: Mapped[str] = mapped_column(String(16), default="fatto")    # da_fare | fatto | annullato
     note: Mapped[str | None] = mapped_column(Text)
+    paid_amount: Mapped[float | None] = mapped_column(Float)          # acconti already received on a «sospeso» sale
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

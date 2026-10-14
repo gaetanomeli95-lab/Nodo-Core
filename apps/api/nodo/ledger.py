@@ -16,13 +16,14 @@ from sqlalchemy.orm import Session
 
 from nodo.db.models import LedgerEntry
 
-KINDS = ("vendita", "sostituzione", "spesa", "credito", "nota")
+KINDS = ("vendita", "sostituzione", "spesa", "credito", "incasso", "nota")
 MONEY_IN = ("vendita", "credito")      # money someone owes the shop: a sale, or a plain debt («Marcello ci deve 30»)
 _KIND_ALIASES = {"venduto": "vendita", "vendite": "vendita", "consegna": "vendita", "ordine": "vendita",
                  "cambio": "sostituzione", "garanzia": "sostituzione", "sostituito": "sostituzione",
                  "uscita": "spesa", "uscite": "spesa", "pagamento": "spesa", "stipendio": "spesa",
                  "appunto": "nota", "debito": "credito", "prestito": "credito", "deve": "credito",
-                 "crediti": "credito"}
+                 "crediti": "credito", "acconto": "incasso", "caparra": "incasso", "incassato": "incasso",
+                 "incassi": "incasso", "anticipo": "incasso"}
 SIZE_NAMES = {80: "singolo", 85: "singolo", 90: "singolo", 100: "singolo grande", 120: "una piazza e mezzo",
               140: "alla francese", 160: "matrimoniale", 170: "matrimoniale", 180: "matrimoniale grande"}
 _WORD_SIZES = {"singolo": "80x190", "singola": "80x190", "una piazza e mezzo": "120x190",
@@ -38,7 +39,7 @@ def norm_kind(kind: str | None) -> str:
     k = (kind or "").strip().lower()
     k = _KIND_ALIASES.get(k, k)
     if k not in KINDS:
-        raise ValueError(f"tipo non valido «{kind}»: usa vendita, sostituzione, spesa, credito o nota")
+        raise ValueError(f"tipo non valido «{kind}»: usa vendita, sostituzione, spesa, credito, incasso o nota")
     return k
 
 
@@ -263,6 +264,71 @@ class Ledger:
         self.s.flush()
         return done
 
+    def pay(self, counterpart: str, amount: float, day: str | None = None, entry: str | None = None,
+            note: str | None = None) -> dict:
+        """Money received from a customer: an «incasso» row (counted that day) spread over what that customer
+        still owes, oldest first. A row covered in full becomes «pagato»; the rest stays «sospeso» with its
+        acconto. Money beyond the debt stays as a credit in the customer's favour, said clearly."""
+        amount = round(float(str(amount).replace(",", ".").replace("€", "").strip()), 2)
+        if amount <= 0:
+            raise ValueError("l'importo deve essere più di zero")
+        d = parse_day(day, self.today)
+        name = (counterpart or "").strip()
+        if entry:
+            hit, cands = self.find(entry)
+            open_rows = [hit] if hit is not None and hit.payment == "sospeso" else []
+            if hit is None and cands:
+                raise ValueError("più righe simili: chiedi quale")
+            name = name or (hit.counterpart if hit else "")
+        else:
+            open_rows = [r for r in self.open_payments()
+                         if r.counterpart and fuzz.WRatio(name.lower(), r.counterpart.lower()) >= 86]
+        if not name:
+            raise ValueError("da chi arrivano i soldi?")
+        left, touched = amount, []
+        for r in open_rows:
+            if left <= 0:
+                break
+            take = min(left, due(r))
+            if take <= 0:
+                continue
+            r.paid_amount = round((r.paid_amount or 0) + take, 2)
+            left = round(left - take, 2)
+            if due(r) <= 0.005:
+                r.payment, r.paid_on = "pagato", d.isoformat()
+            touched.append(r)
+        what = ", ".join(f"#{r.id[:8]}" for r in touched)
+        inc = LedgerEntry(organization_id=self.org, business=self.business, day=d.isoformat(), kind="incasso",
+                          item=("acconto su " + what) if touched else "", qty=1, amount=amount, unit_price=amount,
+                          counterpart=(touched[0].counterpart if touched else name), payment="pagato",
+                          paid_on=d.isoformat(), status="fatto", note=(note or "").strip() or None)
+        self.s.add(inc)
+        self.s.flush()
+        still = round(sum(due(r) for r in self.open_payments()
+                          if r.counterpart and fuzz.WRatio((inc.counterpart or "").lower(), r.counterpart.lower()) >= 86), 2)
+        return {"incasso": inc, "rows": touched, "left_over": left, "still_due": still}
+
+    def customer(self, name: str) -> dict:
+        """Everything about one customer: what they bought, when, how much, what they still owe, notes."""
+        rows = list(self.s.scalars(select(LedgerEntry).where(
+            LedgerEntry.organization_id == self.org, LedgerEntry.counterpart.is_not(None),
+            LedgerEntry.status != "annullato").order_by(LedgerEntry.day)))
+        names = {r.counterpart for r in rows if r.counterpart}
+        scored = sorted(((fuzz.WRatio((name or "").lower(), n.lower()), n) for n in names), reverse=True)
+        if not scored or scored[0][0] < 80:
+            return {"found": False, "similar": [n for _, n in scored[:5]]}
+        best = scored[0][1]
+        same = [n for sc, n in scored if sc >= 92 and n.lower() == best.lower()] or [best]
+        mine = [r for r in rows if r.counterpart in same]
+        sales = [r for r in mine if r.kind == "vendita"]
+        return {"found": True, "name": best, "rows": mine,
+                "spent": round(sum(r.amount or 0 for r in sales), 2),
+                "pieces": sum(r.qty for r in sales),
+                "due": round(sum(due(r) for r in mine if r.kind in MONEY_IN), 2),
+                "first": mine[0].day if mine else None, "last": mine[-1].day if mine else None,
+                "notes": [r.note for r in mine if r.note][-5:],
+                "others": [n for sc, n in scored[1:4] if sc >= 80 and n not in same]}
+
     # -- read
     def entries(self, start: date, end: date, include_cancelled: bool = False) -> list[LedgerEntry]:
         q = select(LedgerEntry).where(LedgerEntry.organization_id == self.org,
@@ -277,7 +343,7 @@ class Ledger:
             LedgerEntry.organization_id == self.org, LedgerEntry.kind.in_(MONEY_IN),
             LedgerEntry.status != "annullato", LedgerEntry.payment == "pagato",
             LedgerEntry.paid_on >= start.isoformat(), LedgerEntry.paid_on <= end.isoformat(),
-            LedgerEntry.day < start.isoformat())))
+            LedgerEntry.day < start.isoformat(), or_(LedgerEntry.paid_amount.is_(None), LedgerEntry.paid_amount == 0))))
 
     def open_payments(self) -> list[LedgerEntry]:
         return list(self.s.scalars(select(LedgerEntry).where(
@@ -296,10 +362,15 @@ class Ledger:
         t = Totals()
         for r in rows:
             if r.kind in MONEY_IN and r.status != "da_fare":
-                if r.payment == "pagato" and (r.paid_on or r.day) <= end.isoformat():
+                if r.paid_amount:
+                    # paid (in part or all) through «incasso» rows: that money is counted on the day it came in
+                    t.da_incassare += due(r)
+                elif r.payment == "pagato" and (r.paid_on or r.day) <= end.isoformat():
                     t.incassato += r.amount or 0
                 elif r.payment in ("sospeso", "pagato"):        # paid only after the period: still open then
                     t.da_incassare += r.amount or 0
+            elif r.kind == "incasso" and r.status != "da_fare":
+                t.incassato += r.amount or 0
             elif r.kind == "spesa" and r.status != "da_fare":
                 t.uscite += r.amount or 0
         t.incassato += sum(r.amount or 0 for r in settled)
@@ -341,7 +412,7 @@ class Ledger:
             day_rows = [r for r in rows if r.day == d]
             out.append(f"{say_day(date.fromisoformat(d), self.today).capitalize()}:")
             for kind, title in (("vendita", "Vendite"), ("sostituzione", "Sostituzioni"), ("spesa", "Uscite"),
-                                ("credito", "Crediti"),
+                                ("credito", "Crediti"), ("incasso", "Incassi e acconti"),
                                 ("nota", "Note")):
                 part = [r for r in day_rows if r.kind == kind]
                 if part:
@@ -382,6 +453,9 @@ def sentence(r: LedgerEntry) -> str:
         s = f"{r.counterpart or 'qualcuno'} deve {euro(r.amount)}" + (f" ({r.item})" if r.item else "")
         s += {"pagato": ", pagato", "sospeso": "", "nessuno": ""}.get(r.payment, "")
         return s + (f" ({r.note})" if r.note else "")
+    elif r.kind == "incasso":
+        s = f"{euro(r.amount)} da {r.counterpart or 'cliente'}" + (f" ({r.item})" if r.item else "")
+        return s + (f" ({r.note})" if r.note else "")
     elif r.kind == "nota":
         s = r.note or r.item
         return s + (" [da fare]" if r.status == "da_fare" else "")
@@ -390,6 +464,10 @@ def sentence(r: LedgerEntry) -> str:
             f" a {euro(r.amount)}"
         s = f"{what}{each}" + (f" {_to(r.counterpart)}" if r.counterpart else "")
         s += {"pagato": ", pagato", "sospeso": ", pagamento SOSPESO", "nessuno": ""}.get(r.payment, "")
+        if r.paid_amount and r.payment == "sospeso":
+            s += f" (acconti {euro(r.paid_amount)}, restano {euro(due(r))})"
+        elif r.paid_amount and r.payment == "pagato":
+            s += " (saldato con acconti)"
         if r.payment == "pagato" and r.paid_on and r.paid_on != r.day:
             s += f" il {date.fromisoformat(r.paid_on).day}/{date.fromisoformat(r.paid_on).month}"
     if r.status == "da_fare":
@@ -399,10 +477,18 @@ def sentence(r: LedgerEntry) -> str:
     return s
 
 
+def due(r: LedgerEntry) -> float:
+    """What is still to be paid on a row (its amount minus the acconti already received)."""
+    if r.payment != "sospeso":
+        return 0.0
+    return round(max(0.0, (r.amount or 0) - (r.paid_amount or 0)), 2)
+
+
 def view(r: LedgerEntry) -> dict:
     return {"id": r.id[:8], "day": r.day, "kind": r.kind, "item": r.item, "size": size_label(r.size), "qty": r.qty,
             "unit_price": r.unit_price, "amount": r.amount, "counterpart": r.counterpart, "payment": r.payment,
-            "paid_on": r.paid_on, "status": r.status, "note": r.note}
+            "paid_on": r.paid_on, "status": r.status, "note": r.note, "paid_amount": r.paid_amount,
+            "due": due(r) if r.payment == "sospeso" else None}
 
 
 # ------------------------------------------------------------------------------------------------ the second pair of eyes
@@ -523,8 +609,10 @@ def stats(led: Ledger, days: int = 30) -> dict:
             continue
         if r.kind in MONEY_IN:
             d["pieces"] += r.qty if r.kind == "vendita" else 0
-            if r.payment == "pagato":
+            if r.payment == "pagato" and not r.paid_amount:
                 d["in"] += r.amount or 0
+        elif r.kind == "incasso":
+            d["in"] += r.amount or 0
         elif r.kind == "spesa":
             d["out"] += r.amount or 0
     for r in led.settled_in(start, end):           # older sales paid in the period count the day they were paid
@@ -549,9 +637,9 @@ def stats(led: Ledger, days: int = 30) -> dict:
                        for k, v in per_day.items()],
             "totals": {"incassato": round(tot_in, 2), "uscite": round(tot_out, 2), "saldo": round(tot_in - tot_out, 2),
                        "pezzi": sum(v["pieces"] for v in per_day.values()),
-                       "da_incassare": round(sum(r.amount or 0 for r in open_pay), 2)},
+                       "da_incassare": round(sum(due(r) for r in open_pay), 2)},
             "best_items": sorted(items.values(), key=lambda x: (-x["pieces"], -x["revenue"]))[:6],
             "best_customers": [{"name": k, "revenue": round(v, 2)}
                                for k, v in sorted(customers.items(), key=lambda kv: -kv[1])[:6]],
-            "oldest_open": [{"who": r.counterpart or "cliente", "amount": r.amount, "since": r.day}
+            "oldest_open": [{"who": r.counterpart or "cliente", "amount": due(r), "since": r.day}
                             for r in open_pay[:5]]}

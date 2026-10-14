@@ -328,6 +328,7 @@ _SETTABLE_KEYS = {
     "NODO_VERCEL_TOKEN": "vercel_token",
     "NODO_CALENDAR_ICS_URL": "calendar_ics_url",
     "NODO_VOICE_ENGINE": "voice_engine",
+    "NODO_GUARD_WORD": "guard_word",
     "NODO_TELEGRAM_BOT_TOKEN": "telegram_bot_token",
     "NODO_TELEGRAM_CHAT_ID": "telegram_chat_id",
 }

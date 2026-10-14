@@ -197,11 +197,13 @@ class ExtraTools(LedgerTools):
         self._add("board_done", "Toglie una nota dalla lavagna (fatta o non più utile), cercata per testo; «tutto» la "
                                 "pulisce.", _obj({"note": _STR}, ["note"]), self.board_done)
         self._add("board_list", "Le note sulla lavagna in questo momento.", _obj({}), self.board_list)
-        self._add("show_on_screen", "MOSTRA a Gaetano sullo schermo, in grande: un file creato (immagine, PDF, Word, "
-                                    "Excel, presentazione: per nome, titolo o «l'ultimo»), oppure una scheda del "
-                                    "pannello (squadra, registro, notte, siti, memoria, accessi). Per «fammi vedere…», "
-                                    "«mostrami…», «apri…».",
-                  _obj({"what": {**_STR, "description": "nome/titolo del file, «ultimo», «ultima immagine», oppure "
+        self._add("show_on_screen", "MOSTRA a Gaetano sullo schermo, in grande, nel visore adatto: un file creato da "
+                                    "NODO, un file del SUO PC (foto, video con l'audio, PDF, Word, Excel, musica: "
+                                    "cerca in Desktop, Documenti, Immagini, Video, Download), un link (YouTube diventa "
+                                    "un lettore), oppure una scheda del pannello (squadra, registro, notte, siti, "
+                                    "memoria, accessi). Per «fammi vedere…», «mostrami…», «apri…», «fammi sentire…».",
+                  _obj({"what": {**_STR, "description": "cosa mostrare con le sue parole: «l'ultimo video», «la foto "
+                                                        "del letto Andromeda», «preventivo Rossi pdf», un link, oppure "
                                                         "registro | notte | siti | memoria | accessi"}}, ["what"]),
                   self.show_on_screen)
         self._add("close_screen", "Chiude quello che stai mostrando sullo schermo (immagine, documento, scheda) e "
@@ -445,6 +447,10 @@ class ExtraTools(LedgerTools):
             return {"forgotten": False, "error": "più ricordi simili: chiedi quale",
                     "candidates": [f.content[:160] for _, f in scored[:4]]}
         f = scored[0][1]
+        from nodo.memory.mind import PROTECTED_LAYERS, guard_ok
+        if self.channel == "voice" and f.layer in PROTECTED_LAYERS and not guard_ok(self.settings, [self.user_text]):
+            return {"forgotten": False, "error": "per togliere regole o persone a voce serve la parola d'ordine di "
+                                                 "Gaetano: chiedigliela, senza ripeterla tu ad alta voce"}
         f.valid_until, f.status = datetime.now(UTC), FactStatus.ARCHIVED
         self.s.flush()
         return {"forgotten": True, "fact": f.content[:200]}
@@ -557,11 +563,31 @@ class ExtraTools(LedgerTools):
         for word, tab in self._TABS.items():
             if word in w.split() or w == word:
                 return {"shown": word, "tab": tab, "note": "è sullo schermo; dì in una frase cosa sta guardando"}
-        if self.c is None or self.c.files is None:
-            return {"error": "archivio file non disponibile"}
-        rows = self.c.files.list(self.s, self.org)
-        if not rows:
-            return {"error": "non ho ancora creato nessun file da mostrarti"}
+        from nodo import media
+        if link := media.from_url(what):
+            return {"shown": link["title"], "url": link["url"], "kind": link["kind"],
+                    "note": "è sullo schermo; quando dice «chiudi» usa close_screen"}
+        rows = self.c.files.list(self.s, self.org) if self.c is not None and self.c.files is not None else []
+        wk = media.wanted_kind(what)
+        mine = await self._show_nodo_file(what, w, rows) if rows and wk not in ("video", "audio") else None
+        if mine and wk and mine.get("kind") not in (wk, None):
+            mine = None                                  # asked for a PDF, NODO's newest file is a picture
+        if mine and "url" in mine:
+            return mine
+        # not among the files NODO made: his own folders on this PC
+        import asyncio
+        hit, others = await asyncio.to_thread(media.find_local, what)
+        if hit is not None:
+            return {"shown": hit.stem, "url": media.share(hit), "kind": media.kind_of(hit),
+                    "where": str(hit.parent.name), "others": [p.name for p in others[:4]],
+                    "note": "è sullo schermo in grande (dal PC di Gaetano); dì in una frase cosa sta guardando; "
+                            "quando dice «chiudi» usa close_screen"}
+        if mine:
+            return mine
+        return {"error": f"non trovo «{what}» né tra i file di NODO né nelle cartelle del PC",
+                "candidates": [p.name for p in others[:5]]}
+
+    async def _show_nodo_file(self, what: str, w: str, rows: list) -> dict:
         kinds = {"immagine": (".png", ".jpg", ".jpeg", ".webp", ".gif"), "foto": (".png", ".jpg", ".jpeg", ".webp"),
                  "pdf": (".pdf",), "word": (".docx",), "excel": (".xlsx", ".csv"), "presentazione": (".pptx",),
                  "slide": (".pptx",)}
@@ -569,6 +595,8 @@ class ExtraTools(LedgerTools):
         pool = [r for r in rows if not want or (r["uri"] or "").lower().endswith(want)]
         if not pool:
             return {"error": f"non trovo un file di quel tipo ({what})"}
+        if re.search(r"\b(pc|computer|desktop|scrivania|download|cartella)\b", w):
+            return {"error": "è sul PC"}                       # he means his own folders, not NODO's files
         if re.search(r"\bultim|\brecente|\bappena\b", w) or w in ("file", "immagine", "pdf", "documento", "foto"):
             hit = pool[0]                                        # list() is newest first
         else:

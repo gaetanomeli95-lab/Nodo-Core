@@ -36,7 +36,8 @@ const DOING: Record<string, string> = {
 };
 const TITLES: Record<string, string> = { sites_status: "I tuoi siti", today_agenda: "Da qui si comincia",
   projects: "I progetti sul tavolo", night_report: "Mentre non c'eri", files: "File pronto",
-  ledger: "Il registro", ledger_add: "Segnato nel registro", ledger_open: "Ancora aperto" };
+  ledger: "Il registro", ledger_add: "Segnato nel registro", ledger_open: "Ancora aperto",
+  ledger_customer: "Scheda cliente", ledger_pay: "Incasso segnato" };
 const STATUS: Record<string, string> = { ok: "Regolare", warning: "Da controllare", critical: "Richiede attenzione",
   unknown: "Da verificare", open: "Da fare", in_progress: "In corso", blocked: "In attesa", active: "Attivo", done: "Completato" };
 const FILE_LINK = /(\/api\/v1\/files\/[\w.%-]+)/g;
@@ -128,7 +129,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       const current = Array.from(activeTools.current).at(-1);
       setActivity(current ? DOING[current] || "Ci lavoro" : null);
     }
-    if (e.type === "ui.present") setSurface({ view: String(e.view), rows: e.rows as Surface["rows"] || [], summary: String(e.summary || ""), totals: e.totals as Surface["totals"] });
+    if (e.type === "ui.present") setSurface({ view: String(e.view), rows: e.rows as Surface["rows"] || [], summary: String(e.summary || ""), totals: e.totals as Surface["totals"], title: e.title as string | undefined });
     if (e.type === "approval.required") setDecision({ id: String(e.approval_id), label: String(e.label || "Conferma questa azione"),
       site: e.site as string, preview: safeUrl(e.preview_url as string), pr: safeUrl(e.pr_url as string) });
     if (e.type === "approval.resolved") { setDecision(null); onRequestDone(); }
@@ -220,7 +221,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         }
         if (e.type === "step") setActivity(e.status === "running" ? DOING[String(e.step).replace("tool:", "")] || "Ci lavoro" : null);
         if (e.type === "error") setError(String(e.message));
-        if (e.type === "ui.present") setSurface({ view: String(e.view), rows: (e.rows as Surface["rows"]) || [], summary: String(e.summary || ""), totals: e.totals as Surface["totals"] });
+        if (e.type === "ui.present") setSurface({ view: String(e.view), rows: (e.rows as Surface["rows"]) || [], summary: String(e.summary || ""), totals: e.totals as Surface["totals"], title: e.title as string | undefined });
       });
       onRequestDone();
     } catch (e) { setError((e as Error).message); }
@@ -331,7 +332,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
           <button disabled={decision.sending || !voice.connected} onClick={() => answer("reject")}>Lascia stare</button>
           <button className="primary" disabled={decision.sending || !voice.connected} onClick={() => answer("approve")}>{decision.sending ? "Conferma in corso…" : "Conferma"}</button></div>
       </section> : surface && <HoloTable key={`${surface.view}-${surface.rows.length}-${surface.summary.length}`} surface={surface}
-        title={TITLES[surface.view] || "Il punto della situazione"} onClose={() => setSurface(null)}
+        title={surface.title || TITLES[surface.view] || "Il punto della situazione"} onClose={() => setSurface(null)}
         onDownload={(url) => downloadFile(url).catch((e) => setError((e as Error).message))} />}
       {!decision && !surface && mode === "rest" && <Pulse revision={pulseRevision} disabled={busy || !voice.connected}
         onInvestigate={(prompt) => { void send(prompt); }} />}

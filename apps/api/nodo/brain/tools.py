@@ -495,7 +495,17 @@ class Toolbox(ExtraTools):
         self.s.flush()
         return {"done": True, "title": t.title}
 
+    def _guard_blocks(self, text: str) -> dict | None:
+        """By voice, with a «parola d'ordine» set, rules can be changed only if it was just said."""
+        from nodo.memory.mind import _RULE_LIKE, guard_ok
+        if self.channel == "voice" and _RULE_LIKE.search(text or "") and not guard_ok(self.settings, [self.user_text]):
+            return {"saved": False, "error": "per cambiare le regole a voce serve la parola d'ordine di Gaetano: "
+                                             "chiedigliela, senza ripeterla tu ad alta voce"}
+        return None
+
     async def remember(self, fact: str, about: str | None = None) -> dict:
+        if blocked := self._guard_blocks(fact):
+            return blocked
         subject_type, subject_id, label = "user", self.core.user_id or self.org, "Gaetano"
         if about:
             if p := self._project(about):

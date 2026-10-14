@@ -86,6 +86,7 @@ THINK_DECL = {
         "required": ["richiesta"]},
 }
 BOARD_EVERY_S = 60
+_SPOKEN_CALL = re.compile(r"(?:pensa|think)\s*\(", re.I)
 LIVE_RETRY_S = 20
 _VOICE_TAGS = re.compile(r"<\s*no[ _]speech\s*>|<[a-z_ ]{1,24}>|\{[a-z_ ]{1,24}\}", re.I)
 _LIVE_OWN_TOOLS = {"decide", "close_screen"}   # yes/no on the proposal shown, close what is on screen
@@ -130,10 +131,11 @@ class VoiceRuntime:
         self._think_keys: dict[str, tuple] = {}
         self._think_results: dict[tuple, dict] = {}
         self._superseded: set[str] = set()
-        self._stopped_gens: set[int] = set()
+        self._stopped_gens: set[int] = set()    # turns WE stopped («Ferma»): Gemini does not know, it must be told
         self._board_task: asyncio.Task | None = None
         self._board_version = ""                  # the lavagna viva the live voice has in front of it
-        self._board_due = False    # turns WE stopped («Ferma»): Gemini does not know, it must be told
+        self._board_due = False
+        self._tool_text: str | None = None         # a tool call Gemini spoke aloud instead of making it
         self._live_results: dict[str, dict] = {}
         self._pensa_error: str | None = None   # a failed «pensa» is not retried within the same turn
         self._babble_checked = False             # one look per turn at what was heard
@@ -693,10 +695,20 @@ class VoiceRuntime:
                 await self._live_go(VoiceState.LISTENING, VoiceState.UNDERSTANDING)
         elif kind == "output":                               # Gemini transcribing its own answer
             await self._live_finalize_input()
+            if self._tool_text is not None:
+                self._tool_text += ev["text"]               # keep reading the call it spoke instead of making
+                return
             if self._live_muted:
                 return
             self._out_text.append(ev["text"])
             said = "".join(self._out_text).strip().lower().lstrip("[(«\"' ")
+            if _SPOKEN_CALL.match(said):
+                # it SAID «pensa(richiesta=…)» instead of calling the tool: silence it, and make the call ourselves
+                self._tool_text = "".join(self._out_text)
+                self._live_muted = True
+                self._out_text.clear()
+                await self._send("voice.interrupted", reason="quiet", during="SPEAKING")
+                return
             if said and len(said) <= 12 and "silenzio".startswith(said[:8]) and len(said) >= 4:
                 self._live_muted = True     # it started reading «[silenzio]» aloud: stop relaying at once
                 self._out_text.clear()
@@ -958,6 +970,29 @@ class VoiceRuntime:
                                  if k in ("approval_id", "tool", "action", "level", "label", "params",
                                           "site", "preview_url", "pr_url")})
 
+    async def _spoken_call(self, request: str, heard: str) -> None:
+        """Gemini spoke the «pensa» call instead of making it: do the call, then hand it the answer to say."""
+        bindings: list[dict] = []
+        try:
+            result = await self._live_think({"richiesta": request}, bindings, heard=heard or request)
+        except Exception:  # noqa: BLE001
+            log.exception("spoken pensa failed")
+            return
+        self._live_muted = False
+        answer = str(result.get("risposta") or result.get("error") or "").strip()
+        if not answer or self._live is None or self._dead:
+            return
+        with suppress(Exception):
+            await self._live.inject(f"[Risultato di pensa per «{request[:200]}»: {answer}\nDillo adesso a Gaetano, "
+                                    "con parole tue, senza aggiungere niente.]", respond=True)
+        for b in bindings:
+            if b["approval_id"] != self.vs.pending_approval_id:
+                self.vs.pending_approval_id = b["approval_id"]
+                await self._set_state(VoiceState.WAITING_FOR_APPROVAL)
+                await self._send("approval.required", **{k: v for k, v in b.items()
+                                 if k in ("approval_id", "tool", "action", "level", "label", "params",
+                                          "site", "preview_url", "pr_url")})
+
     async def _live_think(self, args: dict, bindings: list[dict], *, heard: str | None = None) -> dict:
         """«pensa»: the Claude brain (memory, register, tools, honesty guard) answers; Live only says it."""
         from nodo.brain.loop import Brain, BrainUnavailable
@@ -1079,6 +1114,15 @@ class VoiceRuntime:
         self._babble = self._babble_checked = False
         from nodo.brain.loop import _SILENCE
         text = _VOICE_TAGS.sub("", text).strip()   # «<no speech>{pause}»: the model's markers are not words
+        if self._tool_text is not None:
+            spoken, self._tool_text = self._tool_text, None
+            m = re.search(r"richiesta\s*=\s*[\"«']?(.+?)[\"»']?\s*\)?\s*$", spoken, re.S)
+            request = (m.group(1) if m else spoken.split("(", 1)[-1]).strip(" \"')»«")
+            heard = self._in_text.strip()
+            if request and not self._dead:
+                asyncio.get_running_loop().call_soon(
+                    lambda: asyncio.ensure_future(self._spoken_call(request, heard)))
+            text = ""
         if _SILENCE.fullmatch(text):
             text = ""          # «[silenzio]» is a choice, not words: never keep it as something Maria said
         if vs.conversation_id and (self._in_text.strip() or text):

@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from nodo.api import board, command, entities, files, greeting, knowledge, ledger, night, pulse, voice, voice_ws
 from nodo.api import mind as mind_api
 from nodo.api import team as team_api
+from nodo.api import view as view_api
 from nodo.app import build_container
 from nodo.config import Settings, get_settings
 from nodo.db.session import get_engine, session_scope
@@ -35,6 +36,20 @@ def _remove_sample_data() -> None:
         log.exception("could not remove the sample data")
 
 
+def _ensure_columns() -> None:
+    """A column added to an existing table (create_all does not do that): if the migration did not run, add it here
+    so the register never breaks on an old database."""
+    from sqlalchemy import inspect, text
+    eng = get_engine()
+    try:
+        cols = {c["name"] for c in inspect(eng).get_columns("ledger_entries")}
+        if "paid_amount" not in cols:
+            with eng.begin() as c:
+                c.execute(text("ALTER TABLE ledger_entries ADD COLUMN paid_amount FLOAT"))
+    except Exception:  # noqa: BLE001
+        logging.getLogger("nodo").warning("could not check the ledger columns", exc_info=True)
+
+
 def create_app(settings: Settings | None = None, container=None) -> FastAPI:
     settings = settings or get_settings()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -45,6 +60,7 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
     async def lifespan(app: FastAPI):
         from nodo.db.models import Base
         Base.metadata.create_all(get_engine())  # dev convenience; migrations are the source of truth (alembic)
+        _ensure_columns()
         if settings.seed_demo_data:
             from nodo.seed import seed_demo
             with session_scope() as db:
@@ -102,6 +118,7 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
     app.include_router(board.router)
     app.include_router(mind_api.router)
     app.include_router(team_api.router)
+    app.include_router(view_api.router)
 
     @app.get("/health")
     def health():

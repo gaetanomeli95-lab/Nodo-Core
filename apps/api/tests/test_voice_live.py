@@ -869,3 +869,37 @@ def test_a_slow_first_handshake_is_retried_not_given_up(client, container, monke
         events, _ = _recv_until(ws, "voice.connection")
     assert len(calls) >= 2
     assert not any(e["type"] == "voice.engine" for e in events)
+
+
+def test_a_spoken_pensa_call_is_made_for_real_and_never_said(client, container, monkeypatch):
+    """Gemini sometimes SAYS «pensa(richiesta=…)» instead of calling it (Maria read it aloud, and the request was
+    lost). Now the audio is cut, the call is made, and the answer goes back to the voice to be said."""
+    import time
+
+    from nodo.brain import loop
+    seen = []
+
+    async def fake_run(self, text):
+        seen.append(text)
+        self.text = "Fatto: ho creato l'immagine del gatto."
+        return
+        yield
+
+    monkeypatch.setattr(loop.Brain, "run", fake_run)
+    script = [_sc(input_transcription=SimpleNamespace(text="fammi un'immagine di un gatto")),
+              _sc(output_transcription=SimpleNamespace(text='pensa(richiesta="crea un')),
+              _sc(output_transcription=SimpleNamespace(text=' immagine di un gatto")')),
+              _sc(turn_complete=True)]
+    holder = []
+    container.live_connect = make_connect(script, holder)
+    with client.websocket_connect(WS) as ws:
+        _open_live(ws)
+        events, _ = _recv_until(ws, "voice.turn.done")
+        session = holder[0][2]
+        for _ in range(100):
+            if any("Risultato di pensa" in str(c) for c in session.contents):
+                break
+            time.sleep(0.05)
+    assert seen and "gatto" in seen[0]
+    assert any("Risultato di pensa" in str(c) and "creato l'immagine" in str(c) for c in session.contents)
+    assert not any(e["type"] == "nodo.response" and "pensa(" in e.get("text", "") for e in events)

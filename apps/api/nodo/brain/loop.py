@@ -124,7 +124,7 @@ class Brain:
             lines.append("Già presentate in questa conversazione (approval_id: cosa): "
                          + "; ".join(f"{p['approval_id']}: {p['label']}" for p in shown) + ".")
         try:
-            from nodo.ledger import Ledger, sentence
+            from nodo.ledger import Ledger, due, sentence
             led = Ledger(self.s, self.org, self.settings.ledger_business, today=now.date())
             todo, open_pay = led.pending_work(), led.open_payments()
             if todo:
@@ -133,7 +133,7 @@ class Brain:
             if open_pay:
                 # the whole list, with the total: «quali sono i sospesi?» is answered straight from here, without a
                 # tool round (on the Claude program that round alone is 15 seconds)
-                total = sum((r.amount or 0) for r in open_pay)
+                total = sum(due(r) for r in open_pay)
                 full = len(open_pay) <= 15
                 lines.append(f"Pagamenti sospesi ({len(open_pay)}, in tutto {total:.2f} €"
                              + ("; elenco COMPLETO, rispondi da qui senza strumenti" if full else

@@ -108,10 +108,13 @@ def _sales_for(rows: list[LedgerEntry], owner: str) -> list[str]:
             unpaid = [r for r in done if r.payment == "sospeso"]
             if len(parts) > 1 or any(r.qty > 1 for r in done):
                 line += f": in tutto {_money(total)}"
-            if unpaid and len(unpaid) == len(done):
+            given = sum(r.paid_amount or 0 for r in unpaid)
+            if unpaid and len(unpaid) == len(done) and not given:
                 line += ", che deve ancora pagare" if len(done) > 1 or done[0].qty > 1 else ", ancora da pagare"
             elif unpaid:
-                line += f", di cui {_money(sum(r.amount or 0 for r in unpaid))} ancora da pagare"
+                rest = sum((r.amount or 0) - (r.paid_amount or 0) for r in unpaid)
+                line += f", di cui {_money(rest)} ancora da pagare" + (f" (ha lasciato {_money(given)} di acconto)"
+                                                                       if given else "")
             out.append(line[0].upper() + line[1:] + ".")
         if todo:
             t = _join([_article(r.item, r.qty, r.size) + f" a {_money(r.amount)}" for r in todo])
@@ -154,6 +157,7 @@ def spoken_recap(rows: list[LedgerEntry], settled: list[LedgerEntry], totals: di
         costs = [r for r in day_rows if r.kind == "spesa"]
         notes = [r for r in day_rows if r.kind == "nota"]
         debts = [r for r in day_rows if r.kind == "credito"]
+        cash = [r for r in day_rows if r.kind == "incasso"]
         lines = _sales_for(sales, owner)
         if lines:
             lines[0] = f"{when.capitalize()}: " + lines[0][0].lower() + lines[0][1:]
@@ -171,6 +175,9 @@ def spoken_recap(rows: list[LedgerEntry], settled: list[LedgerEntry], totals: di
             who = r.counterpart or "qualcuno"
             lines.append(f"{who} ti deve {_money(r.amount)}" + (f" per {r.item}" if r.item else "")
                          + (", li ha già dati." if r.payment == "pagato" else "."))
+        if cash:
+            lines.append("Sono arrivati anche " + _join([f"{_money(r.amount)} da {r.counterpart or 'un cliente'}"
+                                                         for r in cash]) + " di acconti e saldi.")
         for r in notes:
             lines.append((r.note or r.item) + ".")
         out.append(" ".join(lines))

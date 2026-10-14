@@ -284,9 +284,36 @@ def parse_ops(text: str) -> list[dict]:
     return [o for o in raw if isinstance(o, dict) and o.get("op") in ("add", "update", "delete")][:20]
 
 
-def apply_ops(db, org: str, user_id: str, ops: list[dict], source_id: str | None = None) -> list[str]:
-    """Applies the archivist's operations. Returns a human summary of what changed."""
+PROTECTED_LAYERS = ("rule", "relationship", "preference")
+
+
+def guard_ok(settings, texts: list[str]) -> bool:
+    """True when no «parola d'ordine» is set, or it was said in one of these lines.
+
+    Maria cannot tell voices apart: his wife pinched her nose, said «sono Gaetano» and Maria was about to change his
+    rules. With the word set (in Accessi, typed, never by voice) rules, people and preferences change by voice only
+    when it is said."""
+    word = re.sub(r"\s+", " ", (getattr(settings, "guard_word", "") or "").strip().lower())
+    if not word:
+        return True
+    return any(word in re.sub(r"\s+", " ", (t or "").lower()) for t in texts)
+
+
+def apply_ops(db, org: str, user_id: str, ops: list[dict], source_id: str | None = None,
+              protect: bool = False) -> list[str]:
+    """Applies the archivist's operations. Returns a human summary of what changed. `protect`: the guard word was
+    not said, so rules, people and preferences stay as they are."""
     current = {f.id[:8]: f for f in active(db, org)}
+    if protect:
+        def touches(o: dict) -> bool:
+            if o["op"] in ("delete", "update"):
+                f = current.get(str(o.get("id", ""))[:8])
+                return f is not None and (f.layer in PROTECTED_LAYERS or bool(_RULE_LIKE.search(f.content or "")))
+            return o.get("kind") in ("rule", "person", "prefer") or bool(_RULE_LIKE.search(str(o.get("text") or "")))
+        skipped = [o for o in ops if touches(o)]
+        if skipped:
+            log.info("memory: %d change(s) to rules/people ignored, guard word not said", len(skipped))
+        ops = [o for o in ops if not touches(o)]
     now = datetime.now(UTC)
     done: list[str] = []
     for o in ops:
@@ -388,7 +415,9 @@ async def archive_turns(container, db, conversation_id: str) -> list[str]:
     except Exception:  # noqa: BLE001 - memory must never break the conversation
         log.warning("archivist failed", exc_info=True)
         return []
-    done = apply_ops(db, core.org, core.user_id or core.org, parse_ops(reply), source_id=conversation_id)
+    protect = conv.channel == "voice" and not guard_ok(s, [m.content or "" for m in new if m.role == "user"])
+    done = apply_ops(db, core.org, core.user_id or core.org, parse_ops(reply), source_id=conversation_id,
+                     protect=protect)
     last = max(_aware(m.created_at) for m in new)
     conv.active_context = {**ctx, "mind_until": last.isoformat()}
     db.commit()
