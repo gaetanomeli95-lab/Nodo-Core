@@ -110,8 +110,9 @@ if ($PrepareOnly) { Say "Tutto pronto."; exit 0 }
 
 # start: an older NODO still running (also one started in background by a coding agent) keeps the port busy
 # and the new version would not start. Stop it first.
-# se NODO gira gia' come app (icona vicino all'orologio), chiudi prima l'app: altrimenti rilancerebbe il server
-Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'nodo\.tray' } |
+# se NODO gira gia' come app (icona vicino all'orologio), chiudi prima l'app: altrimenti rilancerebbe il server.
+# Chiudi anche i server rimasti orfani (chiudere l'app con la forza non chiude il suo server).
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'nodo\.tray|nodo\.main:app' } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 $busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
 if ($busy) {

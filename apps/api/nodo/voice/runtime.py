@@ -45,7 +45,7 @@ class InterruptRequested(Exception):
     """Internal control flow: the current turn generation was superseded by an interrupt."""
 
 
-async def _retry_locked(fn: Callable[[], Any], attempts: int = 8) -> None:
+async def _retry_locked(fn: Callable[[], Any], attempts: int = 14) -> None:
     """Run a short synchronous database write; if SQLite says 'locked', yield to the event loop and retry."""
     for n in range(attempts):
         try:
@@ -833,6 +833,9 @@ class VoiceRuntime:
         await self._live_finalize_input()
         vs.mark("model_done")
         text = "".join(self._out_text).strip()
+        from nodo.brain.loop import _SILENCE
+        if _SILENCE.fullmatch(text):
+            text = ""          # «[silenzio]» is a choice, not words: never keep it as something Maria said
         if vs.conversation_id and (self._in_text.strip() or text):
             rows = [(role, content) for role, content in (("user", self._in_text.strip()), ("nodo", text)) if content]
             conversation_id, request_id = vs.conversation_id, f"live-{vs.id[:8]}-{vs.turn_number}"

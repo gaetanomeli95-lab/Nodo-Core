@@ -19,7 +19,10 @@ class Telemetry:
                                       provider=r.provider, model=r.model, purpose=r.purpose, is_local=r.is_local,
                                       tokens_in=r.tokens_in, tokens_out=r.tokens_out, latency_ms=r.latency_ms,
                                       estimated_cost=r.estimated_cost, status=r.status, error=r.error))
-        self.session.flush()
+        # NO flush here: a flush takes SQLite's write lock, and the router records a failed model and then waits
+        # for the next one (Claude can think for 30 s). The lock stayed held all that time: the voice could not
+        # save the conversation («database is locked») and the whole app froze. The row is written at the
+        # caller's next commit (the brain commits before every model call).
 
     def usage_today(self) -> dict:
         since = datetime.now(UTC) - timedelta(days=1)

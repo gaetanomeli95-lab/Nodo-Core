@@ -176,3 +176,17 @@ async def test_a_failed_pensa_is_not_retried_in_the_same_turn(container, engine,
     assert all("Non richiamare pensa" in r[2]["error"] for r in sent)
     runtime._live = None
     await runtime.close()
+
+
+def test_recording_a_model_call_does_not_take_the_database_lock(db):
+    """The router records a failed model, then waits for the next (Claude: up to a minute). A flush there took
+    SQLite's write lock for that whole minute: the voice could not save («database is locked») and froze."""
+    from nodo.core.telemetry import Telemetry
+    from nodo.db.models import InferenceRun
+    from nodo.providers.router import InferenceRecord
+    db.commit()
+    Telemetry(db).record_inference(InferenceRecord("r", "gemini", "m", "brain", False, 0, 0, 10, 0.0, "failed",
+                                                   "risposta non JSON", None))
+    assert any(isinstance(o, InferenceRun) for o in db.new)           # pending, not written: no lock taken
+    db.commit()
+    assert db.query(InferenceRun).filter_by(error="risposta non JSON").count() == 1
