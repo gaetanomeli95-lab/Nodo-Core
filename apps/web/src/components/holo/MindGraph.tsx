@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { calm } from "../../motion";
+import { calm, canvasDpr, lite } from "../../motion";
 import { get } from "../../api";
 import type { PresenceMode } from "../Presence";
 import { orbitRadii } from "./mindMotion";
@@ -150,7 +150,7 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
     const reduced = calm;
     let raf = 0, last = performance.now(), energy = 0;
     const sparks: { e: number; u: number; v: number; soft: boolean }[] = [];   // thoughts running along the links
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const dpr = canvasDpr();
     const fit = () => { const r = c.getBoundingClientRect(); c.width = Math.max(1, r.width * dpr); c.height = Math.max(1, r.height * dpr); };
     fit();
     const ro = new ResizeObserver(fit); ro.observe(c);
@@ -159,7 +159,7 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
       raf = requestAnimationFrame(draw);
       if (document.hidden) { last = t; return; }
       const dt = Math.min(0.1, (t - last) / 1000);
-      if (dt < 1 / 40) return;                           // ~30 fps: plenty, and gentle on a small PC
+      if (dt < (lite ? 1 / 26 : 1 / 40)) return;                           // ~30 fps: plenty, and gentle on a small PC
       last = t;
       const g = graph.current, { mode: m, sampleLevel: lvl } = live.current;
       const lv = lvl(); energy += (Math.max(lv.input, lv.output) - energy) * 0.3;
@@ -266,7 +266,7 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
         if (p.kind === "hub") r *= 1.5;
         if (p.kind === "core") r = (7 + energy * 16 + Math.sin(t / 500) * 1.2) * dpr;
         r *= 1 + hot * 1.4 + seen * 0.4;
-        if (p.kind === "core" || hot > 0 || p.kind === "hub") {
+        if (p.kind === "core" || hot > 0 || (p.kind === "hub" && !lite)) {
           const gl = ctx.createRadialGradient(x, y, 0, x, y, r * (p.kind === "core" ? 5 : 4));
           const col = hot > 0 ? [255, 140, 110] : c0;
           gl.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},${p.kind === "core" ? 0.55 : 0.18 + hot * 0.45})`);
@@ -282,7 +282,7 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
       // labels as small glass pills; what she is remembering NOW in red
       ctx.font = `${10.5 * dpr}px Inter, system-ui, sans-serif`; ctx.textBaseline = "middle";
       const pick = [...labels.filter((l) => l.hot > 0), ...labels.filter((l) => l.hot === 0 && g.pts[l.i].kind === "hub"),
-        ...labels.filter((l) => l.hot === 0 && g.pts[l.i].kind !== "hub")].slice(0, 26);
+        ...labels.filter((l) => l.hot === 0 && g.pts[l.i].kind !== "hub")].slice(0, lite ? 14 : 26);
       for (const { i, hot } of pick) {
         const p = g.pts[i], [x, y] = pr[i], text = p.label, w = ctx.measureText(text).width + 12 * dpr, h = 17 * dpr;
         const lx = x + 9 * dpr, ly = y - h / 2;

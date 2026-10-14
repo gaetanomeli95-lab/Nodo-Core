@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { calm } from "../../motion";
+import { calm, canvasDpr, lite } from "../../motion";
 
 /** The living background: a slow neural field (nodes that drift and link when close) over a deep starfield.
  *  Very light on the GPU (30 fps, pauses when the window is hidden), static with reduced motion. */
@@ -11,12 +11,12 @@ export function Cosmos() {
     if (!ctx) return;
     const reduced = calm;
     let w = 0, h = 0, raf = 0, last = 0;
-    const stars = Array.from({ length: 160 }, () => ({ x: Math.random(), y: Math.random(), r: Math.random() * 1.1 + 0.2, t: Math.random() * 6 }));
-    const nodes = Array.from({ length: 46 }, () => ({
+    const stars = Array.from({ length: lite ? 90 : 160 }, () => ({ x: Math.random(), y: Math.random(), r: Math.random() * 1.1 + 0.2, t: Math.random() * 6 }));
+    const nodes = Array.from({ length: lite ? 26 : 46 }, () => ({
       x: Math.random(), y: Math.random(), vx: (Math.random() - 0.5) * 0.00012, vy: (Math.random() - 0.5) * 0.00012,
     }));
     const size = () => {
-      const dpr = Math.min(devicePixelRatio || 1, 1.5);
+      const dpr = canvasDpr();
       w = innerWidth; h = innerHeight;
       el.width = Math.round(w * dpr); el.height = Math.round(h * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -25,7 +25,7 @@ export function Cosmos() {
     addEventListener("resize", size);
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
-      if (document.hidden || now - last < 33) return;
+      if (document.hidden || now - last < (lite ? 80 : 33)) return;   // a background: 12 fps is plenty on a small PC
       const dt = Math.min(64, now - (last || now));
       last = now;
       ctx.clearRect(0, 0, w, h);

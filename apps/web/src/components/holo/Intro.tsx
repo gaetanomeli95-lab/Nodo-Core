@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { get } from "../../api";
-import { calm } from "../../motion";
+import { calm, canvasDpr } from "../../motion";
 
 /** The opening, every time NODO opens (eight seconds, a click or any key skips it).
  *  Built like the «Jarvis» boots people film: a black room and a grid; light streams in from every side and is
@@ -150,7 +150,7 @@ export function Intro({ name }: { name: string }) {
     const ctx = el.getContext("2d");
     if (!ctx) { finish(); return; }
     let raf = 0, start = 0, sound: (() => void) | null = null, W = 0, H = 0, grid: HTMLCanvasElement | null = null;
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
+    const dpr = canvasDpr(1.25);
     const resize = () => {
       W = Math.round(innerWidth * dpr); H = Math.round(innerHeight * dpr);
       el.width = W; el.height = H; grid = hexGrid(W, H, 26 * dpr);

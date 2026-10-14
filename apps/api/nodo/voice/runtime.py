@@ -85,6 +85,8 @@ THINK_DECL = {
         "richiesta": {"type": "string", "description": "Le parole di Gaetano, così come le ha dette."}},
         "required": ["richiesta"]},
 }
+BOARD_EVERY_S = 60
+_VOICE_TAGS = re.compile(r"<\s*no[ _]speech\s*>|<[a-z_ ]{1,24}>|\{[a-z_ ]{1,24}\}", re.I)
 _LIVE_OWN_TOOLS = {"decide", "close_screen"}   # yes/no on the proposal shown, close what is on screen
 
 
@@ -127,7 +129,10 @@ class VoiceRuntime:
         self._think_keys: dict[str, tuple] = {}
         self._think_results: dict[tuple, dict] = {}
         self._superseded: set[str] = set()
-        self._stopped_gens: set[int] = set()    # turns WE stopped («Ferma»): Gemini does not know, it must be told
+        self._stopped_gens: set[int] = set()
+        self._board_task: asyncio.Task | None = None
+        self._board_version = ""                  # the lavagna viva the live voice has in front of it
+        self._board_due = False    # turns WE stopped («Ferma»): Gemini does not know, it must be told
         self._live_results: dict[str, dict] = {}
         self._pensa_error: str | None = None   # a failed «pensa» is not retried within the same turn
         self._babble_checked = False             # one look per turn at what was heard
@@ -520,6 +525,7 @@ class VoiceRuntime:
     # ------------------------------------------------------------- Gemini Live engine
     async def _start_live(self, resume_model: str | None = None, resume_handle: str | None = None) -> None:
         """Opens the real-time session: persona + tools identical to the text brain, but audio in/out."""
+        from nodo.brain.board import board_for
         from nodo.brain.loop import Brain
         from nodo.brain.persona import build_live_persona
         from nodo.brain.tools import Toolbox, recent_history
@@ -529,7 +535,12 @@ class VoiceRuntime:
             core = self.c.core(sdb)
             conv = core._conversation(self.vs.conversation_id, "voice")
             self.vs.conversation_id = conv.id
-            system = build_live_persona(self.c.settings, Brain(core, conv, rid, "voice").snapshot(),
+            # the shop, already read: the voice answers register questions from here in a second
+            board = board_for(core.org)
+            board.refresh(sdb, core.org, self.c.settings, self._now())
+            self._board_version = board.version
+            system = build_live_persona(self.c.settings, Brain(core, conv, rid, "voice").snapshot()
+                                        + ("\n\n" + board.text if board.text else ""),
                                         delegated=self.c.settings.live_brain)
             hist = recent_history(sdb, conv.id, 8)
             if hist and not resume_handle:
@@ -553,12 +564,48 @@ class VoiceRuntime:
             await bridge.start(system, decls, self.vs.language, exclude=self._live_failed_models,
                                resume_model=resume_model, resume_handle=resume_handle)
             self._live = bridge
+            if self._board_task is None or self._board_task.done():
+                self._board_task = asyncio.create_task(self._board_loop())
             await self._send("voice.conversation", conversation_id=self.vs.conversation_id)
             await self._send("voice.connection", status="connected", model=bridge.model,
                              resumed=bool(bridge.resume_handle))
         except BaseException:
             await bridge.close()  # also close on cancellation/timeout
             raise
+
+    def _now(self) -> datetime:
+        from nodo.night.briefing import tzinfo
+        return datetime.now(tzinfo(self.c.settings.timezone))
+
+    async def _board_loop(self) -> None:
+        """The car that never stops: the shop is re-read every minute; the voice gets the new page only when
+        something changed, and never in the middle of an answer."""
+        while not self._dead:
+            await asyncio.sleep(BOARD_EVERY_S)
+            with suppress(Exception):
+                await self._board_push()
+
+    async def _board_push(self) -> None:
+        if self._live is None or self._dead:
+            return
+        if self.vs.turn_active or self.vs.state not in (VoiceState.LISTENING, VoiceState.IDLE):
+            self._board_due = True                 # after this answer
+            return
+        self._board_due = False
+        from nodo.brain.board import board_for
+
+        def read() -> tuple[str, str, str]:
+            with self._db() as sdb:
+                org = self.c.core(sdb).org
+                b = board_for(org)
+                b.refresh(sdb, org, self.c.settings, self._now())
+                return b.version, b.text, f"{b.at:%H:%M}" if b.at else ""
+        version, text, at = await asyncio.to_thread(read)
+        if not text or version == self._board_version or self._live is None:
+            return
+        await self._live.inject(f"[Lavagna aggiornata alle {at}: dati nuovi, non rispondere a questo messaggio]\n"
+                                + text, respond=False)
+        self._board_version = version
 
     async def _live_go(self, *path: VoiceState) -> None:
         """Walk the state machine step by step: skips transitions that are not allowed."""
@@ -913,9 +960,14 @@ class VoiceRuntime:
                     await self._think_events(brain, text, bindings)
             except TimeoutError:
                 log.warning("pensa took too long")
+                with suppress(Exception):
+                    sdb.commit()               # keep the record of which models were tried (the diagnosis)
                 return {"error": "Ci sto mettendo troppo: dillo a Gaetano in una frase e chiedigli di riprovare, "
                                  "non inventare la risposta."}
-            except BrainUnavailable:
+            except BrainUnavailable as e:
+                log.warning("pensa: no brain available: %s", str(e)[:300])
+                with suppress(Exception):
+                    sdb.commit()
                 return {"error": "Il cervello non risponde adesso: dillo a Gaetano in una frase, non inventare."}
             except Exception:  # noqa: BLE001 - never let Gemini loop on a raw traceback
                 log.exception("pensa failed")
@@ -925,6 +977,8 @@ class VoiceRuntime:
                 log.info("pensa finished request=%s elapsed_ms=%.0f provider=%s model=%s tools=%s",
                          rid, (time.monotonic() - started) * 1000, brain.provider, brain.model, brain.tools_used)
             sdb.commit()
+        if any(t.startswith("ledger_") for t in brain.tools_used):
+            self._board_due = True                 # she just wrote in the register: the page is old
         if getattr(brain, "silent", False) or not (brain.text or "").strip():
             return self._quiet()
         return {"risposta": brain.text,
@@ -989,6 +1043,7 @@ class VoiceRuntime:
             self._in_text, text = "", ""
         self._babble = self._babble_checked = False
         from nodo.brain.loop import _SILENCE
+        text = _VOICE_TAGS.sub("", text).strip()   # «<no speech>{pause}»: the model's markers are not words
         if _SILENCE.fullmatch(text):
             text = ""          # «[silenzio]» is a choice, not words: never keep it as something Maria said
         if vs.conversation_id and (self._in_text.strip() or text):
@@ -1031,6 +1086,8 @@ class VoiceRuntime:
         self._live_reconnects = 0        # a healthy turn: the next drop deserves a fresh reconnect
         vs.mark("tts_done")
         vs.mark("turn_done")
+        if self._board_due and not self._dead:
+            asyncio.get_running_loop().call_later(0.5, lambda: asyncio.ensure_future(self._board_push()))
         self._persist_metrics(vs.interrupted)
         vs.turn_active = False
         if vs.state == VoiceState.WAITING_FOR_APPROVAL:
@@ -1108,7 +1165,7 @@ class VoiceRuntime:
     async def close(self) -> None:
         self._gen += 1
         self._dead = True
-        for task in [self._live_recovery, self._live_rotation, *self._live_tools.values()]:
+        for task in [self._live_recovery, self._live_rotation, self._board_task, *self._live_tools.values()]:
             if task and task is not asyncio.current_task() and not task.done():
                 task.cancel()
                 with suppress(asyncio.CancelledError):

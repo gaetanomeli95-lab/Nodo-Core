@@ -690,7 +690,7 @@ def test_live_pensa_hands_the_answer_to_the_claude_brain(client, container, monk
     model, config, session = holder[0]
     names = [d["name"] for d in config["tools"][0]["function_declarations"]]
     assert names[0] == "pensa" and "ledger_add" not in names and "decide" in names   # Gemini cannot act alone
-    assert "le orecchie e la bocca di Maria" in config["system_instruction"]
+    assert "LAVAGNA VIVA" in config["system_instruction"] and "pensa" in config["system_instruction"]
     assert seen == ["Quanto mi deve Marcello?"]
     result = session.tool_responses[0]["response"]["result"]
     assert result["risposta"].startswith("Marcello ci deve 30 euro")
@@ -820,3 +820,27 @@ def test_ferma_during_pensa_tells_gemini_so_maria_is_not_left_deaf(client, conta
     assert session.tool_responses, "Gemini never got an answer for the stopped call"
     r = session.tool_responses[0]
     assert r["id"] == "call-9" and "fermata" in r["response"]["result"]["nota"]
+
+
+async def test_lavagna_viva_has_the_shop_ready(container, engine):
+    """The page the live voice reads: today, who has to pay, totals, prices, customers — no brain needed."""
+    from datetime import datetime
+
+    from nodo.brain.board import Board
+    from nodo.db.session import session_scope
+    from nodo.ledger import Ledger
+    from nodo.night.briefing import tzinfo
+    now = datetime.now(tzinfo(container.settings.timezone))
+    with session_scope() as db:
+        org = container.core(db).org
+        led = Ledger(db, org, "CF Materassi", today=now.date())
+        led.add(kind="vendita", item="Arianna H20", size="80x190", qty=2, unit_price=55, counterpart="Softcomfort",
+                payment="sospeso")
+        led.add(kind="vendita", item="Morpheus Memory", size="160x190", qty=1, unit_price=420, counterpart="Rossi")
+        db.flush()
+        b = Board()
+        assert b.refresh(db, org, container.settings, now)
+        text = b.text
+        assert "LAVAGNA VIVA" in text and "SOSPESI (1" in text and "Softcomfort" in text and "110" in text
+        assert "Morpheus Memory" in text and "420" in text and "OGGI:" in text
+        assert not b.refresh(db, org, container.settings, now)      # nothing changed: nothing to send

@@ -50,8 +50,8 @@ def build_providers(s: Settings) -> list[ModelProvider]:
                                               reasoning_effort=s.gemini_reasoning or None))
         if s.gemini_lite_model and s.gemini_lite_model != s.gemini_model:
             providers.append(OpenAICompatProvider("gemini-lite", "https://generativelanguage.googleapis.com/v1beta/openai",
-                                                  s.gemini_api_key, gemini_descriptors(s.gemini_lite_model, "gemini-lite"),
-                                                  reasoning_effort=s.gemini_reasoning or None))
+                                                  s.gemini_api_key, gemini_descriptors(s.gemini_lite_model, "gemini-lite")))
+            # no reasoning_effort: Flash-Lite answered «400 invalid argument» to every call that carried it
     if s.anthropic_api_key:
         providers.append(AnthropicProvider(s.anthropic_api_key, s.anthropic_model, s.anthropic_base_url))
     if s.claude_subscription and s.env not in ("TEST", "DEMO"):

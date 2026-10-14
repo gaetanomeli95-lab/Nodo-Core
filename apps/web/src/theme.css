@@ -256,3 +256,10 @@ html.calm .holo-board .note { animation: none !important; }
 .intro-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .intro-skip { position: absolute; right: 26px; bottom: 18px; font: 11px/1 Consolas, ui-monospace, monospace; letter-spacing: .18em;
   text-transform: uppercase; color: #5f8c95; opacity: .55; pointer-events: none; }
+
+/* ---------------------------------------------------------------- small PC (motion.ts «lite»): same look, cheap to draw */
+html.lite * { backdrop-filter: none !important; }
+html.lite .holo-aurora { filter: none; animation: none; opacity: .45; }
+html.lite .holo-core-glow { filter: none; opacity: .5; }
+html.lite .holo .tabs { background: rgba(6,12,16,.92) !important; }
+html.lite .holo :is(.context-sheet, .holo-board, section.pulse) { background: rgba(8,16,22,.94) !important; }
