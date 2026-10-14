@@ -10,7 +10,7 @@
     4. crea apps\api\.env da .env.example  5. aggiorna il database  6. costruisce il pannello web
   Poi avvia NODO. Il turno di notte parte da solo finche' questa finestra resta aperta.
 #>
-param([switch]$Demo, [switch]$NoBrowser, [int]$Port = 8000, [switch]$SkipBuild, [switch]$PrepareOnly, [switch]$Tray)
+param([switch]$Demo, [switch]$NoBrowser, [int]$Port = 8000, [switch]$SkipBuild, [switch]$PrepareOnly, [switch]$Tray, [switch]$Console)
 
 $ErrorActionPreference = "Continue"  # native tools write warnings on stderr: check $LASTEXITCODE instead
 $Root = Split-Path -Parent $PSScriptRoot
@@ -130,13 +130,20 @@ if ($busy) {
   }
 }
 $url = "http://127.0.0.1:$Port"
+# NODO runs as an app (icon by the clock, server supervised in the background, log in apps\api\nodo.log) whenever
+# the icon library is installed: no black window to keep open, nothing that dies if that window is closed.
+# -Console keeps the old way (server in this window) for debugging.
+if (-not $Console -and -not $Demo -and -not $Tray) {
+  & $Py -c "import pystray" 2>$null
+  if ($LASTEXITCODE -eq 0) { $Tray = $true }
+}
 if ($Tray) {
   # app vera: nessuna finestra nera, icona vicino all'orologio (verde = acceso), riparte da sola se cade
   $pyw = Join-Path $Venv "Scripts\pythonw.exe"
   $trayArgs = @("-m", "nodo.tray", "--port", "$Port")
   if ($NoBrowser) { $trayArgs += "--no-browser" }
   Start-Process -FilePath $pyw -ArgumentList $trayArgs -WorkingDirectory $Api
-  Say "NODO e' acceso: cerca l'icona N vicino all'orologio (da li' puoi aprirlo o spegnerlo)."
+  Say "NODO si sta accendendo: tra pochi secondi si apre da solo. L'icona N vicino all'orologio lo apre o lo spegne."
   exit 0
 }
 Say "NODO e' acceso su $url  (chiudi questa finestra per spegnerlo)"
@@ -165,8 +172,8 @@ try { $fs = [IO.File]::Open($log, 'Append', 'Write', 'ReadWrite'); $fs.Close() }
 catch { $log = Join-Path $Api ("nodo-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log") }  # nodo.log locked by another program
 # se NODO si ferma da solo (errore imprevisto) riparte dopo 10 secondi: di notte nessuno può riavviarlo
 while ($true) {
-  # UTF-8 log (Tee-Object wrote UTF-16 into the same file the app writes in UTF-8: an unreadable mix)
-  & $Py -m uvicorn nodo.main:app --host 127.0.0.1 --port $Port 2>&1 | ForEach-Object { $line = "$_"; Write-Host $line; [IO.File]::AppendAllText($log, $line + "`r`n") }
+  # plain file redirection by cmd: UTF-8 as Python writes it, and nothing between NODO and the file that can stall
+  & cmd /c "`"$Py`" -m uvicorn nodo.main:app --host 127.0.0.1 --port $Port >> `"$log`" 2>&1"
   Warn "NODO si e' fermato (codice $LASTEXITCODE). Riparto tra 10 secondi... (chiudi la finestra per spegnerlo)"
   Start-Sleep -Seconds 10
 }
