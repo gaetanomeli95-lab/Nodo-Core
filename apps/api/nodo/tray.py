@@ -78,6 +78,9 @@ class Supervisor:
     def _loop(self) -> None:
         while not self._stop.is_set():
             self._proc = self._spawn()
+            if self._stop.is_set():              # stop() can land while we were spawning: kill what we just made
+                self._proc.terminate()
+                break
             while self._proc.poll() is None and not self._stop.is_set():
                 self._stop.wait(0.5)
             if self._stop.is_set():
@@ -99,6 +102,9 @@ class Supervisor:
                 p.kill()
         if self._thread is not None:
             self._thread.join(timeout=3)
+        p = self._proc                           # the loop may have spawned once more while we were killing
+        if p is not None and p.poll() is None:
+            p.kill()
 
     def restart(self) -> None:
         p = self._proc

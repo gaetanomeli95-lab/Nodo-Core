@@ -187,7 +187,10 @@ class EdgeTTS:
 
     async def synthesize(self, text: str, voice: str | None = None, language: str = "it") -> AudioResult:
         import edge_tts
-        name = voice or self._VOICES.get(language.split("-")[0].lower(), "en-US-AriaNeural")
+        # `voice` arrives from shared settings and may be a Gemini/OpenAI name (Kore, alloy…):
+        # only Microsoft-style names (it-IT-ElsaNeural) are valid here, else fall back per language.
+        name = voice if voice and re.fullmatch(r"[a-z]{2}-[A-Z]{2}-\w+", voice) else None
+        name = name or self._VOICES.get(language.split("-")[0].lower(), "en-US-AriaNeural")
         buf = bytearray()
         async for part in edge_tts.Communicate(text[:3000], name).stream():
             if part["type"] == "audio":

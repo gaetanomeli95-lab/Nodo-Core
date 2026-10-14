@@ -106,7 +106,12 @@ class OpenAICompatProvider:
             raise ProviderError(f"{self.name} transport error: {e}") from e
         if r.status_code >= 400:
             raise ProviderError(f"{self.name} HTTP {r.status_code}: {r.text[:300]}")
-        data = r.json()
+        try:
+            data = r.json()
+        except json.JSONDecodeError as e:
+            # a 200 with an empty/HTML body (rate-limit pages, proxies) is a provider failure:
+            # make it a ProviderError so the router falls back to the next candidate.
+            raise ProviderError(f"{self.name}: risposta non JSON ({r.text[:120]!r})") from e
         msg = ((data.get("choices") or [{}])[0].get("message") or {})
         calls = []
         for i, c in enumerate(msg.get("tool_calls") or []):

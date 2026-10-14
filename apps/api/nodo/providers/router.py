@@ -211,7 +211,7 @@ class ModelRouter:
                     yield ch
                 self._record(request_id, agent_run_id, d, req, tin, tout, t0, "ok")
                 return
-            except ProviderError as e:
+            except Exception as e:  # noqa: BLE001 - ANY provider failure (bad JSON, bug) -> next model
                 self._record(request_id, agent_run_id, d, req, tin, tout, t0, "failed", str(e))
                 self._maybe_pause(d.provider, str(e))
                 errors.append(f"{d.id}: {e}")
@@ -246,7 +246,7 @@ class ModelRouter:
                                         f"{int(FAST_ATTEMPT_TIMEOUT)}s") from e
                 self._record(request_id, None, d, req, turn.tokens_in, turn.tokens_out, t0, "ok")
                 return turn
-            except ProviderError as e:
+            except Exception as e:  # noqa: BLE001 - ANY provider failure (bad JSON, bug) -> next model
                 self._record(request_id, None, d, req, 0, 0, t0, "failed", str(e))
                 self._maybe_pause(d.provider, str(e))
                 errors.append(f"{d.id}: {e}")

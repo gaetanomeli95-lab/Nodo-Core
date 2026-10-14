@@ -68,6 +68,27 @@ class ClaudeCodeProvider:
         self._dropped: set[str] = set()
         self._cwd = Path(tempfile.gettempdir()) / "nodo-claude-cwd"
         self._cwd.mkdir(parents=True, exist_ok=True)
+        # leftovers of earlier runs (crash, Windows delete-lock). NEVER touch fresh files: the temp dir is
+        # shared by every provider instance, so a peer could be writing its prompt file right now.
+        for stale in self._cwd.glob("nodo-sp-*.txt"):
+            try:
+                if time.time() - stale.stat().st_mtime > 600:
+                    stale.unlink()
+            except OSError:
+                pass
+
+    @staticmethod
+    async def _remove(path: str) -> None:
+        """Windows keeps a just-finished child's file handles for a beat: deleting right away can raise
+        PermissionError and leak the system prompt. Retry briefly instead of leaving nodo-sp-*.txt behind."""
+        for _ in range(100):
+            try:
+                os.unlink(path)
+                return
+            except FileNotFoundError:
+                return
+            except OSError:
+                await asyncio.sleep(0.05)
 
     def models(self) -> list[ModelDescriptor]:
         # covered by the subscription: no per-call cost for NODO's meter; Claude-grade reasoning and coding
@@ -127,10 +148,7 @@ class ClaudeCodeProvider:
                     continue
                 break
         finally:
-            try:
-                os.unlink(sp_path)
-            except OSError:
-                pass
+            await self._remove(sp_path)
         text = proc.stdout.decode("utf-8", "replace").strip()
         try:
             data = json.loads(text[text.index("{"):]) if text else {}
@@ -173,10 +191,7 @@ class ClaudeCodeProvider:
                     continue
                 break
         finally:
-            try:
-                os.unlink(sp_path)
-            except OSError:
-                pass
+            await self._remove(sp_path)
         text = proc.stdout.decode("utf-8", "replace").strip()
         try:
             data = json.loads(text[text.index("{"):]) if text else {}

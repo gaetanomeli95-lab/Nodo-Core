@@ -122,6 +122,7 @@ class VoiceRuntime:
         self._live_tools: dict[str, asyncio.Task] = {}
         self._live_tool_lock = asyncio.Lock()
         self._live_results: dict[str, dict] = {}
+        self._pensa_error: str | None = None   # a failed «pensa» is not retried within the same turn
         self._live_user_emitted = False
 
     # ------------------------------------------------------------- inbound dispatch
@@ -604,6 +605,7 @@ class VoiceRuntime:
             self._live_user_emitted = False
             self._out_text.clear()
             self._live_muted = False
+            self._pensa_error = None
             if self.vs.state != VoiceState.CLOSED:
                 try:
                     vs.interrupt()
@@ -723,7 +725,16 @@ class VoiceRuntime:
                 if c["id"] and c["id"] in self._live_results:
                     result = self._live_results[c["id"]]
                 elif c["name"] == THINK_DECL["name"]:
-                    result = await self._live_think(c["args"], bindings)
+                    if self._pensa_error:
+                        result = {"error": self._pensa_error}
+                    else:
+                        result = await self._live_think(c["args"], bindings)
+                        if "error" in result:
+                            # A failed brain must not be retried inside the same turn: Gemini would
+                            # otherwise re-call pensa forever. Tell it to answer honestly instead.
+                            self._pensa_error = (str(result["error"]) +
+                                                 " Non richiamare pensa in questo turno.")
+                            result = {"error": self._pensa_error}
                 elif c["name"] == "decide" and c["args"].get("approval_id") != self.vs.pending_approval_id:
                     result = {"error": "La decisione deve essere quella attualmente mostrata in questa sessione."}
                 elif c["name"] == "decide" and not (
@@ -749,7 +760,13 @@ class VoiceRuntime:
                                          status=result.get("decision"))
             except Exception as e:
                 log.exception("live tool %s failed", c["name"])
-                result = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+                if c["name"] == THINK_DECL["name"]:
+                    self._pensa_error = ("Il cervello principale non risponde adesso. Dillo a Gaetano in una "
+                                         "frase onesta, senza inventare dati, e NON richiamare pensa in "
+                                         "questo turno.")
+                    result = {"error": self._pensa_error}
+                else:
+                    result = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
             responses.append((c["id"], c["name"], result))
             await self._send("nodo.step", step=f"tool:{c['name']}", status="done",
                              ok="error" not in result)
@@ -796,6 +813,10 @@ class VoiceRuntime:
                         bindings.append(body)
             except BrainUnavailable:
                 return {"error": "Il cervello non risponde adesso: dillo a Gaetano in una frase, non inventare."}
+            except Exception:  # noqa: BLE001 - never let Gemini loop on a raw traceback
+                log.exception("pensa failed")
+                return {"error": "Il cervello ha avuto un problema tecnico: dillo a Gaetano in una frase, "
+                                 "non inventare la risposta."}
             sdb.commit()
         if getattr(brain, "silent", False):
             return {"silenzio": True}
@@ -847,6 +868,7 @@ class VoiceRuntime:
         self._live_user_emitted = False
         self._out_text.clear()
         self._live_muted = False
+        self._pensa_error = None
         self._live_reconnects = 0        # a healthy turn: the next drop deserves a fresh reconnect
         vs.mark("tts_done")
         vs.mark("turn_done")

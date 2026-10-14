@@ -111,3 +111,68 @@ async def test_voice_selftest_catches_a_broken_decoder(monkeypatch):
     Whisper.broken = True
     ok, msg = await selftest.run(".local-voice", "base", "it_IT-paola-medium")
     assert not ok and "PyAV" in msg
+
+
+async def test_an_empty_200_from_a_provider_falls_back_instead_of_breaking_the_brain():
+    """The «pensa» loop Devin found: a 200 with an empty body raised JSONDecodeError, not ProviderError, so the
+    router never tried the next model. Now the provider reports it and ANY provider exception falls back."""
+    import httpx
+
+    from nodo.config import NodoMode
+    from nodo.providers.base import FunctionSpec, ModelDescriptor, ProviderError, ToolTurn
+    from nodo.providers.openai_compat import OpenAICompatProvider, gemini_descriptors
+    from nodo.providers.router import ModelRouter, RouteRequest
+
+    p = OpenAICompatProvider("gemini", "https://example.test/v1", "k", gemini_descriptors("gemini-3.5-flash"),
+                             transport=httpx.MockTransport(lambda r: httpx.Response(200, text="")))
+    spec = [FunctionSpec("f", "d", {"type": "object", "properties": {}})]
+    with pytest.raises(ProviderError):
+        await p.complete_tools("gemini-3.5-flash", [{"role": "user", "content": "ciao"}], spec)
+
+    class Buggy:
+        name = "buggy"
+        def models(self):
+            return [ModelDescriptor("buggy", "m", reasoning=5, coding=5, tier="free", tool_calling=True)]
+        async def available(self):
+            return True
+        async def complete_tools(self, *a, **k):
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    class Good(Buggy):
+        name = "good"
+        def models(self):
+            return [ModelDescriptor("good", "m", reasoning=3, coding=3, tier="free", tool_calling=True)]
+        async def complete_tools(self, *a, **k):
+            return ToolTurn(text="Marcello ci deve 30 euro.", tool_calls=[])
+
+    r = ModelRouter([Buggy(), Good()], NodoMode.FREE)
+    turn = await r.complete_tools([{"role": "user", "content": "x"}], spec, RouteRequest(purpose="brain"))
+    assert turn.text.startswith("Marcello")
+
+
+async def test_a_failed_pensa_is_not_retried_in_the_same_turn(container, engine, monkeypatch):
+    from nodo.brain import loop
+    from nodo.db.session import session_scope
+    from nodo.voice.runtime import VoiceRuntime
+
+    runs = []
+    async def broken(self, text):
+        runs.append(text)
+        raise RuntimeError("boom")
+        yield
+    async def emit(event):
+        pass
+    monkeypatch.setattr(loop.Brain, "run", broken)
+    runtime = VoiceRuntime(container.voice_sessions.create(None, "it"), container, emit, session_scope)
+    runtime._in_text = "quanto ho incassato oggi?"
+    sent = []
+    class Bridge:
+        async def tool_response(self, responses):
+            sent.extend(responses)
+    runtime._live = Bridge()
+    for i in range(3):                     # Gemini keeps asking: the brain runs ONCE
+        await runtime._live_tool_calls([{"id": f"c{i}", "name": "pensa", "args": {"richiesta": "incasso"}}])
+    assert len(runs) == 1
+    assert all("Non richiamare pensa" in r[2]["error"] for r in sent)
+    runtime._live = None
+    await runtime.close()
