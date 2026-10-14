@@ -6,6 +6,7 @@ import { Pulse } from "./Pulse";
 import { Viewer, type ViewItem } from "./Viewer";
 import { Board } from "./holo/Board";
 import { INTRO_DONE_EVENT, introDone } from "./holo/Intro";
+import { HoloTable, type HoloSurface } from "./holo/HoloTable";
 import { MindGraph } from "./holo/MindGraph";
 import { Eyes } from "./holo/Eyes";
 import { Palette, type Action } from "./holo/Palette";
@@ -13,7 +14,7 @@ import { Subtitles } from "./holo/Subtitles";
 
 type Turn = { who: "user" | "nodo"; text: string; done?: boolean };
 type Decision = { id: string; label: string; site?: string; preview?: string; pr?: string; sending?: boolean };
-type Surface = { view: string; rows: Record<string, unknown>[]; summary: string };
+type Surface = HoloSurface;
 const DOING: Record<string, string> = {
   night_report: "Rileggo il turno di notte", sites_status: "Guardo i tuoi siti", check_sites: "Controllo i siti",
   pensa: "Ci penso", pending_decisions: "Raccolgo le decisioni", decide: "Eseguo la tua decisione", request_site_change: "Preparo la modifica",
@@ -127,7 +128,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       const current = Array.from(activeTools.current).at(-1);
       setActivity(current ? DOING[current] || "Ci lavoro" : null);
     }
-    if (e.type === "ui.present") setSurface({ view: String(e.view), rows: e.rows as Surface["rows"] || [], summary: String(e.summary || "") });
+    if (e.type === "ui.present") setSurface({ view: String(e.view), rows: e.rows as Surface["rows"] || [], summary: String(e.summary || ""), totals: e.totals as Surface["totals"] });
     if (e.type === "approval.required") setDecision({ id: String(e.approval_id), label: String(e.label || "Conferma questa azione"),
       site: e.site as string, preview: safeUrl(e.preview_url as string), pr: safeUrl(e.pr_url as string) });
     if (e.type === "approval.resolved") { setDecision(null); onRequestDone(); }
@@ -219,7 +220,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         }
         if (e.type === "step") setActivity(e.status === "running" ? DOING[String(e.step).replace("tool:", "")] || "Ci lavoro" : null);
         if (e.type === "error") setError(String(e.message));
-        if (e.type === "ui.present") setSurface({ view: String(e.view), rows: (e.rows as Surface["rows"]) || [], summary: String(e.summary || "") });
+        if (e.type === "ui.present") setSurface({ view: String(e.view), rows: (e.rows as Surface["rows"]) || [], summary: String(e.summary || ""), totals: e.totals as Surface["totals"] });
       });
       onRequestDone();
     } catch (e) { setError((e as Error).message); }
@@ -310,7 +311,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     <Eyes source={eyes} onClose={() => setEyes(null)} onShot={(f, q) => void handOver(f, q || "Guarda e dimmi cosa vedi.")} />
     <Palette actions={actions} onAsk={(t) => void send(t)} />
     {!diary && <Board revision={boardRev} />}
-    <div className="voice-stage">
+    <div className={`voice-stage${surface && !decision ? " has-holo" : ""}`}>
       <MindGraph mode={mode} sampleLevel={voice.sampleLevel} heard={voice.partial || lastUser} said={lastNodo}
         activity={activity} revision={turns.length + boardRev} />
       <div className="stage-topline"><span className="eyebrow">IL TUO SPAZIO DI LAVORO</span>
@@ -329,16 +330,9 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
           {decision.pr && <a href={decision.pr} target="_blank" rel="noreferrer">Guarda le modifiche ↗</a>}
           <button disabled={decision.sending || !voice.connected} onClick={() => answer("reject")}>Lascia stare</button>
           <button className="primary" disabled={decision.sending || !voice.connected} onClick={() => answer("approve")}>{decision.sending ? "Conferma in corso…" : "Conferma"}</button></div>
-      </section> : surface && <section className="context-sheet" aria-label="Risultato del lavoro">
-        <div className="sheet-heading"><span className="sheet-kicker">SUL TAVOLO</span><button aria-label="Riponi scheda" onClick={() => setSurface(null)}>×</button></div>
-        <h3>{TITLES[surface.view] || "Il punto della situazione"}</h3>
-        {surface.summary && <p>{surface.summary}</p>}
-        <ul>{surface.rows.map((row, i) => <li key={i}><span>{String(row.title || row.name || "")}</span>
-          {row.download && row.url ? <button className="primary" onClick={() => downloadFile(String(row.url)).catch((e) => setError((e as Error).message))}>Scarica ↓</button>
-            : row.url ? <a href={String(row.url)} target="_blank" rel="noreferrer">Apri ↗</a>
-                   : <small>{row.amount != null ? `${row.amount} €` : STATUS[String(row.status)] || String(row.project || row.day || "")}</small>}</li>)}</ul>
-        {!surface.summary && !surface.rows.length && <p>Non ci sono elementi da mostrare.</p>}
-      </section>}
+      </section> : surface && <HoloTable key={`${surface.view}-${surface.rows.length}-${surface.summary.length}`} surface={surface}
+        title={TITLES[surface.view] || "Il punto della situazione"} onClose={() => setSurface(null)}
+        onDownload={(url) => downloadFile(url).catch((e) => setError((e as Error).message))} />}
       {!decision && !surface && mode === "rest" && <Pulse revision={pulseRevision} disabled={busy || !voice.connected}
         onInvestigate={(prompt) => { void send(prompt); }} />}
       {(voiceConfig?.stt.ready === false || voiceConfig?.tts.ready === false) && (
