@@ -28,3 +28,28 @@ def test_mind_graph_shows_people_rules_customers_and_links(client, db):
     assert "c:softcomfort" in by and tuple(sorted(("c:softcomfort", "i:materasso arianna h20"))) in edges
     assert "marcello" in by["p:marcello-lo-monaco"]["words"]
     assert g["stats"]["nodi"] == len(g["nodes"]) and g["stats"]["collegamenti"] == len(g["edges"])
+
+
+async def test_chatgpt_export_on_the_desktop_is_found_and_learned(container, db, tmp_path, monkeypatch):
+    import json
+    import zipfile
+
+    from nodo.app import ensure_workspace
+    from nodo.knowledge import distill, finder
+    org = ensure_workspace(db)[0].id
+    desk = tmp_path / "Desktop"
+    desk.mkdir()
+    conv = [{"title": "Prezzi materassi", "create_time": 1760000000, "mapping": {
+        "a": {"message": {"author": {"role": "user"}, "content": {"content_type": "text", "parts": ["Quanto costa un Arianna H20?"]}, "create_time": 1760000000}, "parent": None, "children": ["b"]},
+        "b": {"message": {"author": {"role": "assistant"}, "content": {"content_type": "text", "parts": ["Dipende dalla misura."]}, "create_time": 1760000010}, "parent": "a", "children": []}}}]
+    with zipfile.ZipFile(desk / "abc123-2026-10-12-11-17-50.zip", "w") as z:
+        z.writestr("conversations.json", json.dumps(conv))
+    with zipfile.ZipFile(desk / "foto.zip", "w") as z:
+        z.writestr("img.txt", "x")                                   # not an export: ignored
+    started = []
+    monkeypatch.setattr(distill, "start", lambda c, sid: started.append(sid))
+    assert [p.name for p in finder.find_exports([desk])] == ["abc123-2026-10-12-11-17-50.zip"]
+    res = await finder.import_found(container, db, org, [desk])
+    assert res["imported"][0]["conversations"] == 1 and started
+    again = await finder.import_found(container, db, org, [desk])
+    assert again["imported"] == [] and "conosco già" in again["message"]

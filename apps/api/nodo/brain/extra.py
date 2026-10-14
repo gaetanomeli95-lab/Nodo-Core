@@ -177,6 +177,10 @@ class ExtraTools(LedgerTools):
                                           "leggere le conversazioni di prima», «cosa ti avevo detto di…».",
                   _obj({"query": _STR, "days": {"type": "integer", "description": "quanti giorni indietro (default 60)"}},
                        ["query"]), self.search_conversations)
+        self._add("learn_old_chats", "Cerca sul Desktop e in Download del PC l'export delle chat di ChatGPT/Claude e "
+                                     "le IMPARA (importa; poi ne ricava i ricordi piano piano). Per «impara le mie chat "
+                                     "di ChatGPT», «leggi le conversazioni che ho esportato».",
+                  _obj({}), self.learn_old_chats)
         self._add("save_to_desktop", "Mette sul DESKTOP del PC di Gaetano una copia di un file creato da NODO (per nome, "
                                      "titolo o «l'ultimo»). Usalo quando chiede «mettimelo sul desktop», «salvalo sul "
                                      "computer». Dopo dì il nome del file.",
@@ -619,6 +623,12 @@ class ExtraTools(LedgerTools):
         if not hits:
             return {"results": [], "note": f"nelle vostre conversazioni non trovo «{query}»: prova con altre parole"}
         return {"results": hits, "note": "frasi vere delle vostre conversazioni, con data e ora"}
+
+    async def learn_old_chats(self) -> dict:
+        from nodo.knowledge.finder import import_found
+        if self.c is None:
+            return {"error": "non posso leggere i file del PC da qui"}
+        return await import_found(self.c, self.s, self.org)
 
     def _pick_file(self, name: str):
         if self.c is None or self.c.files is None:

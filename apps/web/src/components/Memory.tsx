@@ -102,6 +102,12 @@ export function MemoryView() {
     catch (e) { setErr((e as Error).message); }
     finally { setUploading(false); }
   };
+  const onAuto = async () => {
+    setUploading(true); setMsg(null); setErr(null);
+    try { setMsg((await act("/api/v1/knowledge/import-auto", {}) as { message?: string }).message || "Fatto."); load(); }
+    catch (e) { setErr((e as Error).message); }
+    finally { setUploading(false); }
+  };
   const search = async () => {
     if (!q.trim()) { setHits(null); return; }
     try { setHits((await get<{ results: KnowledgeHit[] }>(`/api/v1/knowledge/search?q=${encodeURIComponent(q.trim())}`)).results); }
@@ -137,6 +143,10 @@ export function MemoryView() {
           <input type="text" value={path} placeholder="oppure incolla il percorso del file sul disco (per export molto grandi)"
                  onChange={(e) => setPath(e.target.value)} onKeyDown={(e) => e.key === "Enter" && onPath()} disabled={uploading} />
           <button onClick={onPath} disabled={!path.trim() || uploading}>{uploading ? "Importo…" : "Importa"}</button>
+        </div>
+        <div className="keyrow" style={{ marginTop: 8 }}>
+          <button onClick={onAuto} disabled={uploading}>{uploading ? "Cerco…" : "Trova e impara le chat che hai sul PC"}</button>
+          <small className="muted">Cerco da solo l'export di ChatGPT o Claude sul Desktop e in Download.</small>
         </div>
         {msg && <p className="note">{msg}</p>}
       </section>

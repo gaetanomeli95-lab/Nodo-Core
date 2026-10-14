@@ -70,7 +70,11 @@ async def run(c, source_id: str) -> dict:
         docs = _pending_documents(db, source_id, int(getattr(settings, "knowledge_distill_max", 300)))
     status, note = "done", None
     try:
-        for doc_id in docs:
+        pause = 0.0 if settings.env == "TEST" else float(getattr(settings, "knowledge_distill_pause", 8.0))
+        for n, doc_id in enumerate(docs):
+            if n and pause:
+                # slow and steady: hundreds of chats must not eat the free quota Maria needs to talk to Gaetano
+                await asyncio.sleep(pause)
             with session_scope() as db:
                 src = db.get(KnowledgeSource, source_id)
                 if src is None or src.status == "stopped":
@@ -117,7 +121,8 @@ class NoModel(RuntimeError):
 async def extract(core, doc: Document, body: str, *, max_facts: int = MAX_FACTS) -> list[dict]:
     when = (doc.summary or "").split("] ", 1)[-1].split(" — ", 1)[0] if doc.summary else "data sconosciuta"
     prompt = PROMPT.format(max_facts=max_facts, title=doc.title, when=when, body=body)
-    req = RouteRequest(purpose="memory", sensitivity=Sensitivity.INTERNAL, min_reasoning=2)
+    req = RouteRequest(purpose="memory", sensitivity=Sensitivity.INTERNAL, min_reasoning=2,
+                       prefer_fast=True)   # an API model: hundreds of chats must not run Claude on the small PC
     text = ""
     async for ch in core.router.stream([ChatMessage("user", prompt)], req, request_id=f"knowledge-{doc.id[:8]}",
                                        temperature=0.1, max_tokens=900):

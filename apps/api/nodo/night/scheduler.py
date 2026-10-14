@@ -193,6 +193,20 @@ class NightScheduler:
                 self._last_diary = yesterday
                 with session_scope() as db:
                     await mind.write_diary(self.c, db, yesterday)
+        if getattr(self, "_last_export_look", None) is None and self.settings.env != "TEST" \
+                and getattr(self.settings, "auto_import_exports", True):
+            # once per start: a ChatGPT/Claude export left on the Desktop or in Downloads is learned by itself
+            self._last_export_look = now
+            try:
+                from nodo.app import ensure_workspace
+                from nodo.knowledge.finder import import_found, not_imported
+                with session_scope() as db:
+                    org = ensure_workspace(db)[0].id
+                    if not_imported(db, org):
+                        res = await import_found(self.c, db, org)
+                        log.info("auto import of chat exports: %s", res.get("message"))
+            except Exception:  # noqa: BLE001 - never break the background loop
+                log.warning("auto import of chat exports failed", exc_info=True)
         today = now.astimezone(self.tz).date()
         local = now.astimezone(self.tz)
         if self.settings.evening_recap and getattr(self, "_last_evening", None) != today \

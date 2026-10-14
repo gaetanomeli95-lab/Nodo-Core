@@ -82,6 +82,13 @@ async def import_path(body: PathIn, db: Session = Depends(get_db), org: str = De
     return _ingest(p, p.name, body.distill, db, org, c)   # opened in place: exports can be several GB
 
 
+@router.post("/import-auto")
+async def import_auto(db: Session = Depends(get_db), org: str = Depends(org_id), c: Container = Depends(container)):
+    """Finds the ChatGPT/Claude export on the Desktop or in Downloads and imports it: no path to type."""
+    from nodo.knowledge.finder import import_found
+    return await import_found(c, db, org)
+
+
 @router.get("/sources")
 def sources(db: Session = Depends(get_db), org: str = Depends(org_id)):
     return [_source_out(s) for s in KnowledgeService(db, org).sources()]
