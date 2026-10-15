@@ -91,8 +91,16 @@ async def _run_tool(db: Session, c: Container, a: Approval, action: str | None =
 async def _execute(db: Session, c: Container, a: Approval) -> dict:
     fix = db.scalars(select(FixProposal).where(FixProposal.approval_id == a.id)).first()
     act = db.scalars(select(NightAction).where(NightAction.approval_id == a.id)).first()
-    site = db.get(Site, fix.site_id if fix else act.site_id) if (fix or act) else None
+    site_id = (fix.site_id if fix else act.site_id) if (fix or act) else None
+    site = db.get(Site, site_id) if site_id else None          # NODO's own night actions have no site
     key = f"{a.tool_name}.{a.action}"
+    if key == "nodo.self_patch":                     # NODO's own code, improved during the night
+        from nodo.night.selfcare import apply_patch
+        out = await apply_patch(dict(a.payload or {}))
+        if act:
+            act.status = "done" if out.get("ok") else "failed"
+            act.summary = out["message"]
+        return out
     if key == "github.merge_pr":
         out = await _run_tool(db, c, a)
         if not out.get("merged"):
@@ -141,6 +149,11 @@ async def _execute(db: Session, c: Container, a: Approval) -> dict:
 async def _reject(db: Session, c: Container, a: Approval) -> dict:
     fix = db.scalars(select(FixProposal).where(FixProposal.approval_id == a.id)).first()
     act = db.scalars(select(NightAction).where(NightAction.approval_id == a.id)).first()
+    if a.tool_name == "nodo" and a.action == "self_patch":
+        from nodo.night.selfcare import drop_patch
+        if act:
+            act.status = "skipped"
+        return await drop_patch(dict(a.payload or {}))
     if fix:
         fix.status = "rejected"
         site = db.get(Site, fix.site_id)

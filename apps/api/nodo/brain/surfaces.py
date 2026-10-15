@@ -1,7 +1,7 @@
 """What to put «on the table» (the card in the middle of the panel) after a tool ran: same for text and voice."""
 from __future__ import annotations
 
-FILE_TOOLS = ("create_file", "generate_image", "create_document")
+FILE_TOOLS = ("create_file", "generate_image", "create_document", "ledger_pdf", "show_transcript")
 
 
 def surface_for(name: str, result: dict) -> dict | None:

@@ -167,7 +167,12 @@ _IT_SHORT = {"si", "sì", "no", "ok", "okay", "va", "bene", "ciao", "che", "qué
              "mhm", "uhm", "certo", "chi", "come", "dove", "quando", "quanto", "capito", "vero", "brava", "bravo",
              "senti", "scusa", "prego", "fatto", "avanti", "poi", "e", "ma", "io", "tu"}
 _FOREIGN = {"de", "y", "la", "el", "los", "las", "es", "que", "ich", "und", "schon", "dir", "auch", "einen", "the",
-            "and", "you", "of", "to", "is", "it", "ni", "tres", "horas", "baño", "vale", "okey", "bam", "h&m", "nenno"}
+            "and", "you", "of", "to", "is", "it", "ni", "tres", "horas", "baño", "vale", "okey", "bam", "h&m", "nenno",
+            # Spanish and Portuguese heard from customers, the TV or the microphone guessing (15/10)
+            "saluda", "bicha", "este", "siete", "hola", "gracias", "pero", "bueno", "mira", "oye", "también", "usted",
+            "eso", "esto", "não", "você", "muito", "está", "isso", "aqui", "obrigado", "obrigada", "então", "pra",
+            "tudo", "fala", "agora", "hoje", "what", "this", "that", "yes", "my", "your"}
+_FOREIGN_MARK = re.compile(r"[¿¡ñãõ]|\b(?:nh|lh)[aeiou]", re.I)
 
 
 def is_babble(text: str) -> bool:
@@ -183,6 +188,8 @@ def is_babble(text: str) -> bool:
     if len(words) <= 2 and (sum(len(w) for w in words) < 6 or any(w in _FOREIGN for w in words)):
         return True
     foreign = sum(1 for w in words if w in _FOREIGN)
+    if _FOREIGN_MARK.search(text or "") and len(words) <= 6 and not any(w in _IT_SHORT - {"qué"} for w in words):
+        return True                                   # «¿Hablas?», «Não sei»: not Italian, not for Maria
     return foreign / len(words) >= 0.5
 
 
@@ -235,6 +242,9 @@ def memory_context(db, org: str, tz, query: str = "", owner: str = "Gaetano", as
     rules = [f for f in mine if f.layer == KINDS["rule"]]
     rules += [f for f in mine if f.layer == "semantic" and _RULE_LIKE.search(f.content or "")]
     section("REGOLE CHE TI HA DATO (con le parole esatte):", [r.content for r in ranked(rules)], 2400)
+    lessons = [f for f in everything if f.layer == "lesson"]
+    section("LEZIONI CHE HAI IMPARATO DAI TUOI ERRORI (le hai scritte tu di notte, rileggendo le conversazioni; "
+            "le regole di " + owner + " vengono prima):", [f.content for f in reversed(lessons)], 900)
     ppl: dict[str, list] = {}
     for f in ranked([f for f in mine if f.layer == KINDS["person"]]):
         ppl.setdefault(f.subject_id, []).append(f)
@@ -245,7 +255,7 @@ def memory_context(db, org: str, tz, query: str = "", owner: str = "Gaetano", as
     section("COME VUOLE LE COSE:", [p.content for p in ranked(prefs)], 650)
     if q and not is_noise(q):
         pool = [f for f in everything if f.layer in ("semantic", "episodic", "relationship", "preference",
-                                                    "decision") and f not in rules]
+                                                    "decision") and f not in rules]   # never the lessons twice
         rel = [f for f in ranked(pool) if relevance(f) >= 75][:5]
         section("RICORDI CHE C'ENTRANO (anche dalle vecchie chat; conserva la distinzione tra fatto e ipotesi):",
                 [f.content for f in rel], 1100)

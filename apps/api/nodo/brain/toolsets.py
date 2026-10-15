@@ -17,7 +17,7 @@ GROUPS: list[tuple[re.Pattern, set[str]]] = [
                 r"negozio|giornata|chiusura|conti|uscit|entrat|cancella|correggi|sbagliat|scontr|accont|capar|saldat|"
                 r"anticip|bonific|bancomat|contanti|scheda|ha preso|comprat", re.I),
      {"ledger_add", "ledger_update", "ledger_report", "ledger_prices", "ledger_close_day", "ledger_stats",
-      "ledger_open", "ledger_pay", "ledger_customer"}),
+      "ledger_open", "ledger_pay", "ledger_customer", "ledger_pdf"}),
     (re.compile(r"\bsit[oi]\b|vercel|github|deploy|domini|ssl|certificat|codice|notte|url|http|www|pagina|online|"
                 r"\bnodo\b|aggiornament|errore del sito|pb.?care|careprogram", re.I),
      {"night_report", "sites_status", "check_sites", "sync_sites", "request_site_change", "list_site_files",
@@ -29,10 +29,11 @@ GROUPS: list[tuple[re.Pattern, set[str]]] = [
       "create_client", "create_project", "update_project", "calendar_events"}),
     (re.compile(r"file|pdf|word|excel|document|immagin|foto|bozz|desktop|apri|mostr|crea|scriv|letter|present|"
                 r"disegn|salva|stampa|tabella|preventiv|fattur|volantin|logo", re.I),
-     {"create_file", "generate_image", "create_document", "save_draft", "list_drafts", "update_draft",
+     {"create_file", "generate_image", "create_document", "ledger_pdf", "save_draft", "list_drafts", "update_draft",
       "list_files", "read_file", "save_to_desktop", "open_on_pc", "read_photo"}),
-    (re.compile(r"chatgpt|\bgpt\b|claude|chat\b|conversazion|impara|vecchi", re.I),
-     {"read_knowledge", "learn_old_chats"}),
+    (re.compile(r"chatgpt|\bgpt\b|claude|chat\b|conversazion|impara|vecchi|studi|stanotte|notte|lezion|miglior", re.I),
+     {"read_knowledge", "learn_old_chats", "show_transcript", "study_status"}),
+    (re.compile(r"ultimi \d+ minuti|minuti|detto prima|ci siamo detti|trascri", re.I), {"show_transcript"}),
 ]
 
 

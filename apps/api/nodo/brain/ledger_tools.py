@@ -65,7 +65,10 @@ class LedgerTools:
                                 "sostituzioni in garanzia, spese/uscite, note. Usalo SEMPRE quando Gaetano racconta "
                                 "cosa ha venduto, consegnato, sostituito, speso o cosa deve consegnare: è il "
                                 "gestionale, i conti li fa il programma. Una riga per articolo e cliente.",
-                  {"type": "object", "properties": {"entries": {"type": "array", "items": _ENTRY}},
+                  {"type": "object", "properties": {"entries": {"type": "array", "items": {
+                      **_ENTRY, "properties": {**_ENTRY["properties"], "again": {
+                          "type": "boolean", "description": "true SOLO se Gaetano ha confermato che è un'altra "
+                                                            "vendita/spesa uguale a una appena segnata"}}}}},
                    "required": ["entries"]}, self.ledger_add)
         self._add("ledger_update", f"Corregge o completa una riga del registro di {biz} (prezzo, misura, modello, "
                                    "cliente, giorno), la segna consegnata (status fatto), pagata (payment pagato) "
@@ -123,6 +126,14 @@ class LedgerTools:
                                      "la signora Silvana?».",
                   {"type": "object", "properties": {"name": {**_STR, "description": "nome del cliente, anche parziale"}},
                    "required": ["name"]}, self.ledger_customer)
+        self._add("ledger_pdf", f"Il REGISTRO di {biz} in PDF, impaginato dal programma: ogni giorno con il suo "
+                                "titolo, ENTRATE a sinistra e USCITE a destra, totali del giorno, riepilogo e chi "
+                                "deve pagare; si apre subito sullo schermo. Per «fammi il PDF del registro», «stampami "
+                                "la settimana», «mandami il riepilogo in PDF». Non usare create_document per il registro.",
+                  {"type": "object", "properties": {
+                      "from_day": {**_STR, "description": "primo giorno (es. 12/10, lunedì, ieri; default oggi)"},
+                      "to_day": {**_STR, "description": "ultimo giorno (default uguale al primo, o oggi se dice "
+                                                        "«da … a oggi»)"}}}, self.ledger_pdf)
         self._add("ledger_open", f"Cosa resta aperto nel registro di {biz}: pagamenti sospesi (chi deve ancora "
                                  "pagare e quanto) e consegne/lavori da fare.", {"type": "object", "properties": {}},
                   self.ledger_open)
@@ -131,7 +142,8 @@ class LedgerTools:
         if not isinstance(entries, list) or not entries:
             return {"saved": 0, "error": "nessuna riga da segnare"}
         led = self._ledger()
-        saved, errors = [], []
+        saved, errors, twins, fixes = [], [], [], []
+        mine: set[str] = set()
         for raw in entries[:30]:
             if not isinstance(raw, dict):
                 continue
@@ -139,7 +151,16 @@ class LedgerTools:
                 clean = {k: v for k, v in raw.items() if k in _ENTRY["properties"] and v not in (None, "")}
                 if norm_kind_safe(clean.get("kind")) == "spesa" and not clean.get("item") and clean.get("counterpart"):
                     clean["item"], clean["counterpart"] = clean["counterpart"], None    # «palestra 65»
+                if not raw.get("again"):
+                    old, exact = led.twin(**clean, skip=mine)
+                    if old is not None and exact:
+                        twins.append(sentence(old))           # already there: written once, not twice
+                        continue
+                    if old is not None:
+                        fixes.append({"id": old.id[:8], "row": sentence(old), "new": clean})
+                        continue
                 e = led.add(**clean)
+                mine.add(e.id)
                 saved.append((e, raw))
             except (ValueError, TypeError) as ex:
                 errors.append(f"{raw.get('item') or raw.get('kind')}: {ex}")
@@ -157,9 +178,45 @@ class LedgerTools:
         if hints:
             out["check_names"] = {k: f"nome breve: era forse uno di {v}? Se sì correggi con ledger_update"
                                   for k, v in hints.items()}
+        if twins:
+            out["already_there"] = twins
+            out["say_twins"] = ("Queste righe erano GIÀ nel registro (segnate pochi minuti fa): non le ho scritte una "
+                                "seconda volta. Dillo a Gaetano in breve.")
+        if fixes:
+            out["maybe_corrections"] = fixes
+            out["say_fixes"] = ("Per queste righe c'è già una riga di pochi minuti fa per lo stesso cliente e articolo: "
+                                "NON le ho aggiunte. Se Gaetano sta CORREGGENDO (prezzo, pagato/sospeso, acconto) usa "
+                                "ledger_update su quella riga (e ledger_pay per un acconto); se è davvero un'altra "
+                                "vendita uguale, rifai ledger_add con again true. Nel dubbio chiediglielo.")
         if errors:
             out["errors"] = errors
         return out
+
+    async def ledger_pdf(self, from_day: str | None = None, to_day: str | None = None) -> dict:
+        if self.c is None or self.c.files is None:
+            return {"error": "archivio file non disponibile"}
+        from nodo.ledger import parse_day
+        from nodo.ledger_pdf import build, day_title, file_name
+        led = self._ledger()
+        try:
+            start = parse_day(from_day, led.today) if from_day else led.today
+            end = parse_day(to_day, led.today) if to_day else start
+        except ValueError as e:
+            return {"error": str(e)}
+        if end < start:
+            start, end = end, start
+        if (end - start).days > 366:
+            return {"error": "periodo troppo lungo: al massimo un anno"}
+        try:
+            data = build(led, start, end, self.settings.ledger_business or "il negozio")
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"non sono riuscita a impaginare il PDF: {type(e).__name__}: {str(e)[:150]}"}
+        p = self.c.files.save_bytes(file_name(start, end), data)
+        label = day_title(start) if start == end else f"dal {day_title(start)} al {day_title(end)}"
+        doc = self.c.files.register(self.s, self.org, p.name, f"Registro {label}",
+                                    summary=f"registro in PDF ({len(data) // 1024 or 1} KB)")
+        return {"created": doc.title, "url": doc.uri, "format": "pdf",
+                "note": "PDF pronto e già sullo schermo: giorni separati, entrate a sinistra, uscite a destra."}
 
     async def ledger_update(self, entry: str, day: str | None = None, new_day: str | None = None,
                             **changes) -> dict:

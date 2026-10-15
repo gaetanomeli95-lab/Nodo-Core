@@ -27,6 +27,7 @@ from nodo.providers.router import NoEligibleModel, RouteRequest
 log = logging.getLogger("nodo.knowledge")
 
 _jobs: dict[str, asyncio.Task] = {}
+_waiting: set[str] = set()       # running but paused: Gaetano is talking (old chats are read when it is quiet)
 MAX_CHARS = 9000          # per conversation sent to the model (head + tail when longer)
 MAX_FACTS = 8             # per conversation
 _KINDS = {"preferenza": "preference", "fatto": "semantic", "progetto": "semantic", "decisione": "decision",
@@ -71,6 +72,72 @@ def _quiet(settings) -> bool:
     return now - last > timedelta(minutes=15)
 
 
+def resume_pending(c) -> list[str]:
+    """Studying must survive a restart: a reading left half done (NODO closed, PC asleep, quota finished) starts
+    again by itself. Before, the job lived only in memory: NODO restarted at 14:18 and for a whole night the panel
+    said «distilling» while nothing was read, and Maria told Gaetano it was going on."""
+    from nodo.db.session import session_scope
+    started = []
+    with session_scope() as db:
+        rows = db.scalars(select(KnowledgeSource).where(KnowledgeSource.status.in_(("distilling", "partial")))).all()
+        ids = [r.id for r in rows if not running(r.id) and _pending_documents(db, r.id, 1)]
+    for sid in ids:
+        start(c, sid)
+        started.append(sid)
+    return started
+
+
+_progress_cache: dict[str, tuple[float, dict | None]] = {}
+
+
+def progress(db, org: str, max_age_s: float = 300) -> dict | None:
+    """Honest numbers about the old chats: read, to read, facts learned, last reading, running now or paused.
+    Counting what is left reads every chunk: cached for a few minutes (the lavagna asks every minute)."""
+    import time
+    hit = _progress_cache.get(org)
+    if hit and time.monotonic() - hit[0] < max_age_s:
+        p = hit[1]
+        if p is not None:          # running / paused may change at any moment: those are cheap, always fresh
+            ids = db.scalars(select(KnowledgeSource.id).where(KnowledgeSource.organization_id == org)).all()
+            run = [i for i in ids if running(i)]
+            p = {**p, "running": bool(run), "waiting": bool(run) and all(i in _waiting for i in run)}
+        return p
+    p = _progress(db, org)
+    _progress_cache[org] = (time.monotonic(), p)
+    return p
+
+
+def _progress(db, org: str) -> dict | None:
+    rows = db.scalars(select(KnowledgeSource).where(KnowledgeSource.organization_id == org,
+                                                    KnowledgeSource.kind.in_(("chatgpt", "claude")))).all()
+    if not rows:
+        return None
+    total = done = facts = 0
+    last = None
+    live: str | None = None
+    paused_reason = None
+    for r in rows:
+        st = r.stats or {}
+        if not st.get("chunks") and not st.get("distilled"):
+            continue                                   # a second look at the same file that found nothing new
+        left = len(_pending_documents(db, r.id, 100_000))
+        d = int(st.get("distilled", 0))
+        total += d + left
+        done += d
+        facts += int(st.get("facts", 0))
+        at = r.updated_at
+        if at is not None and (last is None or at > last):
+            last = at
+        if running(r.id):
+            live = "attesa" if r.id in _waiting and live is None else "lettura"
+        elif left and r.status in ("partial", "no_model", "failed"):
+            paused_reason = r.note
+    if not total:
+        return None
+    return {"read": done, "total": total, "left": total - done, "facts": facts, "last_at": last,
+            "running": live is not None, "waiting": live == "attesa", "note": paused_reason}
+
+
 def start(c, source_id: str) -> asyncio.Task:
     if running(source_id):
         return _jobs[source_id]
@@ -98,7 +165,9 @@ async def run(c, source_id: str) -> dict:
                 # (today they did: Gemini hit 429 and every answer fell back to the slow brain)
                 await asyncio.sleep(pause)
                 while settings.env != "TEST" and not _quiet(settings):
+                    _waiting.add(source_id)
                     await asyncio.sleep(120)
+                _waiting.discard(source_id)
             with session_scope() as db:
                 src = db.get(KnowledgeSource, source_id)
                 if src is None or src.status == "stopped":

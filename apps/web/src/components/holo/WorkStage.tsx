@@ -11,6 +11,8 @@ export const SLOW_TOOLS: Record<string, { kind: "image" | "doc" | "web" | "read"
   create_document: { kind: "doc", label: "Sto preparando il documento", usual: 25 },
   create_file: { kind: "doc", label: "Sto preparando il file", usual: 10 },
   save_to_desktop: { kind: "doc", label: "Lo salvo sul desktop", usual: 6 },
+  ledger_pdf: { kind: "doc", label: "Impagino il registro", usual: 8 },
+  show_transcript: { kind: "doc", label: "Preparo la conversazione", usual: 6 },
   web_search: { kind: "web", label: "Cerco sul web", usual: 15 },
   fetch_url: { kind: "web", label: "Leggo la pagina", usual: 15 },
   read_photo: { kind: "read", label: "Guardo la foto", usual: 15 },

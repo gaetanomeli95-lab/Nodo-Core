@@ -91,11 +91,14 @@ def pending_decisions(s: Session, org: str) -> list[dict]:
                        .order_by(Approval.created_at)):
         fix = s.scalars(select(FixProposal).where(FixProposal.approval_id == a.id)).first()
         act = s.scalars(select(NightAction).where(NightAction.approval_id == a.id)).first()
-        site = s.get(Site, fix.site_id if fix else act.site_id) if (fix or act) else None
+        site_id = (fix.site_id if fix else act.site_id) if (fix or act) else None
+        site = s.get(Site, site_id) if site_id else None          # NODO's own night actions have no site
         if fix:
             noun = "la correzione" if fix.incident_id else f"la modifica «{fix.title}»"
             label = f"pubblicare {noun} per {site.name if site else '?'}" + \
                     (f" (PR #{fix.pr_number})" if fix.pr_number else "")
+        elif a.tool_name == "nodo" and a.action == "self_patch":
+            label = f"applicare il miglioramento al mio codice («{(a.payload or {}).get('title', '')}»)"
         elif a.tool_name == "vercel" and a.action == "rollback":
             label = f"riportare {site.name if site else 'il sito'} alla versione precedente (rollback)"
         elif a.tool_name == "vercel" and a.action == "redeploy":
@@ -112,7 +115,7 @@ def pending_decisions(s: Session, org: str) -> list[dict]:
 def compose_briefing(s: Session, org: str, since: datetime, until: datetime | None = None, tz=UTC,
                      greeting: bool = True) -> Briefing:
     until = until or datetime.now(UTC)
-    runs = list(s.scalars(select(NightRun).where(NightRun.organization_id == org, NightRun.kind.notin_(("briefing", "change")),
+    runs = list(s.scalars(select(NightRun).where(NightRun.organization_id == org, NightRun.kind.notin_(("briefing", "change", "selfcare")),
                                                  NightRun.started_at >= since, NightRun.started_at <= until)))
     run_ids = [r.id for r in runs]
     sites = {x.id: x for x in s.scalars(select(Site).where(Site.organization_id == org))}
@@ -217,6 +220,9 @@ def compose_briefing(s: Session, org: str, since: datetime, until: datetime | No
                      "; ".join(d["summary"].removeprefix("Bozza pronta: ").rstrip(".") for d in drafts) + ".")
     elif draft_skips:
         lines.append(draft_skips[-1])
+    care = [a.summary for a in actions if a.action == "selfcare" and a.summary]
+    if care:
+        lines.append("Mi sono migliorata: " + care[-1])
     if pending:
         lines.append("Da decidere: " + "; ".join(p["label"] for p in pending) + ".")
     if cost >= 0.005:

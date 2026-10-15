@@ -13,7 +13,7 @@ The page is rebuilt when the register changes and every couple of minutes, never
 from __future__ import annotations
 
 import hashlib
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -99,7 +99,41 @@ def build(db, org: str, settings, now: datetime) -> str:
         key=str.lower)
     if names:
         out.append(f"TUTTI I CLIENTI DEL REGISTRO ({len(names)}, nessuno escluso): " + _cap(", ".join(names), 900) + ".")
+    out += _self_lines(db, org, settings, now)
     return _cap("\n".join(out), MAX_CHARS)
+
+
+def _self_lines(db, org: str, settings, now: datetime) -> list[str]:
+    """What NODO itself is doing: reading the old chats, what the last night did. Real numbers, so Maria never says
+    «the work went on all night» when nothing was read (she did, on 15/10)."""
+    from nodo.knowledge.distill import progress
+    from nodo.night.briefing import tzinfo
+    from nodo.night.selfcare import last_night
+    tz = tzinfo(settings.timezone)
+    out = []
+    try:
+        p = progress(db, org)
+    except Exception:  # noqa: BLE001 - the shop page must not break for this
+        p = None
+    if p:
+        pct = round(100 * p["read"] / p["total"]) if p["total"] else 0
+        last = p["last_at"]
+        when = (last if last.tzinfo else last.replace(tzinfo=UTC)).astimezone(tz).strftime("%d/%m alle %H:%M") \
+            if last else "mai"
+        state = ("in corso adesso" if p["running"] and not p["waiting"] else
+                 "in pausa mentre parli con Gaetano, riprende quando c'è silenzio e di notte" if p["running"] else
+                 "finito" if not p["left"] else
+                 f"fermo ({p['note']})" if p["note"] else "fermo, riparte da solo entro 20 minuti")
+        out.append(f"STUDIO DELLE VECCHIE CHAT DI CHATGPT: lette {p['read']} conversazioni su {p['total']} ({pct}%), "
+                   f"ne restano {p['left']}; {p['facts']} cose imparate; ultima lettura il {when}; stato: {state}. "
+                   "Se te lo chiede, rispondi con QUESTI numeri, mai a sensazione.")
+    try:
+        night = last_night(db, org, tz)
+    except Exception:  # noqa: BLE001
+        night = None
+    if night:
+        out.append(f"STANOTTE, il tuo turno di notte su te stessa, {night}")
+    return out
 
 
 class Board:

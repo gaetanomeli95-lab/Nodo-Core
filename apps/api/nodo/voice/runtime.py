@@ -97,7 +97,27 @@ BOARD_EVERY_S = 60
 # jobs that are long for a reason, and how long they may take (seconds) before NODO calls it stuck
 SLOW_TOOLS_S = {"generate_image": 240, "create_document": 150, "create_file": 60, "save_to_desktop": 40,
                 "web_search": 75, "fetch_url": 75, "read_photo": 75, "learn_old_chats": 180, "search_knowledge": 45,
-                "check_sites": 120, "sync_sites": 120}
+                "check_sites": 120, "sync_sites": 120, "ledger_pdf": 60, "show_transcript": 40}
+
+
+_SING = re.compile(r"\b(cant(?:a|ami|amela|armi|are|agli|ale|ale|aci|ate|i)|canzon\w*|canzoncin\w*|serenat\w*|"
+                   r"ninna nanna|rap|strofa|ritornello)\b", re.I)
+_SING_STYLES = [(re.compile(r"ninna|dormire|bambin", re.I), "ninna nanna"), (re.compile(r"\brap\b", re.I), "rap"),
+                (re.compile(r"\brock\b", re.I), "rock"), (re.compile(r"tarantell|festa|ballare|allegr", re.I), "tarantella"),
+                (re.compile(r"liric|opera|tenore", re.I), "lirica"),
+                (re.compile(r"melodic|lent|triste|romantic|serenat|ballata|dolce|rallegr", re.I), "ballata")]
+
+
+def sing_style(text: str) -> str | None:
+    """«cantami una canzone», «una canzoncina per Marcello», «gliela canti?»: the band starts with the voice."""
+    t = text or ""
+    if not _SING.search(t) or re.search(r"\b(?:non|smetti|basta)\b.{0,30}\b(?:cant|canzon)", t, re.I) \
+            and not re.search(r"perch[éè] non (?:mi )?canti", t, re.I):
+        return None
+    for rx, style in _SING_STYLES:
+        if rx.search(t):
+            return style
+    return "pop"
 
 
 def is_babble_text(text: str) -> bool:
@@ -132,7 +152,8 @@ _VOICE_TAGS = re.compile(r"<\s*no[ _]speech\s*>|<[a-z_ ]{1,24}>|\{[a-z_ ]{1,24}\
 _LIVE_OWN_TOOLS = {"decide", "close_screen",   # yes/no on the proposal shown, close what is on screen
                    # the register, READ ONLY and instant (no model behind them): the voice answers any day or customer
                    # by itself and the hologram appears while it speaks
-                   "ledger_report", "ledger_open", "ledger_customer", "ledger_stats", "ledger_prices"}
+                   "ledger_report", "ledger_open", "ledger_customer", "ledger_stats", "ledger_prices",
+                   "study_status"}        # the true state of studying and of the night, never told by feeling
 
 
 class VoiceRuntime:
@@ -726,6 +747,11 @@ class VoiceRuntime:
             vs.mark("tts_first_audio")
             if self._barge_from is None:
                 self._barge_from = len(self._in_text)
+            if not self._singing and vs.state != VoiceState.SPEAKING and (style := sing_style(self._in_text)):
+                # he asked for a song and the voice did not call «canta» (15/10: three songs, no band, recited):
+                # the band starts anyway, under her first note
+                self._singing = True
+                await self._send("music.start", style=style, bpm=None)
             if vs.state != VoiceState.SPEAKING:
                 await self._live_go(VoiceState.UNDERSTANDING, VoiceState.THINKING, VoiceState.SPEAKING)
             await self._send("tts.chunk", audio=protocol.encode_audio(ev["data"]),
@@ -964,7 +990,8 @@ class VoiceRuntime:
                 elif c["name"] == SING_DECL["name"]:
                     style = str(c["args"].get("stile") or "pop").lower()
                     bpm = c["args"].get("bpm")
-                    await self._send("music.start", style=style, bpm=bpm if isinstance(bpm, int) else None)
+                    if not self._singing:
+                        await self._send("music.start", style=style, bpm=bpm if isinstance(bpm, int) else None)
                     self._singing = True
                     result = {"ok": True, "nota": ("La base sta suonando. CANTA adesso, davvero: melodia, ritmo, rime, "
                                                    "vocali allungate, un ritornello che torna. Testo tuo, inventato "

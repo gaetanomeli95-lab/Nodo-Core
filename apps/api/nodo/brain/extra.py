@@ -217,6 +217,16 @@ class ExtraTools(LedgerTools):
         self._add("close_screen", "Chiude quello che stai mostrando sullo schermo (immagine, documento, scheda) e "
                                   "torna alla conversazione. Per «chiudi», «togli», «basta così».",
                   _obj({}), self.close_screen)
+        self._add("study_status", "A che punto è lo STUDIO (vecchie chat di ChatGPT lette e da leggere, cose "
+                                  "imparate, se sta leggendo adesso), cosa ha fatto NODO STANOTTE su se stesso e le "
+                                  "LEZIONI imparate dai suoi errori. Per «a che punto sei con le chat?», «cosa hai "
+                                  "fatto stanotte?», «cosa hai imparato?». Numeri veri, mai a sensazione.",
+                  _obj({}), self.study_status)
+        self._add("show_transcript", "MOSTRA sullo schermo, in un PDF, la trascrizione della conversazione degli "
+                                     "ultimi N minuti (chi ha detto cosa, con l'ora). Per «fammi vedere cosa ci siamo "
+                                     "detti negli ultimi 20 minuti», «mostrami la conversazione di prima».",
+                  _obj({"minutes": {"type": "integer", "description": "quanti minuti indietro (default 20, max 600)"}}),
+                  self.show_transcript)
         self._add("list_files", "I file che NODO ha creato per Gaetano (documenti, immagini, tabelle).", _obj({}),
                   self.list_files)
         self._add("read_file", "Legge un file creato da NODO (nome o parte del titolo).",
@@ -666,10 +676,37 @@ class ExtraTools(LedgerTools):
         return {"results": hits, "note": "frasi vere delle vostre conversazioni, con data e ora"}
 
     async def learn_old_chats(self) -> dict:
+        from nodo.knowledge import distill
         from nodo.knowledge.finder import import_found
         if self.c is None:
             return {"error": "non posso leggere i file del PC da qui"}
-        return await import_found(self.c, self.s, self.org)
+        out = await import_found(self.c, self.s, self.org)
+        resumed = distill.resume_pending(self.c)        # a reading left half done goes on (it used to stay stuck)
+        return {**out, **({"ripresa": "ho ripreso la lettura lasciata a metà"} if resumed else {}),
+                "studio": await self.study_status()}
+
+    async def study_status(self) -> dict:
+        """The true numbers of studying and of the last night (never «it went on all night» by feeling)."""
+        from nodo.knowledge.distill import progress
+        from nodo.night.selfcare import last_night, lessons
+        p = progress(self.s, self.org, max_age_s=0) or {}
+        tz = self._tz()
+        out: dict = {}
+        if p:
+            last = p.get("last_at")
+            out["vecchie_chat"] = {
+                "lette": p["read"], "totali": p["total"], "restano": p["left"], "cose_imparate": p["facts"],
+                "ultima_lettura": (last if last.tzinfo else last.replace(tzinfo=UTC)).astimezone(tz)
+                .strftime("%d/%m %H:%M") if last else None,
+                "stato": ("sta leggendo" if p["running"] and not p["waiting"] else
+                          "in pausa mentre parliamo, riprende col silenzio e di notte" if p["running"] else
+                          "finito" if not p["left"] else f"fermo: {p.get('note') or 'riparte da solo'}")}
+        else:
+            out["vecchie_chat"] = "nessuna esportazione di ChatGPT importata"
+        out["stanotte"] = last_night(self.s, self.org, tz) or "nessun turno di notte su me stessa ancora"
+        out["lezioni_imparate"] = [f.content for f in lessons(self.s, self.org)[-8:]]
+        out["say"] = "Rispondi SOLO con questi numeri e queste parole: niente di più."
+        return out
 
     def _pick_file(self, name: str):
         if self.c is None or self.c.files is None:
@@ -852,6 +889,47 @@ class ExtraTools(LedgerTools):
                                     summary=f"documento {fmt.upper()} creato da NODO ({len(data) // 1024 or 1} KB)")
         return {"created": doc.title, "url": doc.uri, "format": fmt,
                 "note": "documento pronto: il link lo scarica dal pannello o dal browser"}
+
+    async def show_transcript(self, minutes: int | str = 20) -> dict:
+        if self.c is None or self.c.files is None:
+            return {"error": "archivio file non disponibile"}
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy import select
+
+        from nodo.db.models import Message
+        from nodo.memory.mind import is_noise
+        from nodo.services import documents
+        try:
+            minutes = max(1, min(600, int(str(minutes).strip().split()[0])))
+        except (TypeError, ValueError, IndexError):
+            minutes = 20
+        tz = self._tz()
+        since = datetime.now(UTC) - timedelta(minutes=minutes)
+        rows = self.s.scalars(select(Message).where(Message.created_at >= since, Message.role.in_(("user", "nodo")))
+                              .order_by(Message.created_at)).all()
+        owner, me = self.settings.owner_name, getattr(self.settings, "assistant_name", "Maria") or "Maria"
+        lines = []
+        for m in rows:
+            text = (m.content or "").strip()
+            if not text or is_noise(text):
+                continue
+            at = m.created_at if m.created_at.tzinfo else m.created_at.replace(tzinfo=UTC)
+            who = owner if m.role == "user" else me
+            lines.append(f"**{at.astimezone(tz):%H:%M} — {who}:** {text}")
+        if not lines:
+            return {"error": f"negli ultimi {minutes} minuti non c'è niente di scritto"}
+        now = datetime.now(tz)
+        title = f"Conversazione degli ultimi {minutes} minuti"
+        md = f"# {title}\n\n{now:%d/%m/%Y}, fino alle {now:%H:%M}\n\n" + "\n\n".join(lines)
+        try:
+            data = documents.build("pdf", md, title)
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"non sono riuscita a preparare il PDF: {type(e).__name__}"}
+        p = self.c.files.save_bytes(f"conversazione-{now:%d-%m-%H%M}.pdf", data)
+        doc = self.c.files.register(self.s, self.org, p.name, title, summary=f"{len(lines)} battute")
+        return {"created": doc.title, "url": doc.uri, "format": "pdf", "lines": len(lines),
+                "note": "trascrizione già sullo schermo"}
 
     async def read_file(self, name: str) -> dict:
         if self.c is None or self.c.files is None:

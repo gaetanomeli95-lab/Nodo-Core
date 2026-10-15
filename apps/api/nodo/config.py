@@ -106,6 +106,8 @@ class Settings(BaseSettings):
     live_language: str = "it-IT"      # Gemini Live: hear and speak Italian (no Hindi/Korean «transcripts» of noise)
     voice_engine: str = "precise"     # precise (Gemini ears/mouth, Claude brain with full memory) | auto (Gemini Live) | browser
     gemini_live_model: str = ""       # empty = try the built-in ladder of Live models
+    live_prefix_ms: int = 300                   # speech shorter than this is noise, it does not cut Maria off
+    live_interrupt: bool = True                 # False: only «ferma/basta/aspetta» stop her, never a noise
     live_start_sensitivity: str = "START_SENSITIVITY_HIGH"   # HIGH: «ferma» over Maria's voice is heard (LOW missed it)
     live_connect_timeout: float = 25.0   # Live usually opens in 1-3 s: do not keep him waiting 35 s on a bad try
     live_brain: bool = True           # Live = ears and mouth; anything real goes to the Claude brain via «pensa»
@@ -137,6 +139,8 @@ class Settings(BaseSettings):
     pronounce: dict[str, str] = {"Morpheus": "Morfeus"}   # how names are SAID aloud (the register keeps the spelling)
     evening_recap: str = "19:45"                # HH:MM: the shop's closing on Telegram and in the panel ("" = off)
     timezone: str = "Europe/Rome"
+    self_care: bool = True                      # every night: reread the day, write lessons, study what was left open
+    self_improve_code: bool = True              # at night NODO may prepare fixes to its own code (merged only with your ok)
     night_start: str = "01:00"                  # full night run (all checks + fixes + drafts)
     night_end: str = "07:00"
     night_interval_minutes: int = 60            # light re-checks inside the night window

@@ -68,6 +68,18 @@ def size_label(size: str | None) -> str:
     return f"{size} ({name})" if name else size
 
 
+def _valid(y: int, m: int, d: int) -> bool:
+    try:
+        date(y, m, d)
+        return True
+    except ValueError:
+        return False
+
+
+def _prev_month(today: date) -> tuple[int, int]:
+    return (today.year - 1, 12) if today.month == 1 else (today.year, today.month - 1)
+
+
 def parse_day(text: str | None, today: date) -> date:
     """oggi / ieri / l'altro ieri / domani / 2026-10-12 / 12/10 / 12 ottobre / lunedì (the last one)."""
     if not text:
@@ -89,6 +101,14 @@ def parse_day(text: str | None, today: date) -> date:
     if m:
         y = int(m.group(3)) if m.group(3) else today.year
         return date(y + 2000 if y < 100 else y, int(m.group(2)), int(m.group(1)))
+    m = re.fullmatch(r"(?:(?:giorno|il|del|dal|al) )?(\d{1,2})", t)      # «giorno 12»: this month
+    if m:
+        n = int(m.group(1))
+        if _valid(today.year, today.month, n) and date(today.year, today.month, n) <= today:
+            return date(today.year, today.month, n)
+        y, mo = _prev_month(today)                  # «giorno 20» on the 15th: last month's 20th
+        if _valid(y, mo, n):
+            return date(y, mo, n)
     m = re.fullmatch(r"(?:\w+ )?(\d{1,2}) (\w+)(?: (\d{4}))?", t)
     if m and m.group(2) in _MONTHS:
         return date(int(m.group(3) or today.year), _MONTHS.index(m.group(2)) + 1, int(m.group(1)))
@@ -175,6 +195,45 @@ class Ledger:
         self.s.add(e)
         self.s.flush()
         return e
+
+    def twin(self, *, kind: str, item: str = "", counterpart: str | None = None, amount: float | None = None,
+             unit_price: float | None = None, qty: int | None = 1, day: str | None = None, minutes: int = 30,
+             skip: set[str] | frozenset = frozenset(), **_) -> tuple[LedgerEntry | None, bool]:
+        """A row written a few minutes ago for the same thing: (row, exact). On 15/10 the same four expenses were
+        written twice 30 seconds apart (220 instead of 110), and Rachid's sale twice (paid, then «sospeso» with the
+        deposit): the second time is a repetition or a correction, never a new sale."""
+        try:
+            k, d = norm_kind(kind), parse_day(day, self.today).isoformat()
+        except ValueError:
+            return None, False
+        qty = max(1, int(qty or 1))
+        if amount is None and unit_price is not None:
+            amount = round(float(unit_price) * qty, 2)
+        since = datetime.now(UTC) - timedelta(minutes=minutes)
+        rows = self.s.scalars(select(LedgerEntry).where(
+            LedgerEntry.organization_id == self.org, LedgerEntry.day == d, LedgerEntry.kind == k,
+            LedgerEntry.status != "annullato")).all()
+
+        def words(*xs) -> set[str]:
+            return {w for x in xs for w in re.findall(r"[a-zà-ù0-9]{3,}", (x or "").lower())} - {"materasso", "materassi"}
+        mine = words(item, counterpart)
+        best = None
+        for r in rows:
+            at = r.created_at if r.created_at is None or r.created_at.tzinfo else r.created_at.replace(tzinfo=UTC)
+            if at is None or at < since:
+                continue
+            theirs = words(r.item, r.counterpart)
+            if r.id in skip or not (mine & theirs):
+                continue
+            same_money = amount is not None and r.amount is not None and abs(float(r.amount) - float(amount)) < 0.01
+            same_who = (counterpart or "").strip().lower() == (r.counterpart or "").strip().lower()
+            who_ok = (same_who or not counterpart or not r.counterpart or bool(words(counterpart) & words(r.item))
+                      or bool(words(r.counterpart) & words(item)))     # «giornata / Gaetano» = «Gaetano»
+            if same_money and (r.qty or 1) == qty and who_ok:
+                return r, True
+            if counterpart and same_who and words(item) & words(r.item):
+                best = best or r
+        return best, False
 
     def find(self, query: str, day: str | None = None, kind: str | None = None) -> tuple[LedgerEntry | None, list]:
         q = select(LedgerEntry).where(LedgerEntry.organization_id == self.org, LedgerEntry.status != "annullato")

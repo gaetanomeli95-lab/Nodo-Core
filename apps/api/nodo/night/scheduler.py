@@ -210,6 +210,14 @@ class NightScheduler:
                         log.info("auto import of chat exports: %s", res.get("message"))
             except Exception:  # noqa: BLE001 - never break the background loop
                 log.warning("auto import of chat exports failed", exc_info=True)
+        last_study = getattr(self, "_last_study", None)
+        if self.settings.knowledge_distill and (last_study is None or now - last_study >= timedelta(minutes=20)):
+            # studying never stops for good: a reading cut by a restart or by a spent quota starts again by itself
+            self._last_study = now
+            from nodo.knowledge import distill
+            if started := distill.resume_pending(self.c):
+                log.info("old chats: reading resumed (%d)", len(started))
+        await self.maybe_selfcare(now)
         today = now.astimezone(self.tz).date()
         local = now.astimezone(self.tz)
         if self.settings.evening_recap and getattr(self, "_last_evening", None) != today \
@@ -219,6 +227,23 @@ class NightScheduler:
         if getattr(self, "_last_watch", None) != today and now.astimezone(self.tz).hour >= 8:
             self._last_watch = today
             await self.watch_expiry()
+
+    async def maybe_selfcare(self, now: datetime) -> None:
+        """Once a night, after the first round of checks: reread the day, write lessons, study, improve the code."""
+        if not getattr(self.settings, "self_care", True) or self.settings.env == "TEST":
+            return
+        w_start, _, inside = window_bounds(now, self.settings.night_start, self.settings.night_end, self.tz)
+        st = self.state()
+        if not inside or st.running or st.last_night_start is None or st.last_night_start < w_start:
+            return
+        from nodo.app import ensure_workspace
+        from nodo.db.session import session_scope
+        from nodo.night import selfcare
+        with session_scope() as db:
+            org = ensure_workspace(db)[0].id
+            if not selfcare.due(db, org, now, w_start):
+                return
+        selfcare.start(self.c, org)
 
     async def evening_recap(self, day) -> str | None:
         """End of the working day: the shop's closing (money, doubts, deliveries, who must pay) on Telegram and in the

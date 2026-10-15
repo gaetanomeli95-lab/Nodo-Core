@@ -118,10 +118,14 @@ def live_config(settings, system: str, tool_decls: list[dict], handle: str | Non
                 "disabled": False,
                 "start_of_speech_sensitivity": getattr(settings, "live_start_sensitivity", "START_SENSITIVITY_HIGH"),
                 "end_of_speech_sensitivity": "END_SENSITIVITY_LOW",
-                "prefix_padding_ms": 100,
+                # a voice must last this long before it counts as speech: a cough, a door or the TV were cutting
+                # Maria in the middle of a sentence (15/10: «¿Qué?» and «...» resumes every few minutes)
+                "prefix_padding_ms": int(getattr(settings, "live_prefix_ms", 300)),
                 "silence_duration_ms": 600,
             },
-            "activity_handling": "START_OF_ACTIVITY_INTERRUPTS",
+            # NO_INTERRUPTION: only «ferma / basta / aspetta» stop her (heard in the transcript), noise never does
+            "activity_handling": "START_OF_ACTIVITY_INTERRUPTS" if getattr(settings, "live_interrupt", True)
+            else "NO_INTERRUPTION",
             "turn_coverage": "TURN_INCLUDES_ONLY_ACTIVITY",
         },
         "context_window_compression": {"sliding_window": {}},
