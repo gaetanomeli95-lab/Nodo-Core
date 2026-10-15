@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { lite } from "../motion";
 import { startMusic, stopMusic } from "../music";
 import { speak as serverSpeak, VoiceSocket, type VoiceConfig, type VoiceEvent } from "../api";
+import { markReady, sync, VOICE_GO } from "../introSync";
 
 export type VoiceState =
   | "IDLE" | "CONNECTING" | "LISTENING" | "TRANSCRIBING" | "UNDERSTANDING" | "THINKING"
@@ -145,7 +146,17 @@ class PcmPlayer {
     return true;
   }
 
+  /** Held: the greeting's audio waits here until the intro reaches the moment she speaks (see introSync). */
+  private held: [string, string][] | null = null;
+  hold() { if (!this.held) this.held = []; }
+  release() {
+    const queue = this.held;
+    this.held = null;
+    for (const [b64, mime] of queue || []) this.push(b64, mime);
+  }
+
   push(b64: string, mime: string) {
+    if (this.held) { this.held.push([b64, mime]); markReady(); return; }
     const m = /rate=(\d+)/.exec(mime || "");
     const rate = m ? parseInt(m[1], 10) : 24000;
     const bin = atob(b64);
@@ -235,6 +246,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   const streamingStarted = useRef(false);
   const media = useRef<{ rec: MediaRecorder; stream: MediaStream } | null>(null);
   const pcm = useRef(new PcmPlayer(setAudioPlaying));
+  const heldSay = useRef<string[] | null>(null);   // server-voice lines of the greeting, waiting for the intro
   const liveMic = useRef<{ ctx: AudioContext; stream: MediaStream } | null>(null);
   const micAnalyser = useRef<AnalyserNode | null>(null);
   const inBins = useRef(new Uint8Array(128));
@@ -324,6 +336,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
               if (!speaking.current) browserTtsNext();
               break;
             case "tts.speak.request":   // the server has no live voice right now: say it with her neural voice
+              if (heldSay.current) { heldSay.current.push(e.text as string); markReady(); break; }   // intro still on
               void sayAloudRef.current(e.text as string);
               break;
             case "voice.engine": {     // live session died mid-conversation
@@ -648,8 +661,26 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   sayAloudRef.current = sayAloud;
   /** «Ciao Gaetano, eccomi»: Maria opens the conversation herself, in her own voice. */
   const greet = (text = "") => sock.current?.send({ type: "greet", text });
+  /** Ask for the hello now but keep it silent until the intro says «speak» (VOICE_GO or the intro's end). */
+  const greetBehindIntro = () => {
+    pcm.current.hold();
+    heldSay.current = heldSay.current || [];
+    sync.waiting = true; sync.pending = false;
+    greet();
+  };
   /** Ready her voice (the speaker) without opening the microphone: the hello can start during the intro. */
   const prepareVoice = () => pcm.current.unlock().catch(() => undefined);
+  useEffect(() => {                 // the intro reached the moment she speaks (or was skipped): let her voice out
+    const go = () => {
+      pcm.current.release();
+      const texts = heldSay.current || [];
+      heldSay.current = null;
+      for (const t of texts) void sayAloudRef.current(t);
+    };
+    window.addEventListener(VOICE_GO, go);
+    window.addEventListener("nodo:intro-done", go);
+    return () => { window.removeEventListener(VOICE_GO, go); window.removeEventListener("nodo:intro-done", go); };
+  }, []);
 
   const toggleMic = () => { pressStart(); if (engine === "browser") pressStop(); };
   const endConversation = () => {
@@ -677,7 +708,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
   });
 
   return { state, connected, partial, engine, liveOn, audioPlaying, recovering, pressStart, pressStop,
-    interrupt, answer, sendText, speak, sayAloud, greet, prepareVoice, toggleMic, endConversation, setConversation, microphoneOn: liveOn || capturing,
+    interrupt, answer, sendText, speak, sayAloud, greet, greetBehindIntro, prepareVoice, toggleMic, endConversation, setConversation, microphoneOn: liveOn || capturing,
     sampleLevel: () => ({ input: inputLevel.current, output: Math.max(pcm.current.level(), player.current.level()) }),
     /** Frequency bins (0-255) of what NODO hears and says, for the visuals. null = nothing playing / no mic. */
     spectrum: () => {

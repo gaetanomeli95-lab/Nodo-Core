@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { get } from "../../api";
+import { greetingExpected, VOICE_GO } from "../../introSync";
 import { calm, canvasDpr } from "../../motion";
 
 /** The opening, every time NODO opens (eight seconds, a click or any key skips it).
@@ -12,7 +13,9 @@ import { calm, canvasDpr } from "../../motion";
 
 const DONE = "nodo:intro-done";
 const TOTAL = 8.2;                 // seconds
-const ALMOST = 5.6;                // when the greeting is asked for (it arrives ~2 s later, as the intro ends)
+const HOLD_AT = 6.4;               // the last full frame: the intro waits here for Maria's voice if it is late
+const MAX_HOLD = 12;               // seconds: never longer (no voice? the room opens anyway)
+const GO_AT = 7.6;                 // her voice starts here, as the curtain opens (introSync)
 export const ALMOST_EVENT = "nodo:intro-almost";
 let played = false;                // once per page load: every time the NODO window opens
 export const introDone = () => played || calm || /[?&]nointro\b/.test(location.search);
@@ -20,7 +23,7 @@ export const introDone = () => played || calm || /[?&]nointro\b/.test(location.s
 type Stats = Record<string, number>;
 
 /* ------------------------------------------------------------------ sound */
-function playIntro(): (() => void) | null {
+function playIntro(): Sound | null {
   let ctx: AudioContext;
   try { ctx = new AudioContext(); } catch { return null; }
   if (ctx.state !== "running") { void ctx.close(); return null; }   // a normal tab without autoplay: silence
@@ -78,28 +81,41 @@ function playIntro(): (() => void) | null {
   for (let i = 0; i < 16; i++) tone("square", 1800 + ((i * 7) % 5) * 220, t0 + 3.1 + i * 0.19, 0.035, 0.022);
 
   // 6. the theme: a wide, slowly opening chord under it all
+  const chord: [OscillatorNode, GainNode][] = [];
   [110, 164.81, 220, 277.18, 329.63].forEach((f, i) => {
     [-7, 7].forEach((det) => {
       const o = ctx.createOscillator(), g = ctx.createGain(), f2 = ctx.createBiquadFilter(), at = t0 + 2.75;
       o.type = "sawtooth"; o.frequency.value = f; o.detune.value = det + i;
       f2.type = "lowpass"; f2.frequency.setValueAtTime(240, at); f2.frequency.exponentialRampToValueAtTime(2400, at + 3.2);
       g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(0.03, at + 1.2);
-      g.gain.setValueAtTime(0.03, at + 3.7); g.gain.exponentialRampToValueAtTime(0.0001, at + 5.2);
-      o.connect(f2).connect(g); g.connect(master); g.connect(echo); o.start(at); o.stop(at + 5.3);
+      o.connect(f2).connect(g); g.connect(master); g.connect(echo); o.start(at);
+      chord.push([o, g]);                    // it holds under the waiting frame, until the finale
     });
   });
 
-  // 7. fold back into the core, and a last clear note: she is here
-  const fold = ctx.createBufferSource(), ff = ctx.createBiquadFilter(), fG = ctx.createGain();
-  fold.buffer = noiseBuf(1.2); ff.type = "bandpass"; ff.Q.value = 1.5;
-  ff.frequency.setValueAtTime(5000, t0 + 6.5); ff.frequency.exponentialRampToValueAtTime(300, t0 + 7.4);
-  fG.gain.setValueAtTime(0, t0 + 6.5); fG.gain.linearRampToValueAtTime(0.14, t0 + 7.1); fG.gain.linearRampToValueAtTime(0, t0 + 7.45);
-  fold.connect(ff).connect(fG).connect(master); fold.start(t0 + 6.5);
-  [659.25, 987.77, 1318.51].forEach((f, i) => tone("sine", f, t0 + 7.42 + i * 0.07, 1.6, 0.07, true));
+  // 7. fold back into the core, and a last clear note: she is here (played when the intro really closes: if
+  // Maria's voice needs a few more seconds, the chord holds and this waits for her)
+  let closing = 0;
+  const finale = () => {
+    if (closing) return;
+    const f0 = ctx.currentTime + 0.1 - 6.5;            // called at 6.4: the same timings as before, from the fold
+    chord.forEach(([o, g]) => {
+      g.gain.cancelScheduledValues(f0 + 6.5); g.gain.setValueAtTime(0.03, f0 + 6.5);
+      g.gain.exponentialRampToValueAtTime(0.0001, f0 + 7.9); o.stop(f0 + 8.0);
+    });
+    const fold = ctx.createBufferSource(), ff = ctx.createBiquadFilter(), fG = ctx.createGain();
+    fold.buffer = noiseBuf(1.2); ff.type = "bandpass"; ff.Q.value = 1.5;
+    ff.frequency.setValueAtTime(5000, f0 + 6.5); ff.frequency.exponentialRampToValueAtTime(300, f0 + 7.4);
+    fG.gain.setValueAtTime(0, f0 + 6.5); fG.gain.linearRampToValueAtTime(0.14, f0 + 7.1); fG.gain.linearRampToValueAtTime(0, f0 + 7.45);
+    fold.connect(ff).connect(fG).connect(master); fold.start(f0 + 6.5);
+    [659.25, 987.77, 1318.51].forEach((f, i) => tone("sine", f, f0 + 7.42 + i * 0.07, 1.6, 0.07, true));
+    closing = window.setTimeout(() => void ctx.close(), 4000);
+  };
 
-  const stop = setTimeout(() => void ctx.close(), 11000);
-  return () => { clearTimeout(stop); void ctx.close(); };
+  const safety = setTimeout(() => void ctx.close(), 40000);
+  return { stop: () => { clearTimeout(safety); clearTimeout(closing); void ctx.close(); }, finale };
 }
+type Sound = { stop: () => void; finale: () => void };
 
 /* ------------------------------------------------------------------ picture */
 const clamp = (x: number) => Math.max(0, Math.min(1, x));
@@ -135,12 +151,12 @@ export function Intro({ name }: { name: string }) {
   const finished = useRef(false);
   const leavingRef = useRef(false);
   const almostRef = useRef(false);
-  const stopSound = useRef<(() => void) | null>(null);
+  const stopSound = useRef<Sound | null>(null);
 
   const finish = (skipped = false) => {
     if (finished.current) return;
     finished.current = true;
-    if (skipped) stopSound.current?.();            // skipped: silence at once; a natural end lets the last note ring
+    if (skipped) stopSound.current?.stop();       // skipped: silence at once; a natural end lets the last note ring
     played = true;
     setGone(true);
     window.dispatchEvent(new Event(DONE));
@@ -152,7 +168,8 @@ export function Intro({ name }: { name: string }) {
     const el = canvas.current!;
     const ctx = el.getContext("2d");
     if (!ctx) { finish(); return; }
-    let raf = 0, start = 0, sound: (() => void) | null = null, W = 0, H = 0, grid: HTMLCanvasElement | null = null;
+    let raf = 0, start = 0, sound: Sound | null = null, W = 0, H = 0, grid: HTMLCanvasElement | null = null;
+    let real = 0, last = 0, held = 0, finaleOn = false, goSent = false;
     const dpr = canvasDpr(1.25);
     const resize = () => {
       W = Math.round(innerWidth * dpr); H = Math.round(innerHeight * dpr);
@@ -180,14 +197,22 @@ export function Intro({ name }: { name: string }) {
     const draw = (now: number) => {
       if (finished.current) return;
       raf = requestAnimationFrame(draw);
-      if (!start) start = now;
-      const T = (now - start) / 1000;
+      if (!start) { start = now; real = now; }
+      const dt = last ? now - last : 0;
+      last = now;
+      // waiting for her voice: the story stops on its last full frame (everything keeps turning, the chord
+      // holds) until the first words of the greeting are here, then it folds and she speaks as it opens
+      let holding = false;
+      if ((now - start) / 1000 >= HOLD_AT && !finaleOn && greetingExpected() && held < MAX_HOLD * 1000) {
+        held += dt; start += dt; holding = true;
+      }
+      const T = (now - start) / 1000, Tr = (now - real) / 1000;
+      const waiting = held > 300 && !finaleOn ? Math.min(1, (held - 300) / 600) : 0;
+      if (T >= HOLD_AT && !finaleOn && !holding) { finaleOn = true; sound?.finale(); }
+      if (T >= GO_AT && !goSent) { goSent = true; window.dispatchEvent(new Event(VOICE_GO)); }
       if (T >= TOTAL) { finish(); return; }
       if (T > TOTAL - 0.75 && !leavingRef.current) { leavingRef.current = true; setLeaving(true); }
-      if (T > ALMOST && !almostRef.current) {        // the voice takes ~2 s to answer: ask for the hello now, so
-        almostRef.current = true;                    // «Ciao Gaetano» arrives as the curtain opens, with no gap
-        window.dispatchEvent(new Event(ALMOST_EVENT));
-      }
+      if (T > 5.6 && !almostRef.current) { almostRef.current = true; window.dispatchEvent(new Event(ALMOST_EVENT)); }
       const S = Math.min(W * 0.6, H) * 0.9, cx = W / 2, cy = H * 0.54, diag = Math.hypot(W, H);
       const fold = inC(seg(T, 6.5, 7.45));           // everything goes back into the core
       const scale = 1 - 0.88 * fold;
@@ -249,7 +274,7 @@ export function Intro({ name }: { name: string }) {
         const build = outC(seg(T, st, st + 0.55));
         if (build <= 0) return;
         const pulse = T > 2.6 ? 1 + 0.06 * Math.exp(-(T - 2.6) * 3) * Math.sin((T - 2.6) * 30 + i) : 1;
-        const R = rr * S * scale * pulse, rot = sp * T + i, alpha = (0.35 + 0.5 * build) * (1 - fold * 0.9);
+        const R = rr * S * scale * pulse, rot = sp * Tr + i, alpha = (0.35 + 0.5 * build) * (1 - fold * 0.9);
         ctx.strokeStyle = `rgba(${col},${alpha})`; ctx.fillStyle = `rgba(${col},${alpha})`;
         ctx.lineWidth = (kind === 0 ? 2.5 : 1.4) * dpr;
         if (kind === 0 || kind === 3) {                      // a full ring, drawn on as it builds
@@ -280,7 +305,7 @@ export function Intro({ name }: { name: string }) {
 
       // the radar sweep across the reactor
       if (T > 1.2 && fold < 1) {
-        const R = 0.36 * S * scale, a = T * 2.2;
+        const R = 0.36 * S * scale, a = Tr * 2.2;
         const cg = ctx.createConicGradient(a, cx, cy);
         cg.addColorStop(0, `rgba(110,240,255,${0.22 * (1 - fold)})`); cg.addColorStop(0.12, "rgba(110,240,255,0)");
         cg.addColorStop(1, "rgba(110,240,255,0)");
@@ -289,7 +314,7 @@ export function Intro({ name }: { name: string }) {
 
       // the core: a point that becomes a star
       const ign = seg(T, 2.45, 2.75), after = T > 2.6 ? Math.exp(-(T - 2.6) * 2.2) : 0;
-      const coreR = (2 + 10 * seg(T, 0.2, 2.5) + 26 * ign - 10 * fold) * dpr * (1 + 0.08 * Math.sin(T * 9)) + 60 * dpr * after;
+      const coreR = (2 + 10 * seg(T, 0.2, 2.5) + 26 * ign - 10 * fold) * dpr * (1 + 0.08 * Math.sin(Tr * 9) + 0.12 * waiting * Math.sin(Tr * 3.2)) + 60 * dpr * after;
       const g1 = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(4, coreR * 4));
       g1.addColorStop(0, "rgba(255,255,255,1)"); g1.addColorStop(0.18, "rgba(170,250,255,0.9)");
       g1.addColorStop(0.45, "rgba(70,216,229,0.28)"); g1.addColorStop(1, "rgba(70,216,229,0)");
@@ -348,6 +373,15 @@ export function Intro({ name }: { name: string }) {
         });
         ctx.textAlign = "left";
       }
+      if (waiting > 0) {                             // she is waking up: one quiet line, breathing
+        const a = waiting * (0.55 + 0.35 * Math.sin(Tr * 3.2)), dots = ".".repeat(1 + (Math.floor(Tr * 2.5) % 3));
+        ctx.textAlign = "center"; ctx.font = `600 ${Math.round(12 * dpr)}px Consolas, ui-monospace, monospace`;
+        ctx.fillStyle = `rgba(127,240,196,${a})`;
+        ctx.fillText(`M A R I A   S I   S T A   S V E G L I A N D O ${dots}`, cx, cy + 0.42 * S);
+        ctx.strokeStyle = `rgba(110,240,255,${0.35 * waiting})`; ctx.lineWidth = 1.5 * dpr;
+        ctx.beginPath(); ctx.arc(cx, cy, (0.4 + 0.015 * Math.sin(Tr * 3.2)) * S, 0, Math.PI * 2); ctx.stroke();
+        ctx.textAlign = "left";
+      }
       // corner brackets of the screen, like a visor
       const vis = seg(T, 2.7, 3.3) * (1 - fold);
       if (vis > 0) {
@@ -374,7 +408,7 @@ export function Intro({ name }: { name: string }) {
     return () => {
       cancelAnimationFrame(raf); removeEventListener("resize", resize); removeEventListener("keydown", skip);
       document.removeEventListener("visibilitychange", begin);
-      if (!finished.current) sound?.();
+      if (!finished.current) sound?.stop();
     };
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 

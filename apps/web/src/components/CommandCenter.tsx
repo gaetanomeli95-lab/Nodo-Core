@@ -6,7 +6,8 @@ import type { PresenceMode } from "./Presence";
 import { Pulse } from "./Pulse";
 import { Viewer, type ViewItem } from "./Viewer";
 import { Board } from "./holo/Board";
-import { ALMOST_EVENT, INTRO_DONE_EVENT, introDone } from "./holo/Intro";
+import { INTRO_DONE_EVENT, introDone } from "./holo/Intro";
+import { markReady, sync } from "../introSync";
 import { HoloTable, type HoloSurface } from "./holo/HoloTable";
 import { patienceFor, SLOW_TOOLS, type Work, WorkStage } from "./holo/WorkStage";
 import { MindGraph } from "./holo/MindGraph";
@@ -78,6 +79,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   useEffect(() => {                         // ?prova: lets a test (or Gaetano) open the viewer by hand
     if (!/[?&]prova\b/.test(location.search)) return;
     (window as unknown as Record<string, unknown>).nodoShow = (item: ViewItem) => setViewing(item);
+    (window as unknown as Record<string, unknown>).nodoSync = { sync, markReady };
     (window as unknown as Record<string, unknown>).nodoWork = (w: Work | null) => setWork(w);
     (window as unknown as Record<string, unknown>).nodoMusic = (on: boolean, style?: string) => on ? startMusic(style) : stopMusic();
   }, []);
@@ -216,21 +218,26 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   // No click, no scrolling: what you see on video is the program waking up and talking to you.
   const autoHello = useRef(true);
   const [introOver, setIntroOver] = useState(() => introDone());
-  const [introAlmost, setIntroAlmost] = useState(() => introDone());
   useEffect(() => {
-    const done = () => { setIntroOver(true); setIntroAlmost(true); };
-    const almost = () => setIntroAlmost(true);
+    const done = () => setIntroOver(true);
     window.addEventListener(INTRO_DONE_EVENT, done);
-    window.addEventListener(ALMOST_EVENT, almost);
-    return () => { window.removeEventListener(INTRO_DONE_EVENT, done); window.removeEventListener(ALMOST_EVENT, almost); };
+    return () => window.removeEventListener(INTRO_DONE_EVENT, done);
   }, []);
   const helloSent = useRef(false);
-  useEffect(() => {                 // the hello: asked while the intro closes, so it arrives with no silent gap
-    if (!introAlmost || !voice.connected || !voiceConfig || helloSent.current) return;
+  useEffect(() => {                 // the intro will wait for her first words (not for a voice that never connects)
+    if (introDone()) return;
+    sync.pending = true;
+    const t = window.setTimeout(() => { if (!helloSent.current) sync.pending = false; }, 6000);
+    return () => window.clearTimeout(t);
+  }, []);
+  useEffect(() => {                 // the hello: asked as the intro STARTS and held back until its last frame,
+    if (!voice.connected || !voiceConfig || helloSent.current) return;   // so her voice follows it with no gap
     helloSent.current = true;
-    if (voiceConfig.engine === "browser") { autoHello.current = false; return; }
-    void voice.prepareVoice().then(() => voiceRef.current.greet());
-  }, [introAlmost, voice.connected, voiceConfig]);  // eslint-disable-line react-hooks/exhaustive-deps
+    if (voiceConfig.engine === "browser") { autoHello.current = false; sync.pending = false; return; }
+    const unlocked = Promise.race([voice.prepareVoice(), new Promise((r) => setTimeout(r, 1500))]);
+    if (introDone()) void unlocked.then(() => voiceRef.current.greet());
+    else void unlocked.then(() => voiceRef.current.greetBehindIntro());
+  }, [voice.connected, voiceConfig]);  // eslint-disable-line react-hooks/exhaustive-deps
   const micOpened = useRef(false);
   useEffect(() => {                 // the microphone only once the intro is gone: starting it is a heavy moment
     if (!introOver || !voice.connected || !voiceConfig || micOpened.current || voiceConfig.engine === "browser") return;
