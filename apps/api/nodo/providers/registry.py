@@ -37,6 +37,11 @@ def build_providers(s: Settings) -> list[ModelProvider]:
                                               free_cloud_descriptors("github-models", s.github_models_model,
                                                                      context=128_000, reasoning=4, coding=4,
                                                                      daily_quota=150)))
+    if s.nvidia_api_key:
+        providers.append(OpenAICompatProvider("nvidia", "https://integrate.api.nvidia.com/v1", s.nvidia_api_key,
+                                              free_cloud_descriptors("nvidia", s.nvidia_model, context=128_000,
+                                                                     reasoning=3, coding=3, latency="medium",
+                                                                     daily_quota=5000)))
     if s.groq_api_key:
         providers.append(OpenAICompatProvider("groq", "https://api.groq.com/openai/v1", s.groq_api_key,
                                               groq_descriptors(s.groq_model)))

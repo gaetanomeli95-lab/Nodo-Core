@@ -379,3 +379,10 @@ def test_memory_work_leaves_gemini_flash_to_the_conversation():
     router = ModelRouter([P(desc("gemini", "flash", 4)), P(desc("gemini-lite", "lite", 3))], mode="FREE")
     assert router.select(RouteRequest(purpose="brain")).descriptor.provider == "gemini"
     assert router.select(RouteRequest(purpose="memory")).descriptor.provider == "gemini-lite"
+
+
+def test_nvidia_free_brain_joins_the_line_when_its_key_is_there():
+    from nodo.providers.registry import build_providers
+    names = [p.name for p in build_providers(Settings(nvidia_api_key="nvapi-test"))]
+    assert "nvidia" in names
+    assert "nvidia" not in [p.name for p in build_providers(Settings())]

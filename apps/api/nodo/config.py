@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openrouter_api_key: str | None = None
     openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
+    nvidia_api_key: str | None = None           # build.nvidia.com: free Developer Program, large daily quota
+    nvidia_model: str = "meta/llama-3.3-70b-instruct"
     groq_api_key: str | None = None
     groq_model: str = "llama-3.3-70b-versatile"
     # Calendar (read-only): the secret iCal link of Google Calendar / Apple / Outlook
