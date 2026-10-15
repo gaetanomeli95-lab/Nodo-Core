@@ -147,6 +147,11 @@ class ModelRouter:
             s -= 100
         s -= 50 * (d.cost_in_per_1k + d.cost_out_per_1k)
         s += {"low": 3, "medium": 1, "high": 0}[d.latency_class]
+        if req.purpose == "memory" and d.provider == "gemini":
+            # Gemini Flash's free quota is small and it is the best fast brain for talking with Gaetano: studying
+            # old chats and tidying memory ate it (15/10: «429 quota» all day, and the conversation fell back to
+            # Flash-Lite, which says «done» without doing). Memory work uses the other models first.
+            s -= 40
         if req.prefer_fast:  # a spoken answer that takes 30s feels broken: fast models jump ahead
             s += {"low": 15, "medium": 6, "high": 0}[d.latency_class]
         return s

@@ -359,3 +359,23 @@ async def test_the_same_file_made_twice_is_not_a_doubt(box, tmp_path, monkeypatc
     monkeypatch.setattr(type(box), "_desktop", staticmethod(lambda: tmp_path))
     out = await box.call("save_to_desktop", {"name": "registro-15-10.pdf"})
     assert out.get("saved"), out
+
+
+def test_memory_work_leaves_gemini_flash_to_the_conversation():
+    from nodo.db.models import Sensitivity
+    from nodo.providers.base import ModelDescriptor
+    from nodo.providers.router import ModelRouter, RouteRequest
+
+    def desc(provider, model, reasoning):
+        return ModelDescriptor(provider=provider, model=model, reasoning=reasoning, coding=3, tool_calling=True,
+                               latency_class="low", tier="free", max_sensitivity=Sensitivity.INTERNAL)
+
+    class P:
+        def __init__(self, d):
+            self.name, self.d = d.provider, d
+
+        def models(self):
+            return [self.d]
+    router = ModelRouter([P(desc("gemini", "flash", 4)), P(desc("gemini-lite", "lite", 3))], mode="FREE")
+    assert router.select(RouteRequest(purpose="brain")).descriptor.provider == "gemini"
+    assert router.select(RouteRequest(purpose="memory")).descriptor.provider == "gemini-lite"
