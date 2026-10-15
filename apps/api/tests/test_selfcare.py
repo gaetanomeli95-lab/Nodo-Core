@@ -386,3 +386,30 @@ def test_nvidia_free_brain_joins_the_line_when_its_key_is_there():
     names = [p.name for p in build_providers(Settings(nvidia_api_key="nvapi-test"))]
     assert "nvidia" in names
     assert "nvidia" not in [p.name for p in build_providers(Settings())]
+
+
+async def test_a_brain_check_says_what_is_wrong_with_a_key():
+    from nodo.providers.check import test, test_all
+
+    class Bad:
+        name = "nvidia"
+
+        def models(self):
+            from nodo.db.models import Sensitivity
+            from nodo.providers.base import ModelDescriptor
+            return [ModelDescriptor(provider="nvidia", model="m", reasoning=3, coding=3, tool_calling=True,
+                                    max_sensitivity=Sensitivity.INTERNAL)]
+
+        async def stream(self, model, messages, **kw):
+            raise RuntimeError("nvidia HTTP 401: unauthorized")
+            yield  # pragma: no cover
+
+    class Good(Bad):
+        name = "groq"
+
+        async def stream(self, model, messages, **kw):
+            from nodo.providers.base import ChatChunk
+            yield ChatChunk(delta="ok")
+    assert await test(Bad()) == (False, "chiave non valida")
+    assert await test(Good()) == (True, "funziona")
+    assert await test_all([Bad(), Good()]) == {"nvidia": "chiave non valida", "groq": "funziona"}

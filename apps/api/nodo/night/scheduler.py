@@ -218,6 +218,14 @@ class NightScheduler:
             if started := distill.resume_pending(self.c):
                 log.info("old chats: reading resumed (%d)", len(started))
         await self.maybe_selfcare(now)
+        if self.settings.env != "TEST" and (getattr(self, "_last_brains", None) is None
+                                            or now - self._last_brains >= timedelta(hours=6)):
+            self._last_brains = now               # are the keys alive? written in nodo.log (and seen at night)
+            from nodo.providers.check import test_all
+            try:
+                self.brains = await test_all(list(self.c.providers))
+            except Exception:  # noqa: BLE001
+                log.warning("brain check failed", exc_info=True)
         today = now.astimezone(self.tz).date()
         local = now.astimezone(self.tz)
         if self.settings.evening_recap and getattr(self, "_last_evening", None) != today \

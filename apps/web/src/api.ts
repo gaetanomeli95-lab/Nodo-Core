@@ -54,7 +54,11 @@ export async function get<T>(path: string): Promise<T> {
 
 export async function post<T>(path: string, body: unknown): Promise<T> {
   const r = await fetch(path, { method: "POST", headers: headers(), body: JSON.stringify(body) });
-  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  if (!r.ok) {                       // say WHY (the server's own words), not «/api/v1/setup/key: 400»
+    let detail = "";
+    try { const j = await r.json(); detail = typeof j?.detail === "string" ? j.detail : ""; } catch { /* not json */ }
+    throw new Error(detail || `${path}: ${r.status}`);
+  }
   return r.json();
 }
 

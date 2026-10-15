@@ -291,7 +291,11 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     window.speechSynthesis.speak(u);
   };
 
+  // One voice session per opening: it used to start with no settings, then again when they arrived, and again
+  // every time a key was saved — three live voices waking up at once on the small PC («si blocca»)
+  const sessionKey = config === null ? null : `${config.engine ?? ""}|${config.language ?? ""}`;
   useEffect(() => {
+    if (sessionKey === null) return;            // wait for the settings: one start, not two
     setConnected(false); setLiveOn(false); setRecovering(false);
     let closed = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -403,7 +407,7 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
       media.current?.stream.getTracks().forEach((t) => t.stop());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config]);
+  }, [sessionKey]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const stopLocalAudio = () => {
     speechQueue.current = [];

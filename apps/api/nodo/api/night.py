@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,6 +17,7 @@ from nodo.db.session import get_db
 from nodo.night import approvals
 from nodo.night.briefing import latest_or_live, pending_decisions
 
+log = logging.getLogger("nodo.setup")
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(auth)])
 _tasks: set[asyncio.Task] = set()
 
@@ -375,9 +377,18 @@ async def save_key(body: KeyIn, c: Container = Depends(container)):
     env.write_text("\n".join(out) + "\n", encoding="utf-8")
     setting = _SETTABLE_KEYS[name]
     setattr(c.settings, setting, value)
+    tested = None
     if setting in _PROVIDER_KEYS:
         from nodo.providers.registry import build_providers
         c.providers[:] = build_providers(c.settings)    # in place: every new Core picks them up
+        if c.settings.env not in ("TEST", "DEMO"):
+            from nodo.providers.check import LABEL, test
+            mine = setting.removesuffix("_api_key").replace("_", "-")
+            for p in c.providers:
+                if p.name == mine:
+                    ok, msg = await test(p)
+                    tested = f"{LABEL.get(p.name, p.name)}: {msg}"
+                    log.info("chiave salvata, %s", tested)
     elif setting == "github_token" and c.settings.github_connector != "fake" \
             and c.settings.env not in ("TEST", "DEMO"):
         from nodo.tools.github import HttpGitHubConnector
@@ -388,7 +399,7 @@ async def save_key(body: KeyIn, c: Container = Depends(container)):
             and c.settings.env not in ("TEST", "DEMO"):
         from nodo.tools.vercel import HttpVercelConnector
         c.vercel = HttpVercelConnector(value, c.settings.vercel_team_id)
-    return {"ok": True, "name": name}
+    return {"ok": True, "name": name, **({"test": tested} if tested else {})}
 
 
 @router.get("/setup/telegram")

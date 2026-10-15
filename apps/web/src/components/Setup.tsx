@@ -33,10 +33,10 @@ export function SetupView() {
     if (!keyValue.trim() || saving) return;
     setSaving(true); setKeyMsg(null); setErr(null);
     try {
-      await post("/api/v1/setup/key", { name: keyName, value: keyValue.trim() });
+      const res = await post<{ ok: boolean; test?: string }>("/api/v1/setup/key", { name: keyName, value: keyValue.trim() });
       window.dispatchEvent(new Event("nodo:access-updated"));
       setKeyValue("");
-      setKeyMsg("Chiave salvata e attiva. Ricontrollo gli accessi…");
+      setKeyMsg(res?.test ? `Chiave salvata. Prova: ${res.test}.` : "Chiave salvata e attiva. Ricontrollo gli accessi…");
       load();
     } catch (e) {
       setKeyMsg((e as Error).message);
