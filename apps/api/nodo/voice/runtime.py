@@ -1290,8 +1290,8 @@ class VoiceRuntime:
                 asyncio.get_running_loop().call_soon(
                     lambda: asyncio.ensure_future(self._spoken_call(request, heard)))
             text = ""
-        if _SILENCE.fullmatch(text):
-            text = ""          # «[silenzio]» is a choice, not words: never keep it as something Maria said
+        if _SILENCE.fullmatch(text) or not re.search(r"\w", text):
+            text = ""          # «[silenzio]», «…», «---»: a choice, not words — never kept as something Maria said
         if vs.conversation_id and (self._in_text.strip() or text):
             rows = [(role, content) for role, content in (("user", self._in_text.strip()), ("nodo", text)) if content]
             conversation_id, request_id = vs.conversation_id, f"live-{vs.id[:8]}-{vs.turn_number}"

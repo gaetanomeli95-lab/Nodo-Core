@@ -604,6 +604,17 @@ def check_entry(led: Ledger, e: LedgerEntry, *, explicit_payment: bool = True) -
         w.append("c'è già una riga uguale nello stesso giorno: è un doppione o sono due pezzi?")
     if e.status == "fatto" and e.day > led.today.isoformat():
         w.append("è un giorno futuro ma risulta già fatto")
+    if e.payment == "sospeso" and e.counterpart and e.kind in ("vendita", "credito"):
+        # a lump «sospeso totale … da dettagliare» already written: an item said now is probably PART of it
+        # (15/10: the list of what made up Enrico Patti Cash's 1410 € was being added on top, as new debt)
+        lumps = [r for r in led.open_payments() if r.id != e.id and r.kind == "credito"
+                 and (r.counterpart or "").lower() == e.counterpart.lower()
+                 and re.search(r"dettagli|elenco|totale|conto vendita", f"{r.item} {r.note or ''}", re.I)]
+        if lumps:
+            lump = lumps[0]
+            w.append(f"{e.counterpart} ha già un sospeso complessivo di {euro(lump.amount)} segnato il "
+                     f"{lump.day[8:10]}/{lump.day[5:7]}: questo articolo FA PARTE di quei {euro(lump.amount)} "
+                     "(allora va tolto da qui e scritto solo come dettaglio) o è un debito NUOVO in più?")
     if e.kind == "vendita" and e.payment == "sospeso" and e.status == "da_fare":
         pass                                    # normal: paid on delivery
     return w

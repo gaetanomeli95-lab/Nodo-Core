@@ -33,12 +33,19 @@ async def test(provider, timeout: float = 25.0) -> tuple[bool, str]:
         return False, "non risponde (più di 25 secondi)"
     except Exception as e:  # noqa: BLE001 - the message is what Gaetano needs to read
         msg = str(e)
-        for code, say in (("401", "chiave non valida"), ("403", "chiave senza permessi"),
-                          ("404", f"modello {model} non trovato"), ("429", "quota finita per adesso")):
+        for code, say in (("HTTP 401", "chiave non valida"), ("HTTP 403", "chiave senza permessi"),
+                          ("HTTP 404", f"modello {model} non trovato"), ("HTTP 410", f"modello {model} ritirato"),
+                          ("HTTP 429", "quota finita per adesso")):
             if code in msg:
-                return False, say
-        return False, msg[:160]
-    return (True, "funziona") if text.strip() else (False, "risposta vuota")
+                return False, f"{say} — {msg[:140]}"
+        return False, msg[:180]
+    try:
+        now = provider.models()[0].model
+    except Exception:  # noqa: BLE001
+        now = model
+    if not text.strip():
+        return False, "risposta vuota"
+    return True, "funziona" if now == model else f"funziona (modello aggiornato a {now})"
 
 
 async def test_all(providers) -> dict[str, str]:

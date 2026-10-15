@@ -1,7 +1,10 @@
 """OpenAI-compatible chat provider. Covers OpenAI, OpenRouter, Groq and any `/v1/chat/completions` server."""
 from __future__ import annotations
 
+import dataclasses
 import json
+import logging
+import re
 from collections.abc import AsyncIterator
 
 import httpx
@@ -17,6 +20,30 @@ from nodo.providers.base import (
     ToolTurn,
     estimate_tokens,
 )
+
+log = logging.getLogger("nodo.providers")
+# the model was retired or renamed (15/10: Groq «llama-3.3-70b-versatile» and NVIDIA «llama-3.3-70b-instruct» gone)
+_GONE = re.compile(r"HTTP (404|410)|decommission|end of life|deprecated|does not exist|model_not_found|"
+                   r"model .{0,60}not found|no such model", re.I)
+# which models to pick when the configured one is gone, best first (substrings of the provider's model ids)
+PREFER = {
+    "groq": ["openai/gpt-oss-120b", "moonshotai/kimi-k2", "llama-4-maverick", "qwen/qwen3", "llama-3.3-70b",
+             "llama-4-scout", "openai/gpt-oss-20b"],
+    "nvidia": ["deepseek-ai/deepseek-v4", "qwen/qwen3", "moonshotai/kimi-k2", "openai/gpt-oss-120b",
+               "meta/llama-4-maverick", "nvidia/llama-3.3-nemotron-super", "meta/llama-4-scout", "mistralai/mistral"],
+    "openrouter": [":free"],
+}
+_NOT_CHAT = re.compile(r"whisper|embed|tts|guard|rerank|vision-only|image|audio|ocr|parse|reward|safety|clip|"
+                       r"retriever|coder-", re.I)
+
+
+def pick_model(provider: str, ids: list[str]) -> str | None:
+    usable = [i for i in ids if not _NOT_CHAT.search(i)]
+    for want in PREFER.get(provider, []):
+        hits = sorted((i for i in usable if want.lower() in i.lower()), reverse=True)   # newest version first
+        if hits:
+            return hits[0]
+    return None
 
 
 class OpenAICompatProvider:
@@ -44,11 +71,37 @@ class OpenAICompatProvider:
     def models(self) -> list[ModelDescriptor]:
         return self._descriptors
 
+    async def refresh_model(self) -> str | None:
+        """The configured model is gone: ask the provider which models it has now and take the best one."""
+        try:
+            async with httpx.AsyncClient(timeout=20, transport=self._transport) as client:
+                r = await client.get(f"{self.base_url}/models", headers=self._headers)
+            ids = [m.get("id", "") for m in (r.json().get("data") or [])] if r.status_code < 400 else []
+        except (httpx.HTTPError, ValueError):
+            return None
+        new = pick_model(self.name, ids)
+        if new and self._descriptors and new != self._descriptors[0].model:
+            log.warning("%s: model %s is gone, now using %s", self.name, self._descriptors[0].model, new)
+            self._descriptors = [dataclasses.replace(self._descriptors[0], model=new), *self._descriptors[1:]]
+            return new
+        return None
+
     async def available(self) -> bool:
         return bool(self.api_key)
 
     async def stream(self, model: str, messages: list[ChatMessage], *, temperature: float = 0.3,
                      max_tokens: int = 800) -> AsyncIterator[ChatChunk]:
+        try:
+            async for ch in self._stream(model, messages, temperature=temperature, max_tokens=max_tokens):
+                yield ch
+        except ProviderError as e:
+            if not _GONE.search(str(e)) or not (new := await self.refresh_model()):
+                raise
+            async for ch in self._stream(new, messages, temperature=temperature, max_tokens=max_tokens):
+                yield ch
+
+    async def _stream(self, model: str, messages: list[ChatMessage], *, temperature: float = 0.3,
+                      max_tokens: int = 800) -> AsyncIterator[ChatChunk]:
         body = {**self._body(model, [{"role": m.role, "content": m.content} for m in messages], temperature,
                              max_tokens), "stream": True, "stream_options": {"include_usage": True}}
         tin = sum(estimate_tokens(m.content) for m in messages)
@@ -80,6 +133,15 @@ class OpenAICompatProvider:
 
     async def complete_tools(self, model: str, messages: list[dict], tools: list[FunctionSpec], *,
                              temperature: float = 0.4, max_tokens: int = 1200) -> ToolTurn:
+        try:
+            return await self._complete_tools(model, messages, tools, temperature=temperature, max_tokens=max_tokens)
+        except ProviderError as e:
+            if not _GONE.search(str(e)) or not (new := await self.refresh_model()):
+                raise
+            return await self._complete_tools(new, messages, tools, temperature=temperature, max_tokens=max_tokens)
+
+    async def _complete_tools(self, model: str, messages: list[dict], tools: list[FunctionSpec], *,
+                              temperature: float = 0.4, max_tokens: int = 1200) -> ToolTurn:
         """Non-streaming chat with function calling (OpenAI-compatible: OpenAI, Groq, OpenRouter, Gemini)."""
         wire = []
         for m in messages:

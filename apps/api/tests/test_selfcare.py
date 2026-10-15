@@ -410,6 +410,44 @@ async def test_a_brain_check_says_what_is_wrong_with_a_key():
         async def stream(self, model, messages, **kw):
             from nodo.providers.base import ChatChunk
             yield ChatChunk(delta="ok")
-    assert await test(Bad()) == (False, "chiave non valida")
+    ok, msg = await test(Bad())
+    assert not ok and msg.startswith("chiave non valida")
     assert await test(Good()) == (True, "funziona")
-    assert await test_all([Bad(), Good()]) == {"nvidia": "chiave non valida", "groq": "funziona"}
+    res = await test_all([Bad(), Good()])
+    assert res["groq"] == "funziona" and res["nvidia"].startswith("chiave non valida")
+
+
+async def test_a_retired_model_is_replaced_by_itself():
+    import httpx
+
+    from nodo.providers.openai_compat import OpenAICompatProvider, free_cloud_descriptors, pick_model
+    assert pick_model("groq", ["whisper-large-v3", "llama-3.1-8b-instant", "openai/gpt-oss-120b"]) == \
+        "openai/gpt-oss-120b"
+    assert pick_model("nvidia", ["nvidia/nv-embed", "meta/llama-4-maverick-17b-128e-instruct"]) == \
+        "meta/llama-4-maverick-17b-128e-instruct"
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "meta/llama-4-maverick-17b-128e-instruct"}]})
+        import json as _j
+        body = _j.loads(request.content)
+        if body["model"] == "meta/llama-3.3-70b-instruct":
+            return httpx.Response(410, json={"detail": "The model has reached its end of life"})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}], "usage": {}})
+    p = OpenAICompatProvider("nvidia", "https://x/v1", "k", free_cloud_descriptors("nvidia", "meta/llama-3.3-70b-instruct"),
+                             transport=httpx.MockTransport(handler))
+    turn = await p.complete_tools("meta/llama-3.3-70b-instruct", [{"role": "user", "content": "ciao"}], [])
+    assert turn.text == "ok" and p.models()[0].model == "meta/llama-4-maverick-17b-128e-instruct"
+
+
+def test_an_item_of_a_lump_debt_is_asked_not_added_on_top(db, seeded):
+    from nodo.ledger import Ledger, check_entry
+    led = Ledger(db, seeded, "CF Materassi", today=date(2026, 10, 15))
+    led.add(kind="credito", item="sospeso Enrico Patti Cash (conto vendita)", amount=1410,
+            counterpart="Enrico Patti Cash", note="Elenco dei prodotti da dettagliare", day="14/10")
+    e = led.add(kind="credito", item="poltroncina in pelle", amount=150, counterpart="Enrico Patti Cash",
+                payment="sospeso")
+    db.flush()
+    assert any("FA PARTE" in w for w in check_entry(led, e))
