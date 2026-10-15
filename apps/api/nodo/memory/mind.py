@@ -162,7 +162,7 @@ def is_noise(text: str) -> bool:
     return foreign / len(letters) > 0.3
 
 
-_IT_SHORT = {"si", "sì", "no", "ok", "okay", "va", "bene", "ciao", "che", "qué", "cosa", "eh", "ehi", "dai", "grazie",
+_IT_SHORT = {"si", "sì", "no", "ok", "okay", "va", "bene", "ciao", "che", "cosa", "eh", "ehi", "dai", "grazie",
              "allora", "ecco", "perfetto", "giusto", "esatto", "aspetta", "ferma", "basta", "stop", "maria", "vai",
              "mhm", "uhm", "certo", "chi", "come", "dove", "quando", "quanto", "capito", "vero", "brava", "bravo",
              "senti", "scusa", "prego", "fatto", "avanti", "poi", "e", "ma", "io", "tu"}
@@ -188,7 +188,7 @@ def is_babble(text: str) -> bool:
     if len(words) <= 2 and (sum(len(w) for w in words) < 6 or any(w in _FOREIGN for w in words)):
         return True
     foreign = sum(1 for w in words if w in _FOREIGN)
-    if _FOREIGN_MARK.search(text or "") and len(words) <= 6 and not any(w in _IT_SHORT - {"qué"} for w in words):
+    if _FOREIGN_MARK.search(text or "") and len(words) <= 6 and not any(w in _IT_SHORT for w in words):
         return True                                   # «¿Hablas?», «Não sei»: not Italian, not for Maria
     return foreign / len(words) >= 0.5
 

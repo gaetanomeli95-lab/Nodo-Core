@@ -244,7 +244,8 @@ async def test_the_register_pdf_has_days_entrate_and_uscite(box, db):  # noqa: F
     from nodo.services.documents import extract_text
     path = box.c.files.get(out["url"].rsplit("/", 1)[-1])
     text = extract_text(path)
-    for must in ("ENTRATE", "USCITE", "Rossi", "bar", "RIEPILOGO", "Chi deve ancora pagare", "Bianchi"):
+    for must in ("ENTRATE", "USCITE", "Rossi", "bar", "TOTALE DEL PERIODO", "Chi deve ancora pagare", "Bianchi",
+                 "pagato", "sospeso"):
         assert must in text, must
     assert (await box.call("ledger_pdf", {"from_day": "boh"}))["error"]
 
@@ -285,3 +286,56 @@ def test_noise_needs_to_last_before_it_cuts_maria():
     quiet = live_config(Settings(live_interrupt=False), "x", [])
     assert quiet["realtime_input_config"]["activity_handling"] == "NO_INTERRUPTION"
 
+
+
+def test_clear_orders_are_done_by_the_program_not_promised():
+    from nodo.brain.quick_read import match_action
+    assert match_action("fammi il pdf del registro dal 12 a oggi") == ("ledger_pdf", {"from_day": "12", "to_day": "oggi"})
+    assert match_action("rifammi il pdf con la grafica perfetta", "user: fammi il pdf del registro")[0] == "ledger_pdf"
+    assert match_action("crea un pdf con una poesia") is None
+    assert match_action("mostrami gli ultimi 15 minuti di conversazione") == ("show_transcript", {"minutes": 15})
+
+
+def test_maria_cannot_say_it_is_on_screen_when_it_is_not():
+    from nodo.voice.runtime import _CLAIM, action_intent
+    assert _CLAIM.search("Eccomi, te l'ho appena aperto sullo schermo.")
+    assert _CLAIM.search("Il documento sta per comparire, arriverà subito.")
+    assert not _CLAIM.search("Ci vuole un attimo, intanto lo preparo.")
+    assert action_intent("rifammi il PDF")
+
+
+def test_spanish_whats_are_noise_now():
+    from nodo.memory.mind import is_babble
+    assert is_babble("¿Qué?") and is_babble("¿Qué tal?") and is_babble("¿Llamas a las 9:30?")
+    assert not is_babble("Che?") and not is_babble("cosa?")
+
+
+def test_the_doubled_rows_of_15_10_are_corrected_once(db, seeded):
+    from nodo import data_fixes
+    from nodo.ledger import Ledger
+    led = Ledger(db, seeded, "CF Materassi", today=date(2026, 10, 15))
+    made = {}
+    for key, row in {
+        "684076c8": dict(kind="spesa", item="Gaetano", amount=40, day="13/10"),
+        "03e816c0": dict(kind="spesa", item="Giorgia", amount=50, day="13/10"),
+        "3a4009ff": dict(kind="spesa", item="bar", amount=10, day="13/10"),
+        "65fd0bc2": dict(kind="spesa", item="lavaggio", amount=10, day="13/10"),
+        "fc7484da": dict(kind="vendita", item="King Box", qty=2, amount=280, counterpart="Rachid Marrocchino Zen",
+                         day="15/10"),
+        "63f7f4d6": dict(kind="vendita", item="King Box H25", amount=70, counterpart="Rachid Marrocchino Zen",
+                         day="15/10"),
+        "fe365df3": dict(kind="vendita", item="King Box", qty=2, amount=140, counterpart="Rachid Marrocchino Zen",
+                         payment="sospeso", day="15/10"),
+        "09a2374c": dict(kind="vendita", item="King Box H25", amount=70, counterpart="Rachid Marrocchino Zen",
+                         payment="sospeso", day="15/10")}.items():
+        e = led.add(**row)
+        e.id = key + e.id[8:]
+        made[key] = e
+    db.flush()
+    done = data_fixes.apply(db, "CF Materassi")
+    assert len(done) == 2
+    assert all(made[k].status == "annullato" for k in ("684076c8", "03e816c0", "3a4009ff", "65fd0bc2", "fe365df3",
+                                                       "09a2374c"))
+    assert led.customer("Rachid")["due"] == 100.0
+    assert led.report(date(2026, 10, 13), date(2026, 10, 13))["totals"]["uscite"] == 0.0
+    assert data_fixes.apply(db, "CF Materassi") == []             # once only

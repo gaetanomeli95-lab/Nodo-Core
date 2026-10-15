@@ -163,11 +163,9 @@ async def run(c, source_id: str) -> dict:
             if n and pause:
                 # slow and steady: hundreds of chats must not eat the free quota Maria needs to talk to Gaetano
                 # (today they did: Gemini hit 429 and every answer fell back to the slow brain)
-                await asyncio.sleep(pause)
-                while settings.env != "TEST" and not _quiet(settings):
-                    _waiting.add(source_id)
-                    await asyncio.sleep(120)
-                _waiting.discard(source_id)
+                # Gaetano wants it to go on in the background while he talks («lo potresti far partire adesso»):
+                # it does, just slower (one chat every couple of minutes), so his own answers stay fast
+                await asyncio.sleep(pause if settings.env == "TEST" or _quiet(settings) else max(pause, 120))
             with session_scope() as db:
                 src = db.get(KnowledgeSource, source_id)
                 if src is None or src.status == "stopped":

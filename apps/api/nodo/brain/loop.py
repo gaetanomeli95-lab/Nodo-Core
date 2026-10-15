@@ -171,7 +171,24 @@ class Brain:
         model produced anything (nothing has been said yet, so the caller can fall back)."""
         rid = self.request_id
         box = Toolbox(self.core, self.conv, rid, text, self.channel)
-        from nodo.brain.quick_read import answer, match_read
+        from nodo.brain.quick_read import action_answer, answer, match_action, match_read
+        context = " ".join(str(m.get("content") or "")[:400]
+                           for m in recent_history(self.s, self.conv.id, 6, exclude_request=rid))
+        if act := match_action(text, context):
+            name, args = act
+            yield _ev("step", rid, step=f"tool:{name}", status="running", arguments=args)
+            result = await box.call(name, args)
+            yield _ev("step", rid, step=f"tool:{name}", status="done", ok="error" not in result)
+            if response := action_answer(name, result):
+                self.tools_used.append(name)
+                self.provider, self.model, self.text = "nodo", "direct-action", response
+                from nodo.brain.surfaces import surface_for
+                if card := surface_for(name, result):
+                    yield _ev("ui.present", rid, **card)
+                for sent in sentences(response):
+                    yield _ev("token", rid, delta=sent + " ")
+                    yield _ev("sentence", rid, text=sent)
+                return
         if quick := match_read(text):
             name, args = quick
             yield _ev("step", rid, step=f"tool:{name}", status="running", arguments=args)

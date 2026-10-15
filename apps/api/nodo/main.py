@@ -80,6 +80,12 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
                         log.info("archived %d old shop notes from memory (the register is the source now)", n)
             except Exception:
                 log.exception("could not archive old shop notes")
+            try:                                   # one-off corrections of rows written twice (see data_fixes)
+                from nodo import data_fixes
+                with session_scope() as db:
+                    data_fixes.apply(db, settings.ledger_business)
+            except Exception:
+                log.exception("could not apply the register corrections")
         c = app.state.container
         from datetime import UTC, datetime
         c.started_at = datetime.now(UTC)

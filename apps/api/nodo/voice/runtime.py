@@ -129,7 +129,7 @@ _SPOKEN_CALL = re.compile(r"(?:pensa|think)\s*\(", re.I)
 # «mostrami la foto…», «fammi un'immagine…», «crea un documento…», «completa l'immagine e me la mostri»: things only
 # the brain can do. A verb of making/showing WITH a thing to make/show, or a plain «mostrami / fammi vedere / apri».
 _ACTION = re.compile(r"\b(mostr\w*|fa(?:mmi|mme) (?:vedere|sentire)|apri(?:mi|re)?\b|salva\w* sul desktop)", re.I)
-_MAKE = re.compile(r"\b(crea\w*|disegn\w*|genera\w*|fa(?:mmi|i|re|mme)\b|prepar\w*|complet\w*|scriv\w*|"
+_MAKE = re.compile(r"\b(crea\w*|disegn\w*|genera\w*|(?:ri)?fa(?:mmi|i|re|mme)\b|rifa\w*|prepar\w*|complet\w*|scriv\w*|"
                    r"realizz\w*|produc\w*|elabor\w*)", re.I)
 _THING = re.compile(r"\b(immagin\w*|foto\w*|disegn\w*|document\w*|pdf|excel|word|tabell\w*|letter\w*|preventiv\w*|"
                     r"logo|volantin\w*|presentazion\w*|slide|file|grafic\w*|locandin\w*|biglietto|poster|pagina)\b",
@@ -138,6 +138,13 @@ _THING = re.compile(r"\b(immagin\w*|foto\w*|disegn\w*|document\w*|pdf|excel|word
 
 _NOT_SEEN = re.compile(r"\bnon (?:la |lo |li |le )?(?:vedo|vedi|c'è|ce l'ho|è appars\w*|compar\w*)|\bdov'è\b|\bdove sta\b|"
                        r"\battendo\b|\baspetto (?:ancora|l'|il|la)|\bancora niente\b", re.I)
+
+
+# Maria saying she showed or made something: true only if the screen really got it a moment ago (15/10: «te l'ho
+# appena aperto sullo schermo», «eccolo sul visore», «sta per comparire» — four times, and nothing was there)
+_CLAIM = re.compile(r"\b(te l'ho (?:appena |già )?(?:apert|mostrat|creat|preparat|fatt)\w*|eccol[oaie] (?:qui|sullo "
+                    r"schermo|sul visore)|(?:è|sono) (?:già )?sullo schermo|te l[oa] (?:sto )?apr\w* (?:adesso|subito|ora)|"
+                    r"sta per comparire)", re.I)
 
 
 def action_intent(text: str) -> bool:
@@ -791,6 +798,15 @@ class VoiceRuntime:
                 self._out_text.clear()
                 await self._send("voice.interrupted", reason="quiet", during="SPEAKING")
                 return
+            if (not self._turn_called and self._forced is None and self._last_action
+                    and time.monotonic() - getattr(self, "_last_present", 0.0) > 30 and _CLAIM.search(said[:220])):
+                # «eccolo sullo schermo» with nothing on the screen: cut it, and really do the last thing he asked
+                self._forced = (f"{self._last_action}\n(Maria ha detto che era già sullo schermo ma non c'era niente: "
+                                "fallo adesso e mostraglielo, o digli il motivo vero se non si può)")
+                self._live_muted = True
+                self._out_text.clear()
+                await self._send("voice.interrupted", reason="quiet", during="SPEAKING")
+                return
             if _SPOKEN_CALL.match(said):
                 # it SAID «pensa(richiesta=…)» instead of calling the tool: silence it, and make the call ourselves
                 self._tool_text = "".join(self._out_text)
@@ -1206,6 +1222,7 @@ class VoiceRuntime:
             if t == "step":
                 await self._send("nodo.step", **body)
             elif t == "ui.present":
+                self._last_present = time.monotonic()
                 await self._send("ui.present", **body)
             elif t == "approval.requested":
                 bindings.append(body)

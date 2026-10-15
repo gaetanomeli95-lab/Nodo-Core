@@ -198,8 +198,15 @@ class LedgerTools:
         from nodo.ledger import parse_day
         from nodo.ledger_pdf import build, day_title, file_name
         led = self._ledger()
+        from datetime import timedelta
         try:
-            start = parse_day(from_day, led.today) if from_day else led.today
+            if from_day in ("week", "settimana"):
+                start = led.today - timedelta(days=6)
+            elif from_day in ("recent", "recenti"):          # the last days with something written, up to a week
+                days = led.report(led.today - timedelta(days=6), led.today)["days_with_entries"]
+                start = parse_day(days[0], led.today) if days else led.today
+            else:
+                start = parse_day(from_day, led.today) if from_day else led.today
             end = parse_day(to_day, led.today) if to_day else start
         except ValueError as e:
             return {"error": str(e)}
