@@ -428,11 +428,13 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
     try {
       await pcm.current.unlock(); // create/resume playback from the user's gesture
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+        // no automatic gain: it lifted Maria's own voice coming back from the speakers to «someone talking»
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false },
       });
       ctx = new AudioContext();
       await ctx.resume();
       await ctx.audioWorklet.addModule("/pcm-worklet.js");
+      const gate = { on: false, floor: 0, loud: 0, openUntil: 0 };
       const src = ctx.createMediaStreamSource(stream);
       const node = new AudioWorkletNode(ctx, "pcm-worklet");
       node.port.onmessage = (ev: MessageEvent) => {
@@ -443,7 +445,25 @@ export function useVoiceSession(config: VoiceConfig | null, cb: VoiceCallbacks) 
         inputLevel.current = rms;
         if (!pcm16.length) return;
         const frame = { type: "audio.chunk", data: toB64(pcm16), mime: "audio/pcm;rate=16000" };
-        if (engineRef.current !== "api") { sock.current?.send(frame); return; }   // Live: Gemini hears everything
+        if (engineRef.current !== "api") {
+          // Live. While Maria speaks, the laptop microphone hears her own voice from the speakers (the browser's
+          // echo cancelling does not cover this kind of playback) and Gemini took it for Gaetano interrupting:
+          // 16 turns out of 38 cut on 15/10. During her speech only a voice clearly louder than her echo passes
+          // (Gaetano saying «ferma», «aspetta» close to the PC); the rest is sent as silence.
+          const now = Date.now();
+          if (playingRef.current) {
+            if (!gate.on) { gate.on = true; gate.floor = rms; gate.loud = 0; gate.openUntil = 0; }
+            const bar = Math.max(0.03, gate.floor * 2.8);
+            if (rms > bar) gate.loud += 1; else { gate.loud = 0; gate.floor = gate.floor * 0.95 + rms * 0.05; }
+            if (gate.loud >= 3) gate.openUntil = now + 600;          // ~60 ms of real voice opens it…
+            if (now > gate.openUntil) {                              // …otherwise she hears silence, not herself
+              sock.current?.send({ ...frame, data: toB64(new Uint8Array(pcm16.length)) });
+              return;
+            }
+          } else gate.on = false;
+          sock.current?.send(frame);
+          return;
+        }
         // api engine: speak, pause ~0.8 s, the utterance goes to the server. Nothing is sent while NODO works
         // or speaks (no echo turned into a question); interrupting is a click.
         const v = vad.current, now = Date.now();
