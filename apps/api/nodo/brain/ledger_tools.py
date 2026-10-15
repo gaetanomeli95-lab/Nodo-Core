@@ -133,7 +133,9 @@ class LedgerTools:
                   {"type": "object", "properties": {
                       "from_day": {**_STR, "description": "primo giorno (es. 12/10, lunedì, ieri; default oggi)"},
                       "to_day": {**_STR, "description": "ultimo giorno (default uguale al primo, o oggi se dice "
-                                                        "«da … a oggi»)"}}}, self.ledger_pdf)
+                                                        "«da … a oggi»)"},
+                      "desktop": {"type": "boolean", "description": "true se vuole anche una copia sul desktop"}}},
+                  self.ledger_pdf)
         self._add("ledger_open", f"Cosa resta aperto nel registro di {biz}: pagamenti sospesi (chi deve ancora "
                                  "pagare e quanto) e consegne/lavori da fare.", {"type": "object", "properties": {}},
                   self.ledger_open)
@@ -192,7 +194,7 @@ class LedgerTools:
             out["errors"] = errors
         return out
 
-    async def ledger_pdf(self, from_day: str | None = None, to_day: str | None = None) -> dict:
+    async def ledger_pdf(self, from_day: str | None = None, to_day: str | None = None, desktop: bool = False) -> dict:
         if self.c is None or self.c.files is None:
             return {"error": "archivio file non disponibile"}
         from nodo.ledger import parse_day
@@ -222,8 +224,16 @@ class LedgerTools:
         label = day_title(start) if start == end else f"dal {day_title(start)} al {day_title(end)}"
         doc = self.c.files.register(self.s, self.org, p.name, f"Registro {label}",
                                     summary=f"registro in PDF ({len(data) // 1024 or 1} KB)")
-        return {"created": doc.title, "url": doc.uri, "format": "pdf",
-                "note": "PDF pronto e già sullo schermo: giorni separati, entrate a sinistra, uscite a destra."}
+        out = {"created": doc.title, "url": doc.uri, "format": "pdf",
+               "note": "PDF pronto e già sullo schermo: giorni separati, entrate a sinistra, uscite a destra."}
+        if desktop and (desk := self._desktop()) is not None:
+            import shutil
+            target, n = desk / p.name, 2
+            while target.exists():
+                target, n = desk / f"{p.stem} ({n}){p.suffix}", n + 1
+            shutil.copy2(p, target)
+            out["desktop"] = target.name
+        return out
 
     async def ledger_update(self, entry: str, day: str | None = None, new_day: str | None = None,
                             **changes) -> dict:
@@ -234,7 +244,9 @@ class LedgerTools:
             return {"updated": False, "error": str(ex)}
         if e is None:
             return {"updated": False,
-                    "error": "più righe simili: chiedi quale" if cands else f"non trovo «{entry}» nel registro",
+                    "error": "più righe simili: chiedi quale" if cands else (
+                        f"non trovo «{entry}» nel registro: NON correggere altre righe al suo posto. Digli che "
+                        f"«{entry}» non c'è e chiedigli se lo segni adesso come nuovo (ledger_add)"),
                     "candidates": [{"id": r.id[:8], "row": sentence(r), "day": r.day} for r in cands]}
         if new_day:
             changes["day"] = new_day

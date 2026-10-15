@@ -205,6 +205,24 @@ class Brain:
                     yield _ev("sentence", rid, text=sent)
                 return
         messages: list[dict] = [{"role": "system", "content": build_persona(self.settings, self.snapshot(text))}]
+        from nodo.brain.quick_read import recall_query
+        if q := recall_query(text):
+            # «ti ricordi…», «trova il progetto che si chiama…»: look in the old chats and in what was said BEFORE
+            # answering, so «non lo trovo» is never said without looking
+            found = []
+            try:
+                for name, args in (("search_knowledge", {"query": q}), ("search_conversations", {"query": q})):
+                    res = await box.call(name, args)
+                    for h in (res.get("results") or [])[:4]:
+                        found.append(f"- {h.get('title') or h.get('who') or ''} ({h.get('when', '')}): "
+                                     f"{str(h.get('snippet') or h.get('text') or '')[:260]}")
+            except Exception:  # noqa: BLE001 - a failed search must not stop the answer
+                found = []
+            messages[0]["content"] += (
+                f"\n\nRICERCA GIÀ FATTA PER TE su «{q}» (vecchie chat di ChatGPT e conversazioni con Gaetano):\n"
+                + ("\n".join(found) if found else "niente trovato con queste parole: prova altre parole con "
+                   "search_knowledge prima di dire che non c'è")
+                + "\nUsala per rispondere: nomi e progetti possono avere un nome nuovo (es. un progetto rinominato).")
         if self.directed:
             messages[0]["content"] += ("\nQuesta richiesta è già stata rivolta a te. Rispondi o chiedi un "
                                        "chiarimento breve: non usare il segnale di silenzio.")

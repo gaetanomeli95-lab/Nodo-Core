@@ -719,6 +719,12 @@ class ExtraTools(LedgerTools):
         else:
             hit, cands = _best(name, rows, lambda r: f"{r['title']} {(r['uri'] or '').rsplit('/', 1)[-1]}",
                                floor=55, partial=True)
+            if hit is None and cands:
+                # the same file made again (the register PDF asked twice): not a doubt, take the newest one
+                same = {re.sub(r"\W+", "", (r["uri"] or "").rsplit("/", 1)[-1].lower()) for r in cands} | set()
+                titles = {r["title"].strip().lower() for r in cands}
+                if len(same) == 1 or len(titles) == 1:
+                    hit = next(r for r in rows if r in cands)
             if hit is None:
                 return None, {"error": "più file simili: chiedi quale" if cands else f"non trovo il file «{name}»",
                               "candidates": [r["title"] for r in (cands or rows[:5])]}

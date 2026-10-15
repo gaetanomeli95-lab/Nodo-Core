@@ -147,6 +147,10 @@ _CLAIM = re.compile(r"\b(te l'ho (?:appena |già )?(?:apert|mostrat|creat|prepar
                     r"sta per comparire)", re.I)
 
 
+_CLAIM_SAVED = re.compile(r"\b((?:te l'ho|l'ho|ho) (?:già )?(?:messo|salvato|copiato) (?:sul|nel) desktop|"
+                          r"(?:è|sono) (?:già )?(?:salvat\w+ )?(?:sul|nel) desktop)", re.I)
+
+
 def action_intent(text: str) -> bool:
     t = text or ""
     return bool(_ACTION.search(t) or (_MAKE.search(t) and _THING.search(t)))
@@ -807,6 +811,14 @@ class VoiceRuntime:
                 self._out_text.clear()
                 await self._send("voice.interrupted", reason="quiet", during="SPEAKING")
                 return
+            if (not self._turn_called and self._forced is None and _CLAIM_SAVED.search(said[:220])
+                    and time.monotonic() - getattr(self, "_last_saved", 0.0) > 60):
+                # «te l'ho messo sul desktop» and nothing was saved (15/10: the copy had failed): really save it
+                self._forced = "salvalo sul desktop"
+                self._live_muted = True
+                self._out_text.clear()
+                await self._send("voice.interrupted", reason="quiet", during="SPEAKING")
+                return
             if _SPOKEN_CALL.match(said):
                 # it SAID «pensa(richiesta=…)» instead of calling the tool: silence it, and make the call ourselves
                 self._tool_text = "".join(self._out_text)
@@ -1219,6 +1231,9 @@ class VoiceRuntime:
                 want = loop.time() + SLOW_TOOLS_S[tool] + self.c.settings.brain_deadline_s
                 if (limit.when() or 0) < want:
                     limit.reschedule(want)
+            if t == "step" and body.get("status") == "done" and body.get("ok") and tool in ("save_to_desktop",
+                                                                                          "ledger_pdf"):
+                self._last_saved = time.monotonic()
             if t == "step":
                 await self._send("nodo.step", **body)
             elif t == "ui.present":

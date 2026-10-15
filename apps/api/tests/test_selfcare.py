@@ -339,3 +339,23 @@ def test_the_doubled_rows_of_15_10_are_corrected_once(db, seeded):
     assert led.customer("Rachid")["due"] == 100.0
     assert led.report(date(2026, 10, 13), date(2026, 10, 13))["totals"]["uscite"] == 0.0
     assert data_fixes.apply(db, "CF Materassi") == []             # once only
+
+
+def test_save_it_on_the_desktop_and_look_before_saying_it_is_not_there():
+    from nodo.brain.quick_read import match_action, recall_query
+    from nodo.voice.runtime import _CLAIM_SAVED
+    assert match_action("Lo puoi salvare nel desktop.") == ("save_to_desktop", {"name": "l'ultimo"})
+    assert match_action("fammi il pdf del registro e salvalo sul desktop")[1]["desktop"] is True
+    assert match_action("mettimi la foto sul desktop") is None
+    assert recall_query("Riesci a trovare il progetto che si chiama Regia? Quello per Tommaso.") == "Regia Tommaso"
+    assert recall_query("quanto ho incassato oggi") is None
+    assert _CLAIM_SAVED.search("Te l'ho messo sul desktop.") and _CLAIM_SAVED.search("Esatto, è già salvato sul desktop.")
+
+
+async def test_the_same_file_made_twice_is_not_a_doubt(box, tmp_path, monkeypatch):  # noqa: F811
+    first = await box.call("ledger_pdf", {})
+    second = await box.call("ledger_pdf", {})
+    assert first["url"] and second["url"]
+    monkeypatch.setattr(type(box), "_desktop", staticmethod(lambda: tmp_path))
+    out = await box.call("save_to_desktop", {"name": "registro-15-10.pdf"})
+    assert out.get("saved"), out
