@@ -228,6 +228,11 @@ def test_save_key_from_the_panel(client, container, tmp_path, monkeypatch):
     assert r.status_code == 400                                    # only whitelisted keys
     r = client.post("/api/v1/setup/key", json={"name": "NODO_GEMINI_API_KEY", "value": "  "})
     assert r.status_code == 400
+    # a pasted error message or URL is not a key (seen live: «/api/v1/setup/key: 400» saved as NVIDIA key)
+    r = client.post("/api/v1/setup/key", json={"name": "NODO_NVIDIA_API_KEY", "value": "/api/v1/setup/key: 400"})
+    assert r.status_code == 400
+    r = client.post("/api/v1/setup/key", json={"name": "NODO_TELEGRAM_BOT_TOKEN", "value": "123456:ABCdef_9"})
+    assert r.status_code == 200                        # bot tokens legitimately contain a colon
 
 
 def test_approval_answer_speaks_through_live(client, db, container):

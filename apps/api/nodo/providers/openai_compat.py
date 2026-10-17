@@ -27,8 +27,7 @@ _GONE = re.compile(r"HTTP (404|410)|decommission|end of life|deprecated|does not
                    r"model .{0,60}not found|no such model", re.I)
 # which models to pick when the configured one is gone, best first (substrings of the provider's model ids)
 PREFER = {
-    "groq": ["openai/gpt-oss-120b", "moonshotai/kimi-k2", "llama-4-maverick", "qwen/qwen3", "llama-3.3-70b",
-             "llama-4-scout", "openai/gpt-oss-20b"],
+    "groq": ["qwen/qwen3", "openai/gpt-oss-120b", "openai/gpt-oss-20b"],   # llama-3.3/4 retired on Groq 10/2026
     "nvidia": ["deepseek-ai/deepseek-v4", "qwen/qwen3", "moonshotai/kimi-k2", "openai/gpt-oss-120b",
                "meta/llama-4-maverick", "nvidia/llama-3.3-nemotron-super", "meta/llama-4-scout", "mistralai/mistral"],
     "openrouter": [":free"],

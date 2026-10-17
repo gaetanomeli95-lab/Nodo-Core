@@ -45,9 +45,9 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = None
     openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
     nvidia_api_key: str | None = None           # build.nvidia.com: free Developer Program, large daily quota
-    nvidia_model: str = "meta/llama-3.3-70b-instruct"
+    nvidia_model: str = "deepseek-ai/deepseek-v4"   # llama-3.3-70b-instruct retired on NVIDIA 10/2026
     groq_api_key: str | None = None
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "qwen/qwen3.8-27b"         # llama-3.3-70b-versatile retired 10/2026; qwen3.8 answers in Italian
     # Calendar (read-only): the secret iCal link of Google Calendar / Apple / Outlook
     calendar_ics_url: str | None = None
     learn_from_chats: bool = True              # once a conversation is over, NODO keeps the lasting facts it contained

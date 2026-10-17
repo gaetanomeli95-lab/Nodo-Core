@@ -44,7 +44,9 @@ OnEvent = Callable[[dict], Awaitable[None]]
 # credential. It is NOT a quota reset timer or a way to bypass project limits.
 _CONNECT_TIMEOUT_S = 20            # a home connection can take its time to open the socket
 _QUOTA_COOLDOWN_S = 3600
+_OFFLINE_COOLDOWN_S = 300          # DNS/TCP failures mean the machine is offline: rest 5 min, not 1 hour
 _quota = {"key": None, "until": 0.0}
+_offline_until = 0.0
 
 
 class LiveQuotaExceeded(RuntimeError):
@@ -63,8 +65,16 @@ def _is_quota_error(e: Exception | str) -> bool:
                                           "rate_limit_exceeded", "too many requests", "429"))
 
 
+def _is_offline_error(e: Exception | str) -> bool:
+    s = str(e).lower()
+    return any(m in s for m in ("getaddrinfo", "name or service not known", "nodename",
+                                "temporary failure in name resolution", "connecterror", "timed out"))
+
+
 def quota_note(settings) -> str | None:
     """Temporary local backoff; not a guarantee about Google's reset schedule."""
+    if time.monotonic() < _offline_until:
+        return "nessuna connessione a Google in questo momento — voce browser attiva"
     key = settings.gemini_api_key
     if key and _quota["key"] == _key_fingerprint(key) and time.monotonic() < _quota["until"]:
         return ("Gemini Live ha segnalato un limite di quota. Voce browser attiva; "
@@ -214,6 +224,12 @@ class LiveBridge:
                 last = e
                 log.info("live model %s refused the connection: %s", model, safe_error(e))
                 self._cm = self._session = None
+                if _is_offline_error(e):
+                    # no point retrying the whole ladder while the PC is offline (DNS failed):
+                    # rest the engine a few minutes instead of logging a storm every attempt
+                    global _offline_until
+                    _offline_until = time.monotonic() + _OFFLINE_COOLDOWN_S
+                    raise
                 if _is_quota_error(e):
                     _mark_quota(settings=self.settings)
                     raise LiveQuotaExceeded(

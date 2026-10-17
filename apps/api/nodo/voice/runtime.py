@@ -1290,10 +1290,17 @@ class VoiceRuntime:
                 asyncio.get_running_loop().call_soon(
                     lambda: asyncio.ensure_future(self._spoken_call(request, heard)))
             text = ""
+        text = re.sub(r"(?s)<!--.*?-->", "", text).strip()   # «<!-- Nessuna risposta richiesta -->»: silence too
         if _SILENCE.fullmatch(text) or not re.search(r"\w", text):
             text = ""          # «[silenzio]», «…», «---»: a choice, not words — never kept as something Maria said
-        if vs.conversation_id and (self._in_text.strip() or text):
-            rows = [(role, content) for role, content in (("user", self._in_text.strip()), ("nodo", text)) if content]
+        input_text = self._in_text.strip()
+        from nodo.memory.mind import is_noise
+        if input_text and is_noise(input_text):
+            # Gemini transcribing Sicilian as Chinese/French is noise, not a diary entry
+            self._log("voice.input_noise_dropped", {"text": input_text[:60]})
+            input_text = ""
+        if vs.conversation_id and (input_text or text):
+            rows = [(role, content) for role, content in (("user", input_text), ("nodo", text)) if content]
             conversation_id, request_id = vs.conversation_id, f"live-{vs.id[:8]}-{vs.turn_number}"
 
             def save() -> None:

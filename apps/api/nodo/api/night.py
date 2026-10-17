@@ -361,6 +361,13 @@ async def save_key(body: KeyIn, c: Container = Depends(container)):
         raise HTTPException(400, "Valore non valido.")
     if name == "NODO_VOICE_ENGINE" and value not in ("auto", "precise", "browser"):
         raise HTTPException(400, "Valore non valido: auto, precise o browser.")
+    # a pasted error line or URL is not a credential: real keys are a single token-ish word
+    # (Telegram bot tokens legitimately contain «12345:ABC…», so only / and space are rejected there)
+    if name.endswith(("_API_KEY", "_TOKEN")):
+        bad = ("/", " ") if name == "NODO_TELEGRAM_BOT_TOKEN" else ("/", ":", " ")
+        if any(ch in value for ch in bad) or value.lower().startswith(("http", "api", "error")):
+            raise HTTPException(400, "Non sembra una chiave: incolla solo il valore della chiave, "
+                                     "senza URL o messaggi di errore.")
     env = Path(os.environ.get("NODO_ENV_FILE") or Path(__file__).resolve().parents[2] / ".env")
     lines = env.read_text(encoding="utf-8").splitlines() if env.exists() else []
     out, written = [], False
