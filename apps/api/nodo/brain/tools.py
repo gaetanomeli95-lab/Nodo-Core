@@ -191,6 +191,12 @@ class Toolbox(ExtraTools):
         if tool is None:
             return {"error": f"strumento sconosciuto: {name}"}
         clean = _fit_args(tool.handler, {k: v for k, v in (args or {}).items() if v not in (None, "")})
+        try:    # the panel sees the work START, not only when it is over (agent.work is also in the feed)
+            self.core.events.emit("agent.work", {"tool": name, "running": True,
+                                                 "what": str(clean)[:160]},
+                                  request_id=self.request_id, organization_id=self.org)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             out = await tool.handler(**clean)
         except TypeError as e:
