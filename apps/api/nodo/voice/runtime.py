@@ -392,7 +392,7 @@ class VoiceRuntime:
             if vs.state == VoiceState.IDLE:
                 await self._set_state(VoiceState.LISTENING)
             self._live_used = True
-            vs.mark("speech_started")
+            vs.mark_acquisition("speech_started")
             try:
                 await self._live.send_audio(protocol.decode_audio(msg.data))  # Gemini hears you directly
             except live_engine.LiveDropped as e:
@@ -407,7 +407,7 @@ class VoiceRuntime:
             await self._set_state(VoiceState.LISTENING)
         if vs.state != VoiceState.LISTENING:
             return  # audio outside a listening phase is ignored (no silent capture)
-        vs.mark("speech_started")
+        vs.mark_acquisition("speech_started")
         chunk = protocol.decode_audio(msg.data)
         if msg.mime:
             self._chunk_mime = msg.mime
@@ -422,7 +422,7 @@ class VoiceRuntime:
 
     async def _on_speech_end(self) -> None:
         vs = self.vs
-        vs.mark("speech_end")
+        vs.mark_acquisition("speech_end")
         if self._live is not None:
             try:
                 await self._live.end_audio()
@@ -439,20 +439,24 @@ class VoiceRuntime:
             audio, self._audio = bytes(self._audio), bytearray()
             mime = self._chunk_mime or self._audio_mime
             if mime.startswith("audio/pcm") and len(audio) < _MIN_UTTERANCE_BYTES:
+                vs.discard_acquisition_stamps()
                 await self._set_state(VoiceState.LISTENING)       # a click or a cough: nothing to transcribe
                 return
             try:
                 t = await stt.transcribe(audio, mime, vs.language)
             except Exception as e:
+                vs.discard_acquisition_stamps()
                 await self._send("error", where="stt", message=f"{type(e).__name__}: {e}")
                 await self._set_state(VoiceState.LISTENING)
                 return
             if not t.text.strip():
+                vs.discard_acquisition_stamps()
                 await self._set_state(VoiceState.LISTENING)       # silence or noise: keep listening quietly
                 return
             await self._send("transcript.final", text=t.text, provider=t.provider)
             await self._begin_turn(t.text)
         elif vs.state == VoiceState.LISTENING:
+            vs.discard_acquisition_stamps()
             await self._set_state(VoiceState.IDLE)
 
     async def _pump_stt(self) -> None:
@@ -463,12 +467,13 @@ class VoiceRuntime:
                 if self._gen != gen or self._dead:
                     return
                 if ev.kind == "partial":
-                    self.vs.mark("transcript_partial_first")
+                    self.vs.mark_acquisition("transcript_partial_first")
                     await self._send("transcript.partial", text=ev.text)
                 elif ev.kind == "final":
                     await self._send("transcript.final", text=ev.text, provider=self.c.stt.name)
                     await self._begin_turn(ev.text)
                 elif ev.kind == "error":
+                    self.vs.discard_acquisition_stamps()
                     await self._send("error", where="stt", message=ev.error or "stt error")
                     await self._set_state(VoiceState.LISTENING)
         except Exception as e:
@@ -483,12 +488,12 @@ class VoiceRuntime:
             await self._set_state(VoiceState.LISTENING)
         if vs.state == VoiceState.LISTENING:
             await self._set_state(VoiceState.TRANSCRIBING)
-        vs.mark("speech_started")
-        vs.mark("transcript_partial_first")
+        vs.mark_acquisition("speech_started")
+        vs.mark_acquisition("transcript_partial_first")
         await self._send("transcript.partial", text=text)
 
     async def _on_final(self, text: str) -> None:
-        self.vs.mark("speech_end")
+        self.vs.mark_acquisition("speech_end")
         if self._live_wanted:           # typed text also works in a live session: Gemini answers it
             if await self._ensure_live() and self._live is not None:
                 if not self.vs.turn_active:
@@ -511,6 +516,7 @@ class VoiceRuntime:
         from nodo.memory.mind import is_noise
         if is_noise(text):                     # other alphabets, «egg», a cough: not a question, stay quiet
             self._log("voice.noise_ignored", {"text": text[:60]})
+            self.vs.discard_acquisition_stamps()
             await self._set_state(VoiceState.LISTENING)
             return
         if self._turn_task and not self._turn_task.done() and not self.vs.interrupted:

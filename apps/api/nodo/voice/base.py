@@ -203,14 +203,32 @@ class VoiceSession:
         self._enter(VoiceState.INTERRUPTED)
 
     def begin_turn(self) -> int:
-        """Marks a new turn: resets the interrupt flag and latency stamps, returns the turn number."""
+        """Marks a new turn: resets the interrupt flag and the latency stamps, returns the turn number.
+        Stamps recorded after the previous turn ended (speech_start/end, partial transcripts) belong
+        to the utterance being answered and are carried over — everything older is previous turn."""
         self.turn_number += 1
         self.interrupted = False
-        self.stamps = {"turn_started": _now()}
+        done_at = self.stamps.get("turn_done")
+        self.stamps = {k: v for k, v in self.stamps.items() if done_at is None or v > done_at}
+        self.stamps["turn_started"] = _now()
         return self.turn_number
+
+    def discard_acquisition_stamps(self) -> None:
+        """The utterance produced no turn (noise, failed or empty STT): drop marks newer than the last
+        finished turn, so a later turn cannot inherit them."""
+        done_at = self.stamps.get("turn_done")
+        if done_at is None:
+            self.stamps.clear()
+        else:
+            self.stamps = {k: v for k, v in self.stamps.items() if v <= done_at}
 
     def mark(self, stamp: str) -> None:
         self.stamps.setdefault(stamp, _now())
+
+    def mark_acquisition(self, stamp: str) -> None:
+        """Pre-turn marks describe the CURRENT utterance: they must overwrite a leftover from the
+        previous turn (the dict still holds it until begin_turn runs)."""
+        self.stamps[stamp] = _now()
 
     def latency_ms(self) -> dict[str, int]:
         """Computed latency metrics for the finished turn (all durations in ms)."""

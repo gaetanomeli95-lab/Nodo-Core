@@ -191,6 +191,62 @@ def test_ws_turn_metrics_persisted(client, db):
     assert row is not None and row.turn_done_at and "total" in row.latency_ms
 
 
+def test_begin_turn_preserves_stamps_of_the_utterance_being_answered():
+    """S02: speech_started/speech_end are marked BEFORE begin_turn (speech ends → STT → the turn starts);
+    wiping the whole dict lost them, hiding the STT span from latency_ms."""
+    from nodo.voice.base import VoiceSession
+    s = VoiceSession()
+    s.begin_turn()
+    s.stamps.update({"transcript_final": "2026-10-18T20:00:01+00:00",
+                     "tts_done": "2026-10-18T20:00:02+00:00", "turn_done": "2026-10-18T20:00:03+00:00"})
+    s.stamps.update({"speech_started": "2026-10-18T20:00:04+00:00", "speech_end": "2026-10-18T20:00:05+00:00"})
+    s.begin_turn()
+    assert "speech_started" in s.stamps and "speech_end" in s.stamps
+    assert "turn_done" not in s.stamps and "tts_done" not in s.stamps and "transcript_final" not in s.stamps
+    # first turn (no turn_done yet): everything recorded so far belongs to this utterance
+    s2 = VoiceSession()
+    s2.stamps.update({"speech_started": "2026-10-18T20:00:00+00:00", "speech_end": "2026-10-18T20:00:01+00:00"})
+    s2.begin_turn()
+    assert "speech_end" in s2.stamps and "speech_started" in s2.stamps
+
+
+def test_utterance_without_turn_cannot_leak_stamps_into_the_next_one():
+    """STT failed, noise or tiny audio produce no turn: discarding the marks keeps a later turn from
+    inheriting a stale speech_end and reporting an inflated total."""
+    from nodo.voice.base import VoiceSession
+    s = VoiceSession()
+    s.begin_turn()
+    s.stamps["turn_done"] = "2026-10-18T20:00:03+00:00"
+    s.mark("speech_end")
+    s.discard_acquisition_stamps()
+    s.begin_turn()
+    assert "speech_end" not in s.stamps
+    s = VoiceSession()          # no finished turn at all: everything is dropped
+    s.mark("speech_end")
+    s.discard_acquisition_stamps()
+    s.begin_turn()
+    assert "speech_end" not in s.stamps
+
+
+def test_ws_stt_span_is_reported_in_turn_latency(client):
+    """S02 integration: transcript.final marks speech_end, then run_turn->begin_turn must keep it."""
+    with client.websocket_connect(WS) as ws:
+        _start(ws)
+        ws.send_json({"type": "transcript.final", "text": "cosa devo fare oggi"})
+        _, done = _recv_until(ws, "voice.turn.done")
+        assert "stt" in done["latency_ms"] and done["latency_ms"]["stt"] >= 0
+
+
+def test_ws_two_turns_each_report_their_own_latency(client):
+    with client.websocket_connect(WS) as ws:
+        _start(ws)
+        for text in ("cosa devo fare oggi", "fammi il punto su prosperya"):
+            ws.send_json({"type": "transcript.final", "text": text})
+            _, done = _recv_until(ws, "voice.turn.done")
+            lat = done["latency_ms"]
+            assert "stt" in lat and "total" in lat and lat["total"] >= lat["stt"]
+
+
 def test_ws_works_with_the_web_panel_mounted(engine, settings, container, tmp_path, monkeypatch):
     """As on your PC: the built panel is served at "/" and the voice WebSocket must still connect."""
     from fastapi.testclient import TestClient

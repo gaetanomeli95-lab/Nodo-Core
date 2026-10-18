@@ -1,6 +1,6 @@
 # NODO Core — Cognitive Evolution: passaggio di consegne
 
-Aggiornato: 19 ottobre 2026, Europe/Rome. Sessione 01, **sola FASE 0**.
+Aggiornato: 19 ottobre 2026, Europe/Rome. Sessione 02 (Devin): **S02 completata**.
 
 ## Obiettivo e limiti della sessione
 
@@ -54,7 +54,7 @@ Gli aggiornamenti successivi alla PR #8 includono lavagna viva, ricerca preventi
 
 ## Lacune e ipotesi da distinguere
 
-1. **Riprodotto:** `VoiceSession.begin_turn()` azzera `stamps`. Il percorso `_on_speech_end` o `_on_final` registra `speech_end` prima di `_begin_turn` → `run_turn` → `begin_turn()`. Il timestamp appena raccolto si perde; `stt` può mancare e il totale escludere parte del riconoscimento. La riproduzione sotto verifica l'azzeramento; il collegamento al percorso è confermato dalla lettura del codice, non da una nuova prova microfono.
+1. **CORRETTO in S02 (Devin, 2026-10-19):** `VoiceSession.begin_turn()` azzerava `stamps`, perdeva `speech_end`/`speech_started`/`transcript_partial_first` raccolti nella stessa acquisizione, e `mark()` con `setdefault` impediva la rimarcatura nel turno successivo. Ora `begin_turn` conserva i timbri più recenti dell'ultimo `turn_done`, `mark_acquisition()` sovrascrive i timbri pre-turno, e `discard_acquisition_stamps()` pulisce i percorsi che abortiscono senza turno (audio troppo corto, STT fallita/vuota, rumore). Verificato su DB reale: i turni precedenti mostravano solo `model_total`/`tts_total`/`total` — `stt`, `context`, `model_ttft`, `tts_tfa` mancavano in ogni riga di `voice_turn_metrics`.
 2. **Osservato nel codice:** `_live_finalize_input` emette `transcript.final` senza marcare `transcript_final`; la copertura delle misure Live è diversa da quella non-Live. La prima trascrizione parziale Live non è necessariamente l'inizio fisico del parlato. Correggere questo punto in una sessione separata dalla prossima.
 3. **Da misurare:** costo delle scansioni memoria e della preparazione del contesto. I limiti di caratteri riducono l'input al modello, non garantiscono meno letture dal database.
 4. **Da misurare:** le richieste di ricordo riconosciute eseguono già `search_knowledge` e `search_conversations` prima del modello; se non trovano risultati invitano a cercare ancora. Non introdurre subito un'altra cache: prima contare le chiamate e verificare query, scadenza e invalidazione.
@@ -74,14 +74,14 @@ Gli aggiornamenti successivi alla PR #8 includono lavagna viva, ricerca preventi
 | ID | Stato | Risultato |
 | --- | --- | --- |
 | S01 / Fase 0 | Completata in questo documento | Base remota verificata, percorso e telemetria censiti, lacuna timestamp riprodotta, checkpoint documentale. |
-| S02 / Fase 1 | **Prossima singola attività** | Conservare correttamente `speech_end` nel percorso vocale non-Live e aggiungere un test di regressione mirato. |
-| S03 / Fase 1 | Aperta, non iniziare insieme a S02 | Chiarire/coprirne i timestamp nel percorso Live senza inventare fine parlato non disponibile. |
+| S02 / Fase 1 | **Completata (Devin, 2026-10-19)** | `begin_turn` conserva i timbri successivi all'ultimo `turn_done`; `mark_acquisition` sovrascrive i timbri pre-turno; `discard_acquisition_stamps` evita eredità da acquisizioni abortite. 4 test nuovi, 40/40 verdi in `test_voice_ws.py`+`test_responsiveness.py`. |
+| S03 / Fase 1 | **Prossima singola attività** | Chiarire/coprirne i timestamp nel percorso Live senza inventare fine parlato non disponibile. |
 | Fase 2 | Non iniziata | Recupero associativo: riusare memoria e ricerca esistenti; misurare prima di scegliere nuove tecnologie. |
 | Fase 3 | Non iniziata | Evoluzione del router e prevenzione ricerche ripetitive. |
 | Fase 4 | Non iniziata | Valutare le lezioni già presenti e trasformare correzioni in regressioni misurabili. |
 | Fase 5 | Non iniziata | Collegare recuperi identificabili a MindGraph; mantenere distinta attività reale da corrispondenza grafica di parole. |
 
-**S02, confine preciso:** leggere solo i metodi di avvio turno in `voice/runtime.py`, `voice/base.py` e i relativi test. Iniziare da un test che mostri il timestamp perso. Correggere il ciclo di vita del turno conservando i timestamp della stessa acquisizione, senza ereditare quelli del turno precedente. Verificare due turni consecutivi e un'interruzione; niente nuove colonne, motori, routing, cache o interfaccia. Se il caso richiede un refactoring ampio, documentare il blocco e salvare un checkpoint sicuro. Fermarsi dopo test, HANDOFF, commit e push.
+**S03, confine preciso:** leggere solo `_live_finalize_input` e i marchi di timestamp nel percorso Live in `voice/runtime.py`, `voice/live.py` e i relativi test (`test_voice_live.py`). Coprire `transcript_final`/fine-parlato dove l'evento reale è disponibile; non inventare un `speech_end` fittizio. Verificare le metriche Live su due turni e un'interruzione; niente nuove colonne, motori, routing, cache o interfaccia. Fermarsi dopo test, HANDOFF, commit e push.
 
 ## Verifiche effettivamente eseguite in S01
 
@@ -119,7 +119,7 @@ PY
 1. Leggere questo documento. Prima di cambiare branch controllare `git status --short`; conservare modifiche di altri senza reset/stash automatici o sovrascritture.
 2. `git fetch origin work/nodo-cognitive-evolution-v01` e `git switch work/nodo-cognitive-evolution-v01` (oppure creare il checkout da `origin/work/nodo-cognitive-evolution-v01` se assente). Usare `git pull --ff-only`; se diverge, ispezionare e non forzare.
 3. Controllare `git rev-parse HEAD` e `git ls-remote origin refs/heads/work/nodo-cognitive-evolution-v01`. Se la base di integrazione è avanzata, annotarlo; non unirla automaticamente a questa micro-attività.
-4. Eseguire **soltanto S02**, mantenendo guardie di approvazione, registro, memoria, voce e Night Shift.
+4. Eseguire **soltanto S03**, mantenendo guardie di approvazione, registro, memoria, voce e Night Shift.
 5. Nell'ambiente Python esistente, dalla cartella `apps/api`, comandi di verifica previsti per S02 (non eseguiti in S01):
 
 ```text
@@ -136,4 +136,5 @@ Se manca l'ambiente, creare una venv Python 3.12 e installare `python -m pip ins
 
 - 2026-10-19, S01: verificato repository e commit `3683065fc55f68b54f44a882aa5f9400133cd94a`; creato il branch sperimentale dalla base senza modificare altri branch.
 - 2026-10-19, S01: audit dei percorsi avvio/voce/Core/Brain, censimento telemetria esistente, tre verifiche diagnostiche riuscite. Scelta S02: correzione limitata del timestamp non-Live, non una nuova infrastruttura di metriche.
-- Checkpoint audit: documento preparato per commit e pubblicazione; ricevuta SHA/remoto da aggiungere dopo verifica effettiva. La revisione successiva dovrà aggiornare solo questa ricevuta, senza avviare S02.
+- Checkpoint audit: documento pubblicato come `0ef09a5ed82645afb2a21d2dd609df5995584cd2` su `work/nodo-cognitive-evolution-v01`.
+- 2026-10-19, S02 (Devin): correzione del ciclo di vita dei timestamp in `nodo/voice/base.py` e `nodo/voice/runtime.py`. `begin_turn` ora conserva i timbri registrati dopo l'ultimo `turn_done` (stessa acquisizione), `mark_acquisition` sovrascrive i timbri pre-turno residui del turno precedente, `discard_acquisition_stamps` pulisce le acquisizioni abortite (audio breve, STT fallita/vuota, rumore). File modificati: `nodo/voice/base.py`, `nodo/voice/runtime.py`, `tests/test_voice_ws.py` (4 test nuovi: carry-over, scarto, span STT su WS, due turni consecutivi). Test eseguiti: `pytest -q tests/test_voice_ws.py tests/test_responsiveness.py` → 40/40 passati; `ruff check` sui file modificati → pulito. Evidenza dal DB reale: `voice_turn_metrics` non conteneva `stt`/`context`/`model_ttft`/`tts_tfa` in nessuna riga; turni con `total` 17–52 s contro `model_total` ~5 s. Prossima singola attività: S03 (timestamp nel percorso Live).
