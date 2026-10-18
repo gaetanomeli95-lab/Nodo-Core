@@ -103,10 +103,14 @@ def pending_decisions(s: Session, org: str) -> list[dict]:
             label = f"riportare {site.name if site else 'il sito'} alla versione precedente (rollback)"
         elif a.tool_name == "vercel" and a.action == "redeploy":
             label = f"rilanciare la build di {site.name if site else '?'}"
+        elif a.tool_name == "social" and a.action == "publish":
+            p = a.payload or {}
+            label = f"pubblicare su {', '.join(p.get('channels') or ['social'])}: «{p.get('title', '')}»"
         else:
             label = f"{a.tool_name}.{a.action}"
         out.append({"approval_id": a.id, "label": label, "tool": a.tool_name, "action": a.action,
-                    "fix_id": fix.id if fix else None, "site": site.name if site else None,
+                    "fix_id": fix.id if fix else None,
+                    "site": site.name if site else (a.payload or {}).get("title"),
                     "pr_url": fix.pr_url if fix else None, "preview_url": fix.preview_url if fix else None,
                     "preview_status": fix.preview_status if fix else None, "created_at": a.created_at.isoformat()})
     return out

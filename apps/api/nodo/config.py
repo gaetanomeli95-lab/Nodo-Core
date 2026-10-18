@@ -162,6 +162,12 @@ class Settings(BaseSettings):
     night_auto_discover: bool = True            # import Vercel projects as monitored sites automatically
     keep_awake: bool = True                     # Windows: keep the PC from sleeping during the night window
 
+    # --- Social publishing (approval-gated; API tokens optional, export pack always works) ---
+    social_tiktok_token: str | None = None        # TikTok Content Posting API access token
+    social_meta_token: str | None = None          # Meta Graph API token (covers instagram + facebook)
+    social_instagram_token: str | None = None     # optional per-channel override
+    social_facebook_token: str | None = None
+
     # --- Notifications ---
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None

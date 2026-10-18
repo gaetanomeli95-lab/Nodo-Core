@@ -204,6 +204,12 @@ class NightScheduler:
                 with session_scope() as db:
                     org, user = ensure_workspace(db)
                     routines.learn(db, org.id, self.tz, user.id)
+            if getattr(self, "_last_social", None) != local_now.date():  # one social draft a day, for the ok
+                self._last_social = local_now.date()
+                from nodo.social import night as social_night
+                with session_scope() as db:
+                    org, _ = ensure_workspace(db)
+                    await social_night.maybe_draft(self.c, db, org.id)
         if getattr(self, "_last_export_look", None) is None and self.settings.env != "TEST" \
                 and getattr(self.settings, "auto_import_exports", True):
             # once per start: a ChatGPT/Claude export left on the Desktop or in Downloads is learned by itself

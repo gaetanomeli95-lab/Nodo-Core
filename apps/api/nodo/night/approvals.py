@@ -132,6 +132,28 @@ async def _execute(db: Session, c: Container, a: Approval) -> dict:
         return {"executed": True, "ok": True,
                 "message": f"Pull request aperta (#{out.get('pr_number')}). Quando l'anteprima è pronta ti chiedo "
                            "l'ok per pubblicarla."}
+    if key == "social.publish":
+        from nodo.db.models import ContentItem
+        from nodo.social import service as social
+        item = db.get(ContentItem, (a.payload or {}).get("content_item_id") or "")
+        if item is None:
+            return {"executed": False, "ok": False, "message": "La bozza non c'è più: niente da pubblicare."}
+        channels = (a.payload or {}).get("channels") or list(social.CHANNELS)
+        remote = await social.publish_remote(item, channels, c.settings)
+        pack = social.export_pack(c.files.root if c.files is not None else c.settings.files_dir, item, channels)
+        item.status = "published" if remote.get("posted_any") else "exported"
+        db.flush()
+        _night_action(db, a, "social_publish", "done",
+                      f"Post «{item.title}» esportato in {pack['path']}", {"pack": pack, "remote": remote})
+        posted = [ch for ch, r in remote["remote"].items() if r.get("posted")]
+        if posted:
+            item.published_at = datetime.now(UTC)
+            return {"executed": True, "ok": True,
+                    "message": f"Pubblicato su {', '.join(posted)}. Pacchetto in {pack['path']}."}
+        return {"executed": True, "ok": True,
+                "message": f"Fatto: ho preparato il pacchetto del post in {pack['path']} — caption pronta per "
+                           f"{', '.join(channels)}. Le API social non sono ancora collegate, quindi la "
+                           "pubblicazione vera la fai tu dal telefono: copia e incolla."}
     if key in ("vercel.rollback", "vercel.redeploy", "vercel.promote"):
         out = await _run_tool(db, c, a)
         label = {"vercel.rollback": "Rollback eseguito", "vercel.redeploy": "Build rilanciata",
@@ -154,6 +176,12 @@ async def _reject(db: Session, c: Container, a: Approval) -> dict:
         if act:
             act.status = "skipped"
         return await drop_patch(dict(a.payload or {}))
+    if a.tool_name == "social" and a.action == "publish":
+        from nodo.db.models import ContentItem
+        item = db.get(ContentItem, (a.payload or {}).get("content_item_id") or "")
+        if item is not None:
+            item.status = "rejected"
+        return {"executed": False, "ok": True, "message": "Ok, post scartato: resta una bozza, non pubblico nulla."}
     if fix:
         fix.status = "rejected"
         site = db.get(Site, fix.site_id)

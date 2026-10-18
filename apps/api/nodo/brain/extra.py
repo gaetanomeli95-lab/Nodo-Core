@@ -180,6 +180,18 @@ class ExtraTools(LedgerTools):
                   _obj({"name": {**_STR, "description": "nome del file della foto (o «ultima»)"},
                         "question": {**_STR, "description": "cosa cercare nella foto, se lo ha detto"}}, ["name"]),
                   self.read_photo)
+        # ---- social posts (draft → your ok → export pack; nothing posts by itself)
+        self._add("social_draft", "Prepara un post per i social (TikTok, Instagram, Facebook): lo scrive e lo mette "
+                                  "tra le decisioni da approvare. Per «prepara/scrivimi un post», «un video per "
+                                  "TikTok», «un post per Instagram». Non pubblica da solo: col tuo sì esporta il "
+                                  "pacchetto pronto da incollare.",
+                  _obj({"title": {**_STR, "description": "titolo breve del post"},
+                        "body": {**_STR, "description": "caption completa, con hashtag in coda"},
+                        "channels": {**_STR, "description": "es. «tiktok e instagram», «fb»; vuoto = tutti"},
+                        "client": {**_STR, "description": "per un cliente (opzionale)"}},
+                       ["title", "body"]), self.social_draft)
+        self._add("social_queue", "Le bozze social in attesa del tuo ok e gli ultimi pacchetti esportati.",
+                  _obj({}), self.social_queue)
         self._add("search_conversations", "Rilegge le VOSTRE conversazioni passate (voce e testo, tutti i giorni) e "
                                           "trova dove si è parlato di qualcosa: per «ti ricordi quando…», «vai a "
                                           "leggere le conversazioni di prima», «cosa ti avevo detto di…».",
@@ -472,6 +484,36 @@ class ExtraTools(LedgerTools):
         f.valid_until, f.status = datetime.now(UTC), FactStatus.ARCHIVED
         self.s.flush()
         return {"forgotten": True, "fact": f.content[:200]}
+
+    # ------------------------------------------------------------------ social posts
+    async def social_draft(self, title: str, body: str, channels: str | None = None,
+                           client: str | None = None) -> dict:
+        from nodo.social import service as soc
+        cl = self._client(client) if client else None
+        ch = soc.normalize_channels(channels)
+        item, a = soc.draft(self.s, self.org, title=title, body=body, channels=ch, client=cl,
+                            request_id=self.request_id)
+        label = f"pubblicare su {', '.join(ch)}: «{item.title}»"
+        self._present([{"approval_id": a.id, "label": label, "tool": "social", "action": "publish",
+                        "site": item.title}])
+        return {"draft_id": item.id, "title": item.title, "channels": ch, "waiting_for": "il tuo sì",
+                "note": "bozza pronta e legata al sì: con «sì» esporto il pacchetto; con «no» la scarto"}
+
+    async def social_queue(self) -> dict:
+        from nodo.social import service as soc
+        pend = soc.pending(self.s, self.org)
+        if pend:
+            from nodo.night.briefing import pending_decisions
+            ids = {p["approval_id"] for p in pend}
+            self._present([p for p in pending_decisions(self.s, self.org) if p["approval_id"] in ids])
+        done = self.s.scalars(select(ContentItem).where(
+            ContentItem.client_id.in_(select(Client.id).where(Client.organization_id == self.org)),
+            ContentItem.status.in_(("exported", "published")))
+            .order_by(ContentItem.updated_at.desc()).limit(5)).all()
+        return {"in_attesa": [{"title": p["title"], "channels": p["channels"], "bozza": (p["body"] or "")[:200]}
+                              for p in pend],
+                "esportati": [{"title": d.title, "channels": d.channel, "stato": d.status} for d in done],
+                "note": "con «sì» (o «approva») esporto il pacchetto pronto da incollare sui canali"}
 
     # ------------------------------------------------------------------ sites: code & deploys
     def _one_site(self, name: str):
