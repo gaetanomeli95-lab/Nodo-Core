@@ -25,6 +25,11 @@ const HUB_FOR: [RegExp, string[]][] = [
   [/memoria|ricord|cerco nella/i, ["hub:ricordi", "hub:persone", "hub:regole"]],
   [/lavagna/i, ["hub:lavagna"]], [/diario/i, ["hub:diario"]], [/conversazion|vecchie chat|chatgpt/i, ["hub:chat"]], [/promemoria/i, ["gaetano"]],
 ];
+/* real events from /api/v1/activity light the part of the mind they actually touched */
+const KIND_HUB: Record<string, string[]> = {
+  tool: ["hub:negozio", "hub:ricordi"], memory: ["hub:ricordi", "hub:persone"], decision: ["gaetano"],
+  night: ["hub:negozio"], social: ["hub:clienti"], voice: ["maria"], agent: ["hub:ricordi"],
+};
 const DAYS = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
 const MONTHS = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre",
   "ottobre", "novembre", "dicembre"];
@@ -92,6 +97,8 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
   const [log, setLog] = useState<{ t: string; text: string; hot?: boolean }[]>([]);
   const [now, setNow] = useState(() => new Date());
   const drag = useRef({ on: false, x: 0, y: 0, rot: 0, tilt: 0.32, px: 0, py: 0, sx: 0, sy: 0 });
+  const burst = useRef(-1e9);            // a real backend event just fired: the core flares
+  const seenEv = useRef<Set<string>>(new Set());
 
   const note = (text: string, hot = false) => setLog((l) => [{ t: new Date().toTimeString().slice(0, 8), text, hot },
     ...l.filter((x) => x.text !== text)].slice(0, 6));
@@ -142,6 +149,37 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
     }
   }, [activity]);
 
+  useEffect(() => {                                   // what NODO really does, even while nobody talks
+    let alive = true, since: string | undefined;
+    const tick = async () => {
+      if (document.hidden) return;                // a hidden panel costs nothing
+      try {
+        const r = await get<{ events: { id: string; kind: string; what: string; at: string }[]; now: string }>(
+          "/api/v1/activity" + (since ? `?since=${encodeURIComponent(since)}` : ""));
+        if (!alive || !r?.events) return;
+        since = r.now;
+        const g = graph.current, t = performance.now();
+        for (const ev of [...r.events].reverse()) {
+          if (seenEv.current.has(ev.id)) continue;
+          seenEv.current.add(ev.id);
+          if (seenEv.current.size > 300) seenEv.current.clear();
+          burst.current = t;
+          if (ev.kind !== "voice") note(ev.what, ev.kind === "decision");
+          if (!g) continue;
+          for (const id of KIND_HUB[ev.kind] || []) {
+            const i = g.idx.get(id); if (i !== undefined) { g.pts[i].hot = t; g.pts[i].seen = t; }
+          }
+          for (const [rx, ids] of HUB_FOR) if (rx.test(ev.what)) for (const id of ids) {
+            const i = g.idx.get(id); if (i !== undefined) { g.pts[i].hot = t; g.pts[i].seen = t; }
+          }
+        }
+      } catch { /* the mind keeps breathing without the feed */ }
+    };
+    tick();
+    const t = setInterval(tick, lite ? 12000 : 6000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
   useEffect(() => {
     const c = canvas.current;
     if (!c) return;
@@ -163,6 +201,7 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
       last = t;
       const g = graph.current, { mode: m, sampleLevel: lvl } = live.current;
       const lv = lvl(); energy += (Math.max(lv.input, lv.output) - energy) * 0.3;
+      const flare = Math.max(0, 1 - (t - burst.current) / 1800);   // real events flash through the core
       const dr = drag.current;
       if (!dr.on && !reduced) dr.rot += dt * (MODE_SPIN[m] ?? 0.05);
       // the mind lives on the screen, not on the page: it never slides away when cards appear while she works
@@ -197,6 +236,11 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
           ctx.lineWidth = (1 + (1 - u) * 1.5) * dpr;
           ctx.beginPath(); ctx.ellipse(cx, cy + S * 0.05, rx, Math.max(1, ry), 0, 0, Math.PI * 2); ctx.stroke();
         }
+      }
+      if (flare > 0 && !reduced) {              // a real event: a warm shockwave leaves the core
+        const u = 1 - flare, sx = S * (0.18 + u * 1.5);
+        ctx.strokeStyle = `rgba(255,190,150,${0.55 * flare})`; ctx.lineWidth = 1.6 * dpr;
+        ctx.beginPath(); ctx.ellipse(cx, cy + S * 0.05, sx, Math.max(1, sx * st * 0.9), 0, 0, Math.PI * 2); ctx.stroke();
       }
       ctx.restore();
       if (!g) return;
@@ -264,7 +308,7 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
         const depth = Math.max(0.25, Math.min(1, 0.75 - z * 0.35));
         let r = (1.5 + Math.sqrt(p.weight) * 1.2) * f * dpr;
         if (p.kind === "hub") r *= 1.5;
-        if (p.kind === "core") r = (7 + energy * 16 + Math.sin(t / 500) * 1.2) * dpr;
+        if (p.kind === "core") r = (7 + energy * 16 + flare * 10 + Math.sin(t / 500) * 1.2) * dpr;
         r *= 1 + hot * 1.4 + seen * 0.4;
         if (p.kind === "core" || hot > 0 || (p.kind === "hub" && !lite)) {
           const gl = ctx.createRadialGradient(x, y, 0, x, y, r * (p.kind === "core" ? 5 : 4));

@@ -9,7 +9,20 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from nodo.api import board, command, entities, files, greeting, knowledge, ledger, night, pulse, voice, voice_ws
+from nodo.api import (
+    activity,
+    board,
+    command,
+    entities,
+    files,
+    greeting,
+    knowledge,
+    ledger,
+    night,
+    pulse,
+    voice,
+    voice_ws,
+)
 from nodo.api import mind as mind_api
 from nodo.api import team as team_api
 from nodo.api import view as view_api
@@ -130,6 +143,7 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
     app.include_router(mind_api.router)
     app.include_router(team_api.router)
     app.include_router(view_api.router)
+    app.include_router(activity.router)
 
     @app.get("/health")
     def health():
