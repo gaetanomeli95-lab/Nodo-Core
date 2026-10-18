@@ -110,6 +110,14 @@ def build_greeting(s: Session, org: str, settings, *, now: datetime | None = Non
     if top:
         lines.append("In cima c’è: " + _names([t.title + (f" ({names[t.project_id]})" if t.project_id in names else "")
                                                 for t in top]) + ".")
+    from nodo.db.models import MemoryFact
+    from nodo.memory.routines import anticipations
+    habits = anticipations([f for f in s.scalars(
+        select(MemoryFact).where(MemoryFact.organization_id == org, MemoryFact.layer == "routine",
+                                 MemoryFact.valid_until.is_(None)))], local.hour, limit=1)
+    if habits:
+        sample = habits[0].split("«")[1].split("»")[0] if "«" in habits[0] else habits[0]
+        lines.append(f"A quest'ora di solito mi chiedi {sample}, se vuoi partiamo da lì.")
     lines.append("Da dove vuoi cominciare?")
     attention = counts["pending_approvals"] + len(broken_sites) + counts["overdue_tasks"] + len(reminders)
     return {"text": " ".join(lines), "part_of_day": part, "attention": attention,

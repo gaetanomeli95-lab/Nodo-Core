@@ -272,6 +272,10 @@ def memory_context(db, org: str, tz, query: str = "", owner: str = "Gaetano", as
             except ValueError:
                 continue
     section("DIARIO DEI GIORNI SCORSI:", [f"{d.predicate}: {d.content}" for d in diary[-2:]], 650)
+    from nodo.memory.routines import anticipations
+    bands = anticipations([f for f in everything if f.layer == "routine"], now.hour)
+    section("ABITUDINI A QUESTA ORA (pattern imparati dalla storia: probabili bisogni, non certezze):",
+            bands, 350)
     today = day_transcript(db, now.date(), tz, today_limit, owner, assistant)
     if today:
         section("OGGI VI SIETE DETTI (dal più recente; contesto, non nuove richieste):",

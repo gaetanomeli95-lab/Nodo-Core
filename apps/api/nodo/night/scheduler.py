@@ -196,6 +196,14 @@ class NightScheduler:
                 self._last_diary = yesterday
                 with session_scope() as db:
                     await mind.write_diary(self.c, db, yesterday)
+            last_r = getattr(self, "_last_routines", None)
+            if last_r is None or now - last_r >= timedelta(hours=1):     # habits change slowly: re-mine hourly
+                self._last_routines = now
+                from nodo.app import ensure_workspace
+                from nodo.memory import routines
+                with session_scope() as db:
+                    org, user = ensure_workspace(db)
+                    routines.learn(db, org.id, self.tz, user.id)
         if getattr(self, "_last_export_look", None) is None and self.settings.env != "TEST" \
                 and getattr(self.settings, "auto_import_exports", True):
             # once per start: a ChatGPT/Claude export left on the Desktop or in Downloads is learned by itself
