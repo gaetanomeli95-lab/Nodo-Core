@@ -144,3 +144,20 @@ Se manca l'ambiente, creare una venv Python 3.12 e installare `python -m pip ins
 - 2026-10-19, S02 (Devin): correzione del ciclo di vita dei timestamp in `nodo/voice/base.py` e `nodo/voice/runtime.py`. `begin_turn` ora conserva i timbri registrati dopo l'ultimo `turn_done` (stessa acquisizione), `mark_acquisition` sovrascrive i timbri pre-turno residui del turno precedente, `discard_acquisition_stamps` pulisce le acquisizioni abortite (audio breve, STT fallita/vuota, rumore). File modificati: `nodo/voice/base.py`, `nodo/voice/runtime.py`, `tests/test_voice_ws.py` (4 test nuovi: carry-over, scarto, span STT su WS, due turni consecutivi). Test eseguiti: `pytest -q tests/test_voice_ws.py tests/test_responsiveness.py` → 40/40 passati; `ruff check` sui file modificati → pulito. Evidenza dal DB reale: `voice_turn_metrics` non conteneva `stt`/`context`/`model_ttft`/`tts_tfa` in nessuna riga; turni con `total` 17–52 s contro `model_total` ~5 s. Prossima singola attività: S03 (timestamp nel percorso Live).
 - Checkpoint S02: pubblicato come `4fd7b73276441d7bf19ac0e80a62d443cd443c66` su `work/nodo-cognitive-evolution-v01` (verificato con `git ls-remote`). Lavoro eseguito in git worktree separato; il checkout principale su `integration/nodo-core-v01` non è stato toccato.
 - 2026-10-19, sessione estesa Devin (su richiesta esplicita del proprietario, oltre il protocollo una-micro-attività): implementati i 4 punti-agenda dettati a Maria il 18/10. Commit pubblicati e verificati via `ls-remote` su `work/nodo-cognitive-evolution-v01`: `062c3c6` (P3 routines), `4b36662` (P1 social), `8ad8f6e` (P2 living interface), `4e78916` (P4 router+studio+X.2 lingua). Test: `test_routines` 6, `test_social` 5, `test_activity` 2, `test_router` 12 (+2 nuovi), suite spot `test_mind`+`test_night` 33, `test_brain`+`test_brain_extra`+`test_api` 31 — tutti verdi; ruff pulito; `npm run build` web verde. File nuovi: `nodo/memory/routines.py`, `nodo/social/{__init__,service,night}.py`, `nodo/api/activity.py`, `docs/ARCHITECTURE_STUDY.md`, `tests/{test_routines,test_social,test_activity}.py`. Modificati: `mind.py`, `scheduler.py`, `greeting.py`, `briefing.py`, `approvals.py`, `extra.py`, `tools.py`, `router.py`, `loop.py`, `command.py`, `config.py`, `main.py`, `MindGraph.tsx`, `test_router.py`. Nota tecnica: su questa macchina il file editor ha mostrato due volte disallineamenti lettura/disco (CRLF) — verificare sempre con `grep`/`python` prima di affidarsi a `read` per file modificati di recente.
+
+
+
+### P4.5 — Router per-intent (completamento P4)
+- `nodo/providers/router.py`: tabella `INTENT_ROUTES` + `intent_route(intent)`. Ogni intent riconosciuto
+  dichiara cosa serve davvero al modello: intent dati (`today`, `night_report`, `pending_approvals`,
+  `sites_status`, `run_checks`, `list_projects`) e decisioni nude (`approve`/`reject`/`stop`) →
+  `prefer_fast`; intent analitici (`project_status`, `compare` → reasoning 4, `tech_status` →
+  reasoning 3 + coding 2, `prepare_content` → reasoning 3). Intent sconosciuti → nessuna modifica.
+- `nodo/core/orchestrator.py`: l'intent classificato entra nel brain turn e nel percorso regole;
+  `RouteRequest.purpose` diventa `brain:<intent>` / `synthesis:<intent>` → telemetria per-intent
+  gratuita in `inference_runs` (colonna 50 char, verificato).
+- `nodo/brain/loop.py`: `Brain(..., intent_name=...)`; il requisito applica il massimo tra il pavimento
+  del chiamante (reasoning 3) e quello dell'intent — un intent non abbassa mai sotto il minimo del
+  chiamante. Voce auto continua a forzare `prefer_fast` come prima.
+- Test: `tests/test_router.py` +3 (shaping per intent, intent ignoto neutro, purpose entro colonna).
+- Verifiche: router 15/15, brain 11/11, core 15/15, responsiveness 24/24, ruff pulito.

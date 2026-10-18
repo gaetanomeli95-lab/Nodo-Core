@@ -95,8 +95,10 @@ def sentences(text: str) -> list[str]:
 
 
 class Brain:
-    def __init__(self, core, conv, request_id: str, channel: str = "text", *, directed: bool = False):
+    def __init__(self, core, conv, request_id: str, channel: str = "text", *, directed: bool = False,
+                 intent_name: str | None = None):
         self.core, self.conv, self.request_id, self.channel = core, conv, request_id, channel
+        self.intent_name = intent_name
         self.s, self.org, self.settings = core.s, core.org, core.settings
         self.provider: str | None = None
         self.model: str | None = None
@@ -260,8 +262,16 @@ class Brain:
             # release the database while the model thinks (seconds): background jobs and the night shift can write
             self.s.commit()
             # «voce precisa» (the default) wants the BEST brain even on voice: speed is not worth wrong answers
-            req = RouteRequest(purpose="brain", sensitivity=Sensitivity.INTERNAL, min_reasoning=3,
-                               prefer_fast=self.channel == "voice" and self.settings.voice_engine == "auto")
+            # the classified intent shapes the route: data-backed intents favour the fast model, analytical
+            # ones raise the reasoning floor; telemetry sees it in purpose (`brain:<intent>`)
+            from nodo.providers.router import intent_route
+            shape = intent_route(self.intent_name)
+            req = RouteRequest(purpose=f"brain:{self.intent_name or 'conversation'}",
+                               sensitivity=Sensitivity.INTERNAL,
+                               min_reasoning=max(3, int(shape.get("min_reasoning") or 0)),
+                               min_coding=int(shape.get("min_coding") or 0),
+                               prefer_fast=bool(shape.get("prefer_fast"))
+                                   or (self.channel == "voice" and self.settings.voice_engine == "auto"))
             try:
                 turn = await self.core.router.complete_tools(messages, [] if last else specs, req, request_id=rid,
                                                              temperature=0.4, max_tokens=1500)

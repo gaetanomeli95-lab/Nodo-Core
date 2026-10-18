@@ -43,6 +43,33 @@ class RouteRequest:
     exclude: set[str] = field(default_factory=set)
 
 
+# What each recognized intent actually needs from a model. Data-backed questions ("cosa c'è oggi") deserve
+# the fast brain; analytical ones ("a che punto è", "confronta") deserve the strong one; bare decisions are
+# cheap: the work is the deterministic `decide`, not the prose. Applied on top of the caller's request —
+# the stricter of the two wins (a caller never loses the reasoning floor it asked for).
+INTENT_ROUTES: dict[str, dict] = {
+    "today": {"prefer_fast": True},
+    "night_report": {"prefer_fast": True},
+    "pending_approvals": {"prefer_fast": True},
+    "sites_status": {"prefer_fast": True},
+    "run_checks": {"prefer_fast": True},
+    "list_projects": {"prefer_fast": True},
+    "approve": {"prefer_fast": True},
+    "reject": {"prefer_fast": True},
+    "stop": {"prefer_fast": True, "min_reasoning": 0},
+    "project_status": {"min_reasoning": 4},
+    "compare": {"min_reasoning": 4},
+    "tech_status": {"min_reasoning": 3, "min_coding": 2},
+    "prepare_content": {"min_reasoning": 3},
+    "general": {},
+}
+
+
+def intent_route(intent: str | None) -> dict:
+    """Route shaping for a classified intent; unknown intents fall back to no adjustment."""
+    return dict(INTENT_ROUTES.get(intent or "", {}))
+
+
 @dataclass
 class RouteDecision:
     descriptor: ModelDescriptor

@@ -106,7 +106,7 @@ class NodoCore:
             from nodo.brain.quick_read import match_read
             if intent.name != "stop" and (self.brain_enabled() or
                     (self.settings.brain != "off" and match_read(text))):
-                async for ev in self._brain_turn(text, conv, request_id, channel, outcome):
+                async for ev in self._brain_turn(text, conv, request_id, channel, outcome, intent):
                     yield ev
                 if outcome.intent == "conversation":  # the brain answered; otherwise fall back to the rules below
                     if outcome.text:                       # an empty answer = NODO chose to stay quiet
@@ -207,9 +207,9 @@ class NodoCore:
         return self.router.has_tool_model(RouteRequest(purpose="brain", min_reasoning=3))
 
     async def _brain_turn(self, text: str, conv: Conversation, request_id: str, channel: str,
-                          outcome: RequestOutcome) -> AsyncIterator[dict]:
+                          outcome: RequestOutcome, intent: Intent) -> AsyncIterator[dict]:
         from nodo.brain.loop import Brain, BrainUnavailable
-        brain = Brain(self, conv, request_id, channel)
+        brain = Brain(self, conv, request_id, channel, intent_name=intent.name)
         yield _ev("intent", request_id, name="conversation", entity=None, from_context=False,
                   reference_reapplied=False, confidence=1.0)
         yield _ev("plan", request_id, steps=["brain"])
@@ -368,7 +368,10 @@ class NodoCore:
                                 f"Richiesta dell'utente: {intent.text}\n"
                                 f"Rispondi riformulando in modo naturale il GROUNDED_SUMMARY, senza aggiungere fatti."),
         ]
-        req = RouteRequest(purpose="synthesis", sensitivity=pkg.sensitivity)
+        from nodo.providers.router import intent_route
+        shape = intent_route(intent.name)
+        req = RouteRequest(purpose=f"synthesis:{intent.name}", sensitivity=pkg.sensitivity,
+                           prefer_fast=bool(shape.get("prefer_fast")))
         try:
             async for ch in self.router.stream(messages, req, request_id=request_id):
                 if ch.delta:
