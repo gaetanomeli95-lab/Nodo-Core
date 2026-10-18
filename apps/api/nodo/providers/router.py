@@ -81,6 +81,10 @@ _DEAD_RE = re.compile(r"not.?found|does not exist|no such model|invalid api key|
 _TRANSIENT_RE = re.compile(r"timed?\s*out|timeout|non ha risposto|unavailable|overloaded|\b50[0-9]\b|deadline|"
                            r"transport error|getaddrinfo|high demand", re.I)
 _cooldown: dict[str, float] = {}
+# what the router has learned on THIS machine, shared across NodoCore instances (a new core is built per
+# request — per-instance memory would reset every turn, like _cooldown these live at module level)
+_LAT: dict[str, float] = {}                       # model id -> measured EWMA latency (ms)
+_ATTEMPTS: dict[str, dict[str, int]] = {}         # model id -> {ok, failed}
 # providers that run a whole program on Gaetano's PC for every call (seconds of CPU and hundreds of MB each)
 LOCAL_PROGRAMS = {"claude-subscription", "chatgpt-subscription"}
 
@@ -97,6 +101,12 @@ def cooldowns() -> dict[str, float]:
 
 def clear_cooldowns() -> None:
     _cooldown.clear()
+
+
+def clear_learned() -> None:
+    """Tests and resets: forget measured latencies and attempt counts (cooldowns stay separate)."""
+    _LAT.clear()
+    _ATTEMPTS.clear()
 
 
 class ModelRouter:
@@ -154,6 +164,15 @@ class ModelRouter:
             s -= 40
         if req.prefer_fast:  # a spoken answer that takes 30s feels broken: fast models jump ahead
             s += {"low": 15, "medium": 6, "high": 0}[d.latency_class]
+        # measured experience beats the brochure: a model that has actually been fast/slow lately moves in the
+        # ranking, whichever direction the truth goes (EWMA over its real attempts, this process)
+        ewma = _LAT.get(d.id)
+        if ewma is not None:
+            bonus = max(-15.0, min(12.0, 12.0 - ewma / 1500.0))
+            s += bonus * (2.0 if req.prefer_fast else 1.0)
+        st = _ATTEMPTS.get(d.id) or {}
+        if (ok := st.get("ok", 0)) + st.get("failed", 0) >= 3:
+            s += 4.0 * (ok / (ok + st["failed"]) - 0.5)   # a model that keeps failing sinks a little
         return s
 
     def _reason(self, d: ModelDescriptor, req: RouteRequest) -> str:
@@ -269,9 +288,25 @@ class ModelRouter:
 
     def _record(self, request_id, agent_run_id, d: ModelDescriptor, req: RouteRequest, tin, tout, t0, status,
                 error: str | None = None) -> None:
+        ms = int((time.perf_counter() - t0) * 1000)
+        st = _ATTEMPTS.setdefault(d.id, {"ok": 0, "failed": 0})
+        st["ok" if status == "ok" else "failed"] = st.get("ok" if status == "ok" else "failed", 0) + 1
+        if status == "ok":                            # EWMA: recent truth weighs more (alpha 0.3)
+            _LAT[d.id] = ms if d.id not in _LAT else 0.7 * _LAT[d.id] + 0.3 * ms
         if not self.recorder:
             return
         cost = (tin / 1000) * d.cost_in_per_1k + (tout / 1000) * d.cost_out_per_1k
         self.recorder(InferenceRecord(request_id, d.provider, d.model, req.purpose, d.is_local, tin, tout,
-                                      int((time.perf_counter() - t0) * 1000), round(cost, 6), status, error,
-                                      agent_run_id))
+                                      ms, round(cost, 6), status, error, agent_run_id))
+
+    def stats(self) -> dict:
+        return router_stats()
+
+
+def router_stats() -> dict:
+    """What the router has learned on this machine: per-model measured latency and reliability, plus the
+    providers currently resting. The panel and the doctor read this — visible, never hidden."""
+    now = time.monotonic()
+    return {"latency_ms": {k: round(v) for k, v in _LAT.items()},
+            "attempts": _ATTEMPTS,
+            "cooldowns": {k: round(v - now) for k, v in _cooldown.items() if v > now}}

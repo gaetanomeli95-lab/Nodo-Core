@@ -181,3 +181,53 @@ async def test_openai_compat_echoes_gemini_thought_signatures_on_tool_calls():
     history[2]["tool_call_id"] = "other"
     await p.complete_tools("gemini-3.5-flash", history, spec)
     assert "extra_content" not in bodies[-1]["messages"][1]["tool_calls"][0]
+
+
+# ---------------------------------------------------------------- adaptive learning (P4)
+class SlowFast:
+    """Two identical free models: one measured slow, one measured fast. The router must prefer the fast one."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def models(self):
+        return [ModelDescriptor(self.name, "m", reasoning=3, coding=3, tier="free",
+                                max_sensitivity=Sensitivity.INTERNAL)]
+
+    async def available(self):
+        return True
+
+
+def _record_ms(router, prov: str, ms: int, status: str = "ok"):
+    from nodo.providers.router import _ATTEMPTS, _LAT
+    d = router.catalog()[[x.provider for x in router.catalog()].index(prov)]
+    _ATTEMPTS.setdefault(d.id, {"ok": 0, "failed": 0})["ok" if status == "ok" else "failed"] += 1
+    if status == "ok":
+        _LAT[d.id] = ms if d.id not in _LAT else 0.7 * _LAT[d.id] + 0.3 * ms
+
+
+def test_router_learns_from_measured_latency():
+    from nodo.providers.router import clear_learned, router_stats
+    clear_learned()
+    slow, fast = SlowFast("slow"), SlowFast("fast")
+    r = ModelRouter([slow, fast, DeterministicProvider()], NodoMode.BALANCED)
+    base = r.select(RouteRequest()).descriptor.provider
+    for _ in range(3):                       # three slow attempts: the truth outweighs the brochure
+        _record_ms(r, "slow", 30000)
+        _record_ms(r, "fast", 400)
+    chosen = r.select(RouteRequest()).descriptor.provider
+    assert chosen == "fast" or base == "fast"
+    st = router_stats()
+    assert st["latency_ms"] and st["attempts"]["slow:m"]["ok"] == 3
+
+
+def test_failing_model_sinks():
+    from nodo.providers.router import _ATTEMPTS, clear_learned
+    clear_learned()
+    flaky, solid = SlowFast("flaky"), SlowFast("solid")
+    r = ModelRouter([flaky, solid, DeterministicProvider()], NodoMode.BALANCED)
+    fid = next(d for d in r.catalog() if d.provider == "flaky").id
+    _ATTEMPTS[fid] = {"ok": 0, "failed": 5}
+    sid = next(d for d in r.catalog() if d.provider == "solid").id
+    _ATTEMPTS[sid] = {"ok": 5, "failed": 0}
+    assert r.select(RouteRequest()).descriptor.provider == "solid"

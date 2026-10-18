@@ -100,7 +100,9 @@ async def system(c: Container = Depends(container), db: Session = Depends(get_db
         avail = await p.available()
         models += [{"id": d.id, "provider": d.provider, "model": d.model, "tier": d.tier, "is_local": d.is_local,
                     "max_sensitivity": str(d.max_sensitivity), "available": avail} for d in p.models()]
+    from nodo.providers.router import router_stats
     return {"name": "NODO CORE", "version": "0.2.0", "env": s.env, "mode": s.mode, "language": s.default_language,
-            "models": models, "voice": {"stt": {"name": c.stt.name, "location": c.stt.location},
+            "models": models, "router": router_stats(),
+            "voice": {"stt": {"name": c.stt.name, "location": c.stt.location},
                                         "tts": {"name": c.tts.name, "location": c.tts.location}},
             "github": type(c.github).__name__, "usage": Telemetry(db).usage_today()}

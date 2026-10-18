@@ -34,6 +34,21 @@ _CHANNEL = {"voice": "voce (la risposta viene letta ad alta voce: niente elenchi
 _EARLY_DONE = re.compile(r"\s*(ok|okay|va bene|fatto|segnat\w*|registrat\w*|me lo ricordo|ricevuto|capito|perfetto|certo)\b",
                          re.I)
 _SILENCE = re.compile(r"\s*\[?\(?\s*silenzio\s*\]?\)?\.?\s*", re.I)
+_FOREIGN_CHARS = re.compile(r"[\u3040-\u30ff\uac00-\ud7af\u4e00-\u9fff\u0400-\u04ff\u0600-\u06ff\u0900-\u097f]")
+_EN_ES = re.compile(r"\b(the|you(r|rs)?|i'?m|i'?ll|here'?s|sure|please|thank(s| you)|let me|hola|gracias|"
+                    r"est[aá]|usted|porque|entonces|aqu[ií]|vamos|claro)\b", re.I)
+
+
+def _foreign_reply(text: str) -> bool:
+    """Maria must speak Italian. A reply with CJK/Cyrillic/Arabic script, or mostly English/Spanish function
+    words, is a drifted answer: the loop makes the model say it again in Italian instead of airing it."""
+    t = (text or "").strip()
+    if len(t) < 15:
+        return False
+    if _FOREIGN_CHARS.search(t):
+        return True
+    words = len(re.findall(r"[a-zà-ü']+", t, re.I))
+    return words >= 8 and len(_EN_ES.findall(t)) >= max(2, int(words * 0.22))
 
 _CLAIMS = [
     (re.compile(r"\b(ho|l'ho|li ho|le ho)\s+(segnat|registrat|annotat|aggiunt|corrett|aggiornat)\w*.{0,40}"
@@ -236,6 +251,7 @@ class Brain:
         started = time.monotonic()
         said: list[str] = []
         guarded = False
+        lang_guarded = False
         bound_sent: set[str] = set()
         max_steps = max(1, self.settings.brain_max_steps)
         for step in range(max_steps + 1):
@@ -268,6 +284,13 @@ class Brain:
                 guarded = True
                 messages.append({"role": "assistant", "content": interim})
                 messages.append({"role": "user", "content": fix})
+                continue
+            if not calls and interim and not lang_guarded and _foreign_reply(interim):
+                # English/Spanish slipped in (it happens when the transcript was garbled): say it again in Italian
+                lang_guarded = True
+                messages.append({"role": "assistant", "content": interim})
+                messages.append({"role": "user", "content": "Riscrivi la stessa risposta SOLO in italiano, "
+                                                            "stesso significato, una o due frasi."})
                 continue
             if interim and _SILENCE.fullmatch(interim):
                 interim = "Non ho capito bene la richiesta. Me la ripeti?" if self.directed else ""
