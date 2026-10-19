@@ -265,6 +265,7 @@ async def test_show_and_close_on_screen(box, db, tmp_path):  # noqa: F811
     assert sheet["kind"] == "sheet"
     tab = await box.call("show_on_screen", {"what": "registro"})
     assert surface_for("show_on_screen", tab) == {"view": "tab", "rows": [{"tab": "ledger"}], "summary": ""}
+    box.user_text = "ok chiudi"
     assert surface_for("close_screen", await box.call("close_screen", {}))["view"] == "close"
     made = surface_for("create_document", {"created": "x", "url": "/api/v1/files/x.pdf", "format": "pdf"})
     assert made["view"] == "viewer" and made["rows"][0]["download"]

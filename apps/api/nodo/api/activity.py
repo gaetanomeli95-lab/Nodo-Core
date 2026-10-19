@@ -27,7 +27,8 @@ _KIND = {
     "project.created": "memory", "task.created": "memory",
 }
 _WHAT = {
-    "agent.work": lambda p: f"{p.get('tool', '?')} · {'ok' if p.get('ok') else 'errore'}",
+    "agent.work": lambda p: f"{p.get('tool', '?')} · "
+                            f"{'al lavoro' if p.get('running') else 'ok' if p.get('ok') else 'errore'}",
     "memory.fact_recorded": lambda p: f"nuovo ricordo ({p.get('layer', '?')})",
     "memory.conflict_detected": lambda p: "un ricordo in conflitto, li sto sistemando",
     "request.completed": lambda p: f"risposta via {p.get('provider') or '?'}",

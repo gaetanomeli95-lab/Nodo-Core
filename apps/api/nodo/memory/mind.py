@@ -165,7 +165,18 @@ def is_noise(text: str) -> bool:
 _IT_SHORT = {"si", "sì", "no", "ok", "okay", "va", "bene", "ciao", "che", "cosa", "eh", "ehi", "dai", "grazie",
              "allora", "ecco", "perfetto", "giusto", "esatto", "aspetta", "ferma", "basta", "stop", "maria", "vai",
              "mhm", "uhm", "certo", "chi", "come", "dove", "quando", "quanto", "capito", "vero", "brava", "bravo",
-             "senti", "scusa", "prego", "fatto", "avanti", "poi", "e", "ma", "io", "tu"}
+             "senti", "scusa", "prego", "fatto", "avanti", "poi", "e", "ma", "io", "tu",
+             # «Ci sei?», «Mi senti?», «Pronto?»: Gaetano checking she is there was being dropped as noise (18/10)
+             "ci", "sei", "mi", "ti", "ce", "pronto", "dimmi", "ancora", "quindi", "sono", "hai", "fai", "qua", "qui",
+             "ora", "adesso", "anche", "ripeti", "nuovo", "niente", "nulla", "boh", "mamma", "minchia"}
+_OTHER_SCRIPTS = re.compile(r"[\u0400-\u04ff\u0590-\u06ff\u0900-\u097f\u0e00-\u0e7f\u3040-\u30ff\u3400-\u9fff"
+                            r"\uac00-\ud7af\u1100-\u11ff]+[^\sa-zà-ù]*", re.I)
+
+
+def clean_heard(text: str) -> str:
+    """«या non devi ascoltare il video», «음, va bene»: the microphone guessing another alphabet in front of
+    Italian words. Those pieces go; the Italian stays."""
+    return re.sub(r"\s{2,}", " ", _OTHER_SCRIPTS.sub(" ", text or "")).strip(" ,.;:")
 _FOREIGN = {"de", "y", "la", "el", "los", "las", "es", "que", "ich", "und", "schon", "dir", "auch", "einen", "the",
             "and", "you", "of", "to", "is", "it", "ni", "tres", "horas", "baño", "vale", "okey", "bam", "h&m", "nenno",
             # Spanish and Portuguese heard from customers, the TV or the microphone guessing (15/10)
@@ -188,7 +199,7 @@ def is_babble(text: str) -> bool:
     if len(words) <= 2 and (sum(len(w) for w in words) < 6 or any(w in _FOREIGN for w in words)):
         return True
     foreign = sum(1 for w in words if w in _FOREIGN)
-    if _FOREIGN_MARK.search(text or "") and len(words) <= 6 and not any(w in _IT_SHORT for w in words):
+    if _FOREIGN_MARK.search(text or "") and len(words) <= 6 and 2 * sum(w in _IT_SHORT for w in words) < len(words):
         return True                                   # «¿Hablas?», «Não sei»: not Italian, not for Maria
     return foreign / len(words) >= 0.5
 

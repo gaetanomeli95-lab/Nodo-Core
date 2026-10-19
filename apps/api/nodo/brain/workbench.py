@@ -38,7 +38,9 @@ def work_running() -> int:
 
 
 def start_work(c, org: str, task: str, conversation_id: str | None) -> str:
+    from nodo.brain import live_work
     job_id = f"{datetime.now():%Y%m%d-%H%M%S}"
+    live_work.start(job_id, task.split("\n", 1)[0][:80], Path(c.files.root) / "lavori" / job_id)
     t = asyncio.create_task(run_work(c, org, job_id, task, conversation_id, requested_at=datetime.now(UTC)))
     _jobs[job_id] = t
     _background.add(t)
@@ -70,22 +72,43 @@ async def run_work(c, org: str, job_id: str, task: str, conversation_id: str | N
     started = requested_at or datetime.now(UTC)
     workdir = Path(c.files.root) / "lavori" / job_id
     t0 = time.monotonic()
+    from nodo.brain import live_work
+    from nodo.brain.builder import quick_build
     try:
         agent = provider_for_work(c)
-        if agent is None:
-            text = "Non ho potuto fare il lavoro: serve l'abbonamento Claude collegato (attiva-cervello.bat)."
-        else:
+        made: list[dict] = []
+        report, failure = "", None
+        if agent is not None:
             try:
                 report = await agent.run_agent(task, workdir, SYSTEM)
                 with session_scope() as db:
                     made = _collect(workdir, c.files, db, org, job_id)
                     db.commit()
-                links = "".join(f" {m['title']}: {m['url']}" for m in made[:6])
-                text = (f"Ho finito il lavoro ({int(time.monotonic() - t0)} secondi). {report}"
-                        + (f"\nFile pronti nella scheda File:{links}" if made else ""))
-            except Exception as e:  # a failed job must tell you, not vanish
-                log.warning("work %s failed: %s", job_id, e)
-                text = f"Il lavoro non è riuscito: {str(e)[:300]}"
+            except Exception as e:  # noqa: BLE001 - e.g. «weekly limit» (18/10): the work is still done below
+                log.warning("work %s with the Claude program failed: %s", job_id, e)
+                failure = str(e)[:300]
+        if agent is None or failure:
+            try:
+                live_work.step(job_id, "lo faccio con un altro cervello")
+                made = await quick_build(c, org, job_id, task, workdir)
+                report = ("Il programma Claude non era disponibile" + (f" ({failure[:120]})" if failure else "")
+                          + ": l'ho fatto con un altro modello.")
+                failure = None
+            except Exception as e:  # noqa: BLE001
+                failure = (failure + " · " if failure else "") + str(e)[:200]
+        if failure:
+            text = f"Il lavoro non è riuscito: {failure}"
+            live_work.finish(job_id, False, failure)
+        else:
+            links = "".join(f" {m['title']}: {m['url']}" for m in made[:6])
+            text = (f"Ho finito il lavoro ({int(time.monotonic() - t0)} secondi). {report}"
+                    + (f"\nFile pronti nella scheda File:{links}" if made else ""))
+            first = made[0] if made else None
+            ext = (first["url"].rsplit(".", 1)[-1].lower() if first else "")
+            live_work.finish(job_id, True, f"{len(made)} file pronti" if made else "fatto",
+                             url=first["url"] if first else None,
+                             view={"html": "web", "htm": "web", "pdf": "pdf", "png": "image", "jpg": "image"}.get(
+                                 ext, "text"))
         with session_scope() as db:
             if conversation_id:
                 await _after_current_turn(db, conversation_id, started)
@@ -97,11 +120,13 @@ async def run_work(c, org: str, job_id: str, task: str, conversation_id: str | N
         return text
     except Exception:
         log.exception("work job crashed")
+        live_work.finish(job_id, False, "il lavoro si è interrotto per un errore")
         return ""
     finally:
         _jobs.pop(job_id, None)
 
 
 async def drain() -> None:
-    while _background:
-        await asyncio.gather(*list(_background))
+    loop = asyncio.get_running_loop()
+    while mine := [t for t in _background if t.get_loop() is loop and not t.done()]:
+        await asyncio.gather(*mine)

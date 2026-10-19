@@ -250,7 +250,7 @@ def test_intent_route_unknown_intent_is_neutral():
 
 def test_intent_purpose_reaches_telemetry():
     # the classified intent is folded into RouteRequest.purpose so inference_runs shows per-intent usage
-    p = DeterministicProvider()
+    DeterministicProvider()
     from nodo.providers.base import ModelDescriptor
     d = ModelDescriptor("det", "m", reasoning=5, cost_in_per_1k=0, cost_out_per_1k=0,
                         max_sensitivity=Sensitivity.INTERNAL)

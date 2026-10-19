@@ -203,6 +203,9 @@ async def test_long_work_runs_in_its_own_folder_and_reports_back(box, db, tmp_pa
     assert any("Ho scritto il piano" in m for m in box.c.notifier.sent)
 
 
-async def test_long_work_needs_the_subscription(box):
+async def test_long_work_runs_even_without_the_subscription(box):
+    # 18/10: the Claude program had hit its weekly limit; now another model does the work, visibly
+    from nodo.brain.workbench import drain
     out = await box.call("start_work", {"task": "fai qualcosa"})
-    assert out["started"] is False and "abbonamento" in out["error"]
+    assert out["started"] is True
+    await drain()

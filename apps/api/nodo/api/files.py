@@ -63,4 +63,6 @@ def download(name: str, c: Container = Depends(container)):
     p = c.files.get(name)
     if p is None:
         raise HTTPException(404, "file non trovato")
-    return FileResponse(p, filename=p.name)
+    # pages, PDFs and pictures open INSIDE the viewer (as an attachment the site draft was downloaded, not shown)
+    inline = p.suffix.lower() in (".html", ".htm", ".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".txt", ".md")
+    return FileResponse(p, filename=p.name, content_disposition_type="inline" if inline else "attachment")

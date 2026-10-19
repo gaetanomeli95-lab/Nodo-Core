@@ -59,6 +59,17 @@ def _best(text: str, rows: list, key, floor: int = 70, partial: bool = False):
     return scored[0][1], None
 
 
+def _same_file_newest(cands: list, rows: list):
+    """Several candidates that are really the same document made again (same title, or same name apart from a
+    «-2» suffix): take the newest (rows are newest first). Different documents stay a question."""
+    def stem(r) -> str:
+        name = (r.get("uri") or "").rsplit("/", 1)[-1].lower().rsplit(".", 1)[0]
+        return re.sub(r"[-_ ]?\(?\d{1,2}\)?$", "", re.sub(r"\W+", "-", name))
+    if len({stem(r) for r in cands}) == 1 or len({(r.get("title") or "").strip().lower() for r in cands}) == 1:
+        return next((r for r in rows if r in cands), cands[0])
+    return None
+
+
 def url_check(url: str) -> tuple[str | None, str | None]:
     """(clean url, None) for a public http(s) address, else (None, why). NODO must not poke at the home network."""
     u = urlparse(url if "//" in url else f"https://{url}")
@@ -249,6 +260,19 @@ class ExtraTools(LedgerTools):
         self._add("update_draft", "Cambia lo stato (idea/draft/approved/published) o il testo di una bozza esistente.",
                   _obj({"title": {**_STR, "description": "titolo attuale (anche parziale)"}, "status": _STR,
                         "body": _STR}, ["title"]), self.update_draft)
+        self._add("create_website", "Crea la BOZZA di un sito o di una pagina web NUOVA (landing, sito vetrina, "
+                                    "pagina di un progetto): un file HTML completo e curato, scritto davanti a "
+                                    "Gaetano (lo vede nascere nel riquadro sullo schermo) e aperto in grande quando "
+                                    "è pronto, di solito 1-3 minuti. Non tocca GitHub né i siti già online. Per "
+                                    "«fammi il sito di…», «una bozza della pagina…», «fammi vedere come sarebbe il "
+                                    "sito…».",
+                  _obj({"name": {**_STR, "description": "nome del progetto/brand (es. HostFacility)"},
+                        "brief": {**_STR, "description": "di cosa si tratta: attività, servizi, pubblico, tono, "
+                                                         "colori se li ha detti; tutto il contesto utile"}},
+                       ["name", "brief"]), self.create_website)
+        self._add("work_status", "Lo stato VERO dei lavori lunghi (siti, lavori in background): in corso, finiti o "
+                                 "non riusciti, da quanto, e il file che stanno scrivendo. Usalo prima di dire a "
+                                 "che punto è un lavoro: niente percentuali inventate.", _obj({}), self.work_status)
         self._add("start_work", "Affida a NODO un LAVORO LUNGO da fare in background con il tuo abbonamento Claude: "
                                 "creare un piccolo progetto di più file, analizzare un testo o un documento, una "
                                 "ricerca approfondita sul web con relazione. Lavora in una cartella sua (niente "
@@ -667,6 +691,8 @@ class ExtraTools(LedgerTools):
         else:
             hit, cands = _best(what, pool, lambda r: f"{r['title']} {(r['uri'] or '').rsplit('/', 1)[-1]}",
                                floor=55, partial=True)
+            if hit is None and cands:
+                hit = _same_file_newest(cands, pool)     # the same document made twice: show the last one
             if hit is None:
                 return {"error": "più file simili: chiedi quale" if cands else f"non trovo «{what}» tra i file",
                         "candidates": [r["title"] for r in (cands or pool[:5])]}
@@ -762,11 +788,7 @@ class ExtraTools(LedgerTools):
             hit, cands = _best(name, rows, lambda r: f"{r['title']} {(r['uri'] or '').rsplit('/', 1)[-1]}",
                                floor=55, partial=True)
             if hit is None and cands:
-                # the same file made again (the register PDF asked twice): not a doubt, take the newest one
-                same = {re.sub(r"\W+", "", (r["uri"] or "").rsplit("/", 1)[-1].lower()) for r in cands} | set()
-                titles = {r["title"].strip().lower() for r in cands}
-                if len(same) == 1 or len(titles) == 1:
-                    hit = next(r for r in rows if r in cands)
+                hit = _same_file_newest(cands, rows)     # the register PDF asked twice: not a doubt
             if hit is None:
                 return None, {"error": "più file simili: chiedi quale" if cands else f"non trovo il file «{name}»",
                               "candidates": [r["title"] for r in (cands or rows[:5])]}
@@ -860,6 +882,11 @@ class ExtraTools(LedgerTools):
         return {"board": [{"text": b.text, "color": b.color} for b in self._board()]}
 
     async def close_screen(self) -> dict:
+        # only when Gaetano asked: the voice used to close a document two seconds after it opened («si levano
+        # subito», 16/10), on its own initiative or on a word from the shop
+        if self.user_text and not re.search(r"\b(chiud\w*|togli\w*|lev\w*|basta|via\b|nascond\w*|spegn\w*|"
+                                            r"ho visto|ok così|va bene così)", self.user_text, re.I):
+            return {"error": "Gaetano non ha chiesto di chiudere: lascia lo schermo com'è"}
         return {"closed": True}
 
     async def list_files(self) -> dict:
@@ -1055,18 +1082,37 @@ class ExtraTools(LedgerTools):
                         if status == "published" else None}
 
     async def start_work(self, task: str) -> dict:
-        from nodo.brain.workbench import provider_for_work, start_work, work_running
+        from nodo.brain.workbench import start_work, work_running
         if self.c is None or self.c.files is None:
             return {"started": False, "error": "archivio file non disponibile"}
-        if provider_for_work(self.c) is None:
-            return {"started": False, "error": "per i lavori lunghi serve l'abbonamento Claude collegato "
-                                               "(attiva-cervello.bat); per un file semplice uso create_file"}
         if work_running() >= 2:
             return {"started": False, "error": "ho già due lavori in corso: aspetta che ne finisca uno"}
         job = start_work(self.c, self.org, task.strip()[:4000], self.conv.id)
         return {"started": True, "job": job,
                 "next": "ci lavoro in background (da pochi minuti a un quarto d'ora); quando finisce te lo scrivo qui "
                         "e su Telegram con i file pronti"}
+
+    async def create_website(self, name: str, brief: str) -> dict:
+        from nodo.brain import live_work
+        from nodo.brain.builder import start_site
+        if self.c is None or self.c.files is None:
+            return {"started": False, "error": "archivio file non disponibile"}
+        if len([j for j in live_work.running() if j.kind == "sito"]) >= 1:
+            return {"started": False, "error": "sto già scrivendo un sito: aspetta che finisca (lo vedi sullo schermo)"}
+        name = (name or "").strip()[:60] or "Nuovo sito"
+        job = start_site(self.c, self.org, name, (brief or name).strip()[:3000], self.conv.id)
+        return {"started": True, "job": job,
+                "say": "Dillo così: «Lo sto scrivendo adesso: lo vedi nascere nel riquadro sullo schermo, tra un "
+                       "paio di minuti si apre da solo.» Non dire che è già pronto."}
+
+    async def work_status(self) -> dict:
+        from nodo.brain import live_work
+        jobs = live_work.snapshot()
+        if not jobs:
+            return {"jobs": [], "say": "Non c'è nessun lavoro in corso adesso."}
+        return {"jobs": [{k: v for k, v in j.items() if k != "tail"} for j in jobs],
+                "say": "Riferisci SOLO questo stato (in corso / finito / non riuscito) e i secondi trascorsi; "
+                       "niente percentuali."}
 
     async def nodo_updates(self, days: int = 7) -> dict:
         import asyncio

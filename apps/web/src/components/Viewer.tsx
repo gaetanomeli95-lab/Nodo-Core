@@ -95,7 +95,9 @@ export function Viewer({ item, onClose }: { item: ViewItem | null; onClose: () =
         </div>}
         {src && item.kind === "youtube" && <iframe className="yt" src={src} title={item.title}
           allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen />}
-        {src && item.kind === "web" && <iframe src={src} title={item.title} sandbox="allow-scripts allow-same-origin allow-popups" />}
+        {src && item.kind === "web" && <iframe src={src} title={item.title}
+          // a page NODO wrote itself runs closed in its own box: it cannot reach NODO's data or keys
+          sandbox={src.startsWith("/api/") ? "allow-scripts allow-popups" : "allow-scripts allow-same-origin allow-popups"} />}
         {rows && <table><tbody>{rows.map((r, i) => r.startsWith("## ")
           ? <tr key={i} className="sheet-name"><td colSpan={99}>{r.slice(3)}</td></tr>
           : <tr key={i}>{r.split(" | ").map((c, j) => <td key={j}>{c}</td>)}</tr>)}</tbody></table>}

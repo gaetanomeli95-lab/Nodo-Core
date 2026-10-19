@@ -127,6 +127,9 @@ def _self_lines(db, org: str, settings, now: datetime) -> list[str]:
         out.append(f"STUDIO DELLE VECCHIE CHAT DI CHATGPT: lette {p['read']} conversazioni su {p['total']} ({pct}%), "
                    f"ne restano {p['left']}; {p['facts']} cose imparate; ultima lettura il {when}; stato: {state}. "
                    "Se te lo chiede, rispondi con QUESTI numeri, mai a sensazione.")
+    from nodo.brain.live_work import board_line
+    if line := board_line(tz):
+        out.append(line)
     try:
         night = last_night(db, org, tz)
     except Exception:  # noqa: BLE001

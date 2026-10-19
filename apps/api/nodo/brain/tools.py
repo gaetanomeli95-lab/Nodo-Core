@@ -382,6 +382,16 @@ class Toolbox(ExtraTools):
             return {"started": False, "error": "più siti corrispondono: chiedi quale",
                     "candidates": [x.name for x in matches[:5]]}
         x = matches[0]
+        # a change goes to a LIVE site: only when Gaetano himself named that site. On 18/10 «fammi la bozza del sito
+        # HostFacility» became a pull request that replaced the home page of Arredo Chef, a site already online.
+        said = (self.user_text or "").lower()
+        words = [w for w in re.findall(r"[a-zà-ù0-9]{3,}", f"{x.name} {x.repo_name or ''}".lower())
+                 if w not in ("sito", "site", "www", "com", "the")]
+        if self.channel != "night" and said and not any(w in said for w in words) \
+                and fuzz.partial_ratio(x.name.lower(), said) < 80:
+            return {"started": False, "error": f"Gaetano non ha nominato {x.name}: NON si tocca un sito già online. "
+                                               "Per un sito o una pagina NUOVA usa create_website (resta un file, "
+                                               "niente GitHub)."}
         if self.c is None or self.c.repo is None:
             return {"started": False, "error": "manca l'accesso a GitHub (NODO_GITHUB_TOKEN): senza non posso "
                                                "preparare modifiche al codice"}

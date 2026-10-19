@@ -97,7 +97,7 @@ BOARD_EVERY_S = 60
 # jobs that are long for a reason, and how long they may take (seconds) before NODO calls it stuck
 SLOW_TOOLS_S = {"generate_image": 240, "create_document": 150, "create_file": 60, "save_to_desktop": 40,
                 "web_search": 75, "fetch_url": 75, "read_photo": 75, "learn_old_chats": 180, "search_knowledge": 45,
-                "check_sites": 120, "sync_sites": 120, "ledger_pdf": 60, "show_transcript": 40}
+                "check_sites": 120, "sync_sites": 120, "ledger_pdf": 60, "show_transcript": 40, "create_website": 30}
 
 
 _SING = re.compile(r"\b(cant(?:a|ami|amela|armi|are|agli|ale|ale|aci|ate|i)|canzon\w*|canzoncin\w*|serenat\w*|"
@@ -147,6 +147,10 @@ _CLAIM = re.compile(r"\b(te l'ho (?:appena |già )?(?:apert|mostrat|creat|prepar
                     r"sta per comparire)", re.I)
 
 
+# «ci sto lavorando», «ti avviso appena è pronta», «siamo all'80%»: progress that exists only if a job is running
+_PROMISE = re.compile(r"\b(ti avviso (?:non )?appena|ti aggiorno (?:non )?appena|ci sto lavorando|sto (?:finendo|"
+                      r"completando|caricando|scrivendo|ultimando|preparando la|creando il|lavorando)|quasi pront|"
+                      r"ultimi dettagli|in background|per ?cento|\d+ ?%)", re.I)
 _CLAIM_SAVED = re.compile(r"\b((?:te l'ho|l'ho|ho) (?:già )?(?:messo|salvato|copiato) (?:sul|nel) desktop|"
                           r"(?:è|sono) (?:già )?(?:salvat\w+ )?(?:sul|nel) desktop)", re.I)
 
@@ -164,7 +168,8 @@ _LIVE_OWN_TOOLS = {"decide", "close_screen",   # yes/no on the proposal shown, c
                    # the register, READ ONLY and instant (no model behind them): the voice answers any day or customer
                    # by itself and the hologram appears while it speaks
                    "ledger_report", "ledger_open", "ledger_customer", "ledger_stats", "ledger_prices",
-                   "study_status"}        # the true state of studying and of the night, never told by feeling
+                   "study_status",        # the true state of studying and of the night, never told by feeling
+                   "work_status"}         # and of the long jobs: no «siamo all'80%» invented
 
 
 class VoiceRuntime:
@@ -213,6 +218,7 @@ class VoiceRuntime:
         self._tool_text: str | None = None         # a tool call Gemini spoke aloud instead of making it
         self._turn_called = False                  # a tool was called in this turn
         self._singing = False                      # the backing band is playing for this turn
+        self._truth: str | None = None             # a false «ci sto lavorando» was cut: the truth to say instead
         self._last_action: str | None = None       # the last «crea / mostrami…» he asked for
         self._forced: str | None = None            # an action Gemini refused or forgot: the brain does it
         self._live_results: dict[str, dict] = {}
@@ -817,6 +823,20 @@ class VoiceRuntime:
                 self._out_text.clear()
                 await self._send("voice.interrupted", reason="quiet", during="SPEAKING")
                 return
+            if (not self._turn_called and self._truth is None and _PROMISE.search(said[:260])
+                    and not any(not t.done() for t in self._live_tools.values())):
+                from nodo.brain import live_work
+                if not live_work.running():
+                    # 18/10: two hours of «sto finendo» while nothing ran. Cut it and say the truth instead
+                    last = live_work.latest()
+                    self._truth = ("Non c'è NESSUN lavoro in corso adesso" + (
+                        f"; l'ultimo, «{last.title}», è {last.status}" + (f" ({last.note})" if last.note else "")
+                        if last else "") + ". Dillo a Gaetano in una frase, senza scuse lunghe, e chiedigli se "
+                        "vuole che lo faccia adesso (per un sito: create_website).")
+                    self._live_muted = True
+                    self._out_text.clear()
+                    await self._send("voice.interrupted", reason="quiet", during="SPEAKING")
+                    return
             if (not self._turn_called and self._forced is None and _CLAIM_SAVED.search(said[:220])
                     and time.monotonic() - getattr(self, "_last_saved", 0.0) > 60):
                 # «te l'ho messo sul desktop» and nothing was saved (15/10: the copy had failed): really save it
@@ -1134,10 +1154,9 @@ class VoiceRuntime:
         """«pensa»: the Claude brain (memory, register, tools, honesty guard) answers; Live only says it."""
         from nodo.brain.loop import Brain, BrainUnavailable
         from nodo.brain.quick_read import match_read
-        from nodo.memory.mind import is_babble
-
-        heard = (self._in_text if heard is None else heard).strip()
-        asked = str(args.get("richiesta") or "").strip()
+        from nodo.memory.mind import clean_heard, is_babble
+        heard = clean_heard(self._in_text if heard is None else heard)
+        asked = clean_heard(str(args.get("richiesta") or ""))
         if not asked and (not heard or is_babble(heard)):
             # a cough, the TV, a customer in Spanish: no brain run (each one costs 15-30 s and blocks the next)
             return self._quiet()
@@ -1267,6 +1286,15 @@ class VoiceRuntime:
             self._singing = False
             with suppress(Exception):
                 await self._send("music.stop", fade=3)
+        truth, self._truth = self._truth, None
+        if truth and not self._dead and self._live is not None:
+            live = self._live
+
+            async def _say_truth() -> None:
+                with suppress(Exception):
+                    await live.inject(f"[Correzione: {truth}]", respond=True)
+            asyncio.get_running_loop().call_soon(lambda: asyncio.ensure_future(_say_truth()))
+            text = ""
         forced, self._forced = self._forced, None
         speak = True                                 # it refused: the brain's answer is said instead
         heard_now = self._in_text.strip()
@@ -1299,8 +1327,8 @@ class VoiceRuntime:
         text = re.sub(r"(?s)<!--.*?-->", "", text).strip()   # «<!-- Nessuna risposta richiesta -->»: silence too
         if _SILENCE.fullmatch(text) or not re.search(r"\w", text):
             text = ""          # «[silenzio]», «…», «---»: a choice, not words — never kept as something Maria said
-        input_text = self._in_text.strip()
-        from nodo.memory.mind import is_noise
+        from nodo.memory.mind import clean_heard, is_noise
+        input_text = clean_heard(self._in_text)
         if input_text and is_noise(input_text):
             # Gemini transcribing Sicilian as Chinese/French is noise, not a diary entry
             self._log("voice.input_noise_dropped", {"text": input_text[:60]})

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 
-ALWAYS = {"now", "remember", "recall", "forget", "search_conversations", "search_knowledge", "board_pin",
+ALWAYS = {"work_status", "now", "remember", "recall", "forget", "search_conversations", "search_knowledge", "board_pin",
           "board_done", "board_list", "show_on_screen", "close_screen", "set_reminder", "list_reminders",
           "cancel_reminder", "decide", "pending_decisions", "notify_me", "web_search"}
 
@@ -28,8 +28,8 @@ GROUPS: list[tuple[re.Pattern, set[str]]] = [
      {"projects", "today_agenda", "create_task", "complete_task", "list_tasks", "update_task", "clients",
       "create_client", "create_project", "update_project", "calendar_events"}),
     (re.compile(r"file|pdf|word|excel|document|immagin|foto|bozz|desktop|apri|mostr|crea|scriv|letter|present|"
-                r"disegn|salva|stampa|tabella|preventiv|fattur|volantin|logo", re.I),
-     {"create_file", "generate_image", "create_document", "ledger_pdf", "save_draft", "list_drafts", "update_draft",
+                r"disegn|salva|stampa|tabella|preventiv|fattur|volantin|logo|sito|pagina|html|landing|bozza", re.I),
+     {"create_file", "generate_image", "create_document", "ledger_pdf", "create_website", "save_draft", "list_drafts", "update_draft",
       "list_files", "read_file", "save_to_desktop", "open_on_pc", "read_photo"}),
     (re.compile(r"chatgpt|\bgpt\b|claude|chat\b|conversazion|impara|vecchi|studi|stanotte|notte|lezion|miglior", re.I),
      {"read_knowledge", "learn_old_chats", "show_transcript", "study_status"}),

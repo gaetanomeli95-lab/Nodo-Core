@@ -195,8 +195,9 @@ class ModelRouter:
         # ranking, whichever direction the truth goes (EWMA over its real attempts, this process)
         ewma = _LAT.get(d.id)
         if ewma is not None:
-            bonus = max(-15.0, min(12.0, 12.0 - ewma / 1500.0))
-            s += bonus * (2.0 if req.prefer_fast else 1.0)
+            # small on purpose: being fast must never lift a weaker model above a smarter one (Flash-Lite answering
+            # «fatto» without doing it is exactly what made Maria lie); it only reorders models of the same class
+            s += max(-6.0, min(1.5, 1.5 - ewma / 4000.0))
         st = _ATTEMPTS.get(d.id) or {}
         if (ok := st.get("ok", 0)) + st.get("failed", 0) >= 3:
             s += 4.0 * (ok / (ok + st["failed"]) - 0.5)   # a model that keeps failing sinks a little

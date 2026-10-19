@@ -83,7 +83,8 @@ def world():
 
 @pytest.fixture(autouse=True)
 def _no_paused_models():
-    from nodo.providers.router import clear_cooldowns
+    from nodo.providers.router import clear_cooldowns, clear_learned
     clear_cooldowns()
+    clear_learned()          # measured latencies are per process: one test must not reorder the next one
     yield
     clear_cooldowns()

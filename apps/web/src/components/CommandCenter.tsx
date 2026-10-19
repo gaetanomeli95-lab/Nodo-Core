@@ -10,6 +10,7 @@ import { INTRO_DONE_EVENT, introDone } from "./holo/Intro";
 import { markReady, sync } from "../introSync";
 import { HoloTable, type HoloSurface } from "./holo/HoloTable";
 import { patienceFor, SLOW_TOOLS, type Work, WorkStage } from "./holo/WorkStage";
+import { LiveWork } from "./holo/LiveWork";
 import { MindGraph } from "./holo/MindGraph";
 import { Eyes } from "./holo/Eyes";
 import { Palette, type Action } from "./holo/Palette";
@@ -359,6 +360,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files?.[0]; if (f) void handOver(f); }}>
     {dragging && <div className="drop-hint">Lascia qui la foto o il documento: NODO lo guarda</div>}
     <Viewer item={viewing} onClose={() => setViewing(null)} />
+    <LiveWork onOpen={(item) => { setViewing(item); onOpenTabRef.current?.("command"); }} />
     <Eyes source={eyes} onClose={() => setEyes(null)} onShot={(f, q) => void handOver(f, q || "Guarda e dimmi cosa vedi.")} />
     <Palette actions={actions} onAsk={(t) => void send(t)} />
     {!diary && <Board revision={boardRev} />}

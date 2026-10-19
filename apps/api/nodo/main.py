@@ -22,6 +22,7 @@ from nodo.api import (
     pulse,
     voice,
     voice_ws,
+    work,
 )
 from nodo.api import mind as mind_api
 from nodo.api import team as team_api
@@ -144,6 +145,7 @@ def create_app(settings: Settings | None = None, container=None) -> FastAPI:
     app.include_router(team_api.router)
     app.include_router(view_api.router)
     app.include_router(activity.router)
+    app.include_router(work.router)
 
     @app.get("/health")
     def health():

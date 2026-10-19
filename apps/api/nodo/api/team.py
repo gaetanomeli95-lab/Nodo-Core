@@ -77,7 +77,7 @@ def team_state(db: Session, org: str, settings, files=None) -> dict:
     out = []
     for a in AGENTS:
         mine = [(p, _aware(t)) for p, t in rows if (p or {}).get("tool") in a["tools"]]
-        today = [m for m in mine if m[1] and m[1] >= since]
+        today = [m for m in mine if m[1] and m[1] >= since and not (m[0] or {}).get("running")]   # one per job
         last = mine[0] if mine else None
         busy = bool(last and last[1] and now - last[1] < timedelta(seconds=90))
         out.append({k: v for k, v in a.items() if k != "tools"} | {

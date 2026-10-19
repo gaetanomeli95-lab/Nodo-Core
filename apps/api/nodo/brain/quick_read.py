@@ -65,6 +65,17 @@ def match_action(text: str, context: str = "") -> tuple[str, dict] | None:
     if re.search(r"\b(salval[oaie]|salvarl[oaie]|mettil[oaie]|copial[oaie]|l[oaie] (?:puoi |potresti |devi )?"
                  r"(?:salv|mett|copi)\w*)\b.{0,30}\b(desktop|scrivania)\b", t) and not re.search(r"\bnon\b", t):
         return "save_to_desktop", {"name": "l'ultimo"}       # «salvalo sul desktop»: the file just made
+    if re.search(r"\b(fa(?:mmi|i|re)|crea\w*|prepar\w*|rifa\w*|costrui\w*|scriv\w*|disegna\w*|realizz\w*)\b.{0,40}"
+                 r"\b(sito|landing|pagina web|home ?page|bozza del sito|html)\b", t) \
+            and not re.search(r"\b(modific\w*|cambi\w*|aggiorn\w*|correggi\w*|sistema\w*)\b", t):
+        raw = text.split("\n(La voce", 1)[0]
+        m = re.search(r"(?:sito|pagina|landing|chiamat[oa]|nome)\s+(?:di |per |del |della |chiamato |)?[«\"']?"
+                      r"([A-Z][\w'’&-]+(?:\s+[A-Z][\w'’&-]+){0,2})", raw)
+        name = m.group(1) if m else ""
+        if not name and (m := re.search(r"\b([A-Z][a-z]+[A-Z]\w+)\b", raw + " " + context)):
+            name = m.group(1)                                   # «HostFacility» said earlier in the conversation
+        brief = raw if len(raw) > 120 else f"{raw}. Contesto: {context[-1200:]}"
+        return "create_website", {"name": name or "Nuovo sito", "brief": brief}
     if m := re.search(r"\bultim[io] (\d{1,3}) minuti\b", t):
         if re.search(r"conversazion|detto|dett[io]|parlat|trascri|scritt", t):
             return "show_transcript", {"minutes": int(m.group(1))}
@@ -77,6 +88,9 @@ def action_answer(tool: str, result: dict) -> str | None:
     if tool == "ledger_pdf":
         return (f"Ecco il {result.get('created', 'PDF del registro')}: è sullo schermo"
                 + (f" e l'ho salvato sul desktop come {result['desktop']}." if result.get("desktop") else "."))
+    if tool == "create_website":
+        return ("Lo sto scrivendo adesso: lo vedi nascere nel riquadro sullo schermo e tra un paio di minuti si apre "
+                "da solo.") if result.get("started") else None
     if tool == "save_to_desktop":
         return f"Fatto: l'ho salvato sul desktop, si chiama {result.get('file', 'come il documento')}."
     if tool == "show_transcript":
