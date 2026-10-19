@@ -155,6 +155,13 @@ _CLAIM_SAVED = re.compile(r"\b((?:te l'ho|l'ho|ho) (?:già )?(?:messo|salvato|co
                           r"(?:è|sono) (?:già )?(?:salvat\w+ )?(?:sul|nel) desktop)", re.I)
 
 
+# «l'ho aggiunto all'agenda», «tutto segnato per domani»: 18/10, seven times, one task really written
+_CLAIM_NOTED = re.compile(r"\b((?:ho|l'ho|li ho|te l'ho) (?:già |appena )?(?:aggiunt|segnat|annotat|inserit|mess)\w* "
+                          r"[^.!?]{0,90}?(?:all'agenda|nell'agenda|in agenda|alla lista|nella lista|tra le "
+                          r"attività|per domani)|(?:tutto )?segnato per domani|mi segno|lo segno|segno (?:l'|subito|questo|"
+                          r"anche))", re.I)
+
+
 def action_intent(text: str) -> bool:
     t = text or ""
     return bool(_ACTION.search(t) or (_MAKE.search(t) and _THING.search(t)))
@@ -841,6 +848,15 @@ class VoiceRuntime:
                     and time.monotonic() - getattr(self, "_last_saved", 0.0) > 60):
                 # «te l'ho messo sul desktop» and nothing was saved (15/10: the copy had failed): really save it
                 self._forced = "salvalo sul desktop"
+                self._live_muted = True
+                self._out_text.clear()
+                await self._send("voice.interrupted", reason="quiet", during="SPEAKING")
+                return
+            if (not self._turn_called and self._forced is None and _CLAIM_NOTED.search(said[:260])):
+                # it says it wrote it down without writing anything: cut it, and really write the task
+                self._forced = (f"{(self._in_text or '').strip()}\n(Maria ha detto di averlo segnato ma non ha "
+                                "salvato niente: crea ADESSO l'attività con create_task, con un titolo chiaro che "
+                                "riassume la richiesta di Gaetano, poi conferma in una frase)")
                 self._live_muted = True
                 self._out_text.clear()
                 await self._send("voice.interrupted", reason="quiet", during="SPEAKING")

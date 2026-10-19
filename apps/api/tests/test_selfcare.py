@@ -341,6 +341,23 @@ def test_the_doubled_rows_of_15_10_are_corrected_once(db, seeded):
     assert data_fixes.apply(db, "CF Materassi") == []             # once only
 
 
+def test_the_1410_total_of_enrico_patti_is_taken_out(db, seeded):  # noqa: F811
+    from nodo import data_fixes
+    from nodo.ledger import Ledger
+    led = Ledger(db, seeded, "CF Materassi", today=date(2026, 10, 19))
+    lump = led.add(kind="credito", item="sospeso Enrico Patti Cash (conto vendita)", amount=1410,
+                   counterpart="Enrico Patti Cash", payment="sospeso", day="14/10")
+    lump.id = "bb9babf3" + lump.id[8:]
+    piece = led.add(kind="vendita", item="materasso Max", amount=105, counterpart="Enrico Patti Cash",
+                    payment="sospeso", day="11/06")
+    db.flush()
+    done = data_fixes.apply(db, "CF Materassi")
+    assert any("1410" in d for d in done)
+    assert lump.status == "annullato" and piece.status != "annullato"
+    assert led.customer("Enrico Patti")["due"] == 105.0
+    assert data_fixes.apply(db, "CF Materassi") == []
+
+
 def test_save_it_on_the_desktop_and_look_before_saying_it_is_not_there():
     from nodo.brain.quick_read import match_action, recall_query
     from nodo.voice.runtime import _CLAIM_SAVED
@@ -451,3 +468,23 @@ def test_an_item_of_a_lump_debt_is_asked_not_added_on_top(db, seeded):
                 payment="sospeso")
     db.flush()
     assert any("FA PARTE" in w for w in check_entry(led, e))
+
+
+def test_written_down_means_a_task_really_written(db, seeded):  # noqa: F811
+    from nodo import data_fixes
+    from nodo.db.models import Task, TaskStatus
+    from nodo.voice.runtime import _CLAIM_NOTED
+    for said in ("Perfetto, tutto segnato per domani.", "Ho aggiunto il terzo punto sulla memoria predittiva "
+                 "all'agenda per domani alle quindici.", "Ho aggiunto anche questo, il punto quattro sullo studio "
+                 "delle architetture all'agenda", "Mi segno subito questa attività"):
+        assert _CLAIM_NOTED.search(said), said
+    assert not _CLAIM_NOTED.search("Ho aggiunto il materasso al registro.")
+    first = Task(organization_id=seeded, title="social")
+    db.add(first)
+    db.flush()
+    first.id = "7b018166" + first.id[8:]
+    db.flush()
+    assert any("agenda" in d for d in data_fixes.apply(db))
+    todo = [t.title for t in db.query(Task).filter(Task.status == TaskStatus.TODO)]
+    assert any("Animazioni" in t for t in todo) and any("HostFacility" in t for t in todo)
+    assert data_fixes.apply(db) == []
