@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { calm, lite } from "../../motion";
+import { useDecode } from "./useDecode";
 
 /** «Sul tavolo», as a hologram. What Maria puts in front of you (the register, who still has to pay, the sites,
  *  a file) rises from a projector as a ring of glass tiles floating in 3D: drag it, turn it with the wheel or
@@ -73,6 +74,7 @@ function keys(row: Record<string, unknown>): string[] {
 export function HoloTable({ surface, title, onClose, onDownload, said }: {
   surface: HoloSurface; title: string; onClose: () => void; onDownload: (url: string) => void; said?: string;
 }) {
+  const shownTitle = useDecode(title, 600, true);
   const rows = surface.rows;
   const n = rows.length;
   const ring = useRef<HTMLDivElement>(null);
@@ -175,7 +177,7 @@ export function HoloTable({ surface, title, onClose, onDownload, said }: {
   return <section className={`holo-table${lite ? " lite" : ""}`} aria-label="Sul tavolo" role="region">
     <div className="holo-table-head">
       <span className="sheet-kicker">SUL TAVOLO · OLOGRAMMA</span>
-      <h3>{title}</h3>
+      <h3 aria-label={title}>{shownTitle}</h3>
       <button aria-label="Riponi" className="holo-x" onClick={onClose}>×</button>
     </div>
     {k.length > 0 && <div className="holo-kpis">{k.map(([l, v, tone]) => <Kpi key={l} label={l} value={v} tone={tone} />)}</div>}

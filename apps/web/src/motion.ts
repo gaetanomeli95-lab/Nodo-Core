@@ -24,3 +24,34 @@ export const lite: boolean = (() => {
 if (lite) document.documentElement.classList.add("lite");
 /** Device pixels for canvases: never more than needed. */
 export const canvasDpr = (max = 1.5) => (lite ? 1 : Math.min(window.devicePixelRatio || 1, max));
+
+/** Measured, not guessed: the browser's real frame rate. If the PC cannot keep up (under ~24 frames a second for
+ *  several seconds, intro excluded) NODO switches itself to «lite» on the spot instead of stuttering; ?pieno keeps
+ *  the full version whatever happens. The cockpit shows this number (HoloHud). */
+export const perf = { low: lite, fps: 0 };
+let watching = false;
+export function watchFrames() {
+  if (watching) return;
+  watching = true;
+  const forcedFull = (() => { try { return /[?&]pieno\b/.test(location.search); } catch { return false; } })();
+  let frames = 0, start = performance.now(), bad = 0;
+  const born = performance.now();
+  const tick = (t: number) => {
+    requestAnimationFrame(tick);
+    if (document.hidden) { frames = 0; start = t; return; }
+    frames++;
+    if (t - start < 2000) return;
+    perf.fps = Math.round((frames * 1000) / (t - start));
+    frames = 0; start = t;
+    const busyStart = t - born < 9000 || document.querySelector(".intro");   // the opening is heavy on purpose
+    if (!perf.low && !forcedFull && !busyStart) {
+      bad = perf.fps < 24 ? bad + 1 : 0;
+      if (bad >= 3) {
+        perf.low = true;
+        document.documentElement.classList.add("lite");
+        window.dispatchEvent(new Event("nodo:perf"));
+      }
+    }
+  };
+  requestAnimationFrame(tick);
+}

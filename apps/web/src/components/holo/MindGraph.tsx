@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { calm, canvasDpr, lite } from "../../motion";
+import { calm, canvasDpr, lite, perf } from "../../motion";
 import { get } from "../../api";
 import type { PresenceMode } from "../Presence";
 import { orbitRadii } from "./mindMotion";
@@ -82,6 +82,88 @@ function layout(g: Graph): { pts: P[]; idx: Map<string, number>; edges: [number,
     for (const [j] of near) if (i < j) soft.push([i, j]);
   });
   return { pts, idx, edges, soft };
+}
+
+/** Maria's reactor (2492 edition): rings of light around her core, like the heart of a ship. Every ring means
+ *  something: the ticks turn with the time, the three blades spin faster while she thinks, the ring of bars is her
+ *  voice (it moves only with the real sound level, his when she listens, hers when she speaks), the outer ring
+ *  sweeps while she searches. Colours follow her state: cyan ready/listening, violet thinking, gold speaking. */
+const MODE_RGB: Record<string, [number, number, number]> = { rest: [111, 240, 255], listen: [120, 245, 255],
+  think: [186, 156, 255], act: [186, 156, 255], speak: [255, 210, 122], approve: [255, 210, 122], reconnect: [255, 140, 120] };
+const MODE_RPM: Record<string, number> = { rest: 1, listen: 1.4, think: 4.2, act: 3.4, speak: 1.8, approve: 0.4, reconnect: 0.6 };
+const rs = { spin: 0, rpm: 1, col: [111, 240, 255] as number[], last: 0 };
+function reactor(ctx: CanvasRenderingContext2D, cx: number, cy: number, S: number, dpr: number, t: number, m: string,
+  energy: number, flare: number, reduced: boolean) {
+  const dt = Math.min(0.1, (t - (rs.last || t)) / 1000); rs.last = t;
+  rs.rpm += ((MODE_RPM[m] ?? 1) - rs.rpm) * 0.06;                 // spins up and down, never jumps
+  const tc = MODE_RGB[m] || MODE_RGB.rest;
+  for (let k = 0; k < 3; k++) rs.col[k] += (tc[k] - rs.col[k]) * 0.08;
+  if (!reduced) rs.spin += dt * 0.35 * rs.rpm;
+  const [r, g, b] = rs.col.map(Math.round), C = (a: number) => `rgba(${r},${g},${b},${a})`;
+  const a0 = rs.spin, low = perf.low;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.lineCap = "round";
+  // 1 · the dial: 72 ticks, every sixth one long
+  const R1 = S * 0.17, n1 = low ? 36 : 72;
+  ctx.strokeStyle = C(0.42); ctx.lineWidth = 1 * dpr;
+  ctx.beginPath();
+  for (let i = 0; i < n1; i++) {
+    const a = a0 * 0.25 + (i / n1) * Math.PI * 2, L = i % 6 === 0 ? S * 0.035 : S * 0.014;
+    ctx.moveTo(cx + Math.cos(a) * R1, cy + Math.sin(a) * R1);
+    ctx.lineTo(cx + Math.cos(a) * (R1 + L), cy + Math.sin(a) * (R1 + L));
+  }
+  ctx.stroke();
+  // 2 · three blades turning the other way, faster when she thinks
+  const R2 = S * 0.245;
+  ctx.lineWidth = (2.6 + energy * 2) * dpr; ctx.strokeStyle = C(0.55 + flare * 0.3);
+  for (let k = 0; k < 3; k++) {
+    const a = -a0 * 0.9 + k * (Math.PI * 2 / 3);
+    ctx.beginPath(); ctx.arc(cx, cy, R2, a, a + 1.15); ctx.stroke();
+  }
+  ctx.lineWidth = 1 * dpr; ctx.strokeStyle = C(0.16);
+  ctx.beginPath(); ctx.arc(cx, cy, R2 + 6 * dpr, 0, Math.PI * 2); ctx.stroke();
+  // 3 · her voice: a ring of bars that moves only with the real sound
+  const R3 = S * 0.305, n3 = low ? 40 : 72, voice = Math.min(1, energy * 1.6);
+  ctx.lineWidth = (low ? 2.4 : 1.8) * dpr; ctx.strokeStyle = C(0.3 + voice * 0.55);
+  ctx.beginPath();
+  for (let i = 0; i < n3; i++) {
+    const a = (i / n3) * Math.PI * 2 - Math.PI / 2;
+    const wob = 0.5 + 0.5 * Math.sin(i * 1.7 + t * 0.006) * Math.sin(i * 0.37 - t * 0.0041);
+    const L = 2 * dpr + voice * S * 0.1 * (0.25 + wob);
+    ctx.moveTo(cx + Math.cos(a) * R3, cy + Math.sin(a) * R3);
+    ctx.lineTo(cx + Math.cos(a) * (R3 + L), cy + Math.sin(a) * (R3 + L));
+  }
+  ctx.stroke();
+  // 4 · the outer ring: four brackets, and a searching sweep while she thinks or works
+  const R4 = S * 0.43;
+  ctx.lineWidth = 1 * dpr; ctx.strokeStyle = C(0.2);
+  ctx.setLineDash([1.5 * dpr, 5 * dpr]);
+  ctx.beginPath(); ctx.arc(cx, cy, R4, 0, Math.PI * 2); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.lineWidth = 2 * dpr; ctx.strokeStyle = C(0.7);
+  for (let k = 0; k < 4; k++) {
+    const a = a0 * 0.12 + k * Math.PI / 2;
+    ctx.beginPath(); ctx.arc(cx, cy, R4, a - 0.12, a + 0.12); ctx.stroke();
+  }
+  if (m === "think" || m === "act") {
+    const a = t * 0.0042;
+    for (let k = 0; k < 6; k++) {
+      ctx.strokeStyle = C(0.55 * (1 - k / 6)); ctx.lineWidth = (3 - k * 0.35) * dpr;
+      ctx.beginPath(); ctx.arc(cx, cy, R4, a - (k + 1) * 0.09, a - k * 0.09); ctx.stroke();
+    }
+  }
+  if (!low) {                                                       // bearings on the dial, like a ship's compass
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = C(0.55); ctx.font = `${8.5 * dpr}px ui-monospace, Consolas, monospace`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ["000", "090", "180", "270"].forEach((txt, k) => {
+      const a = a0 * 0.12 + k * Math.PI / 2 + 0.3;
+      ctx.fillText(txt, cx + Math.cos(a) * (R4 + 11 * dpr), cy + Math.sin(a) * (R4 + 11 * dpr));
+    });
+    ctx.textAlign = "start";
+  }
+  ctx.restore();
 }
 
 function norm(t: string) { return ` ${t.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9' ]+/g, " ")} `; }
@@ -197,7 +279,7 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
       raf = requestAnimationFrame(draw);
       if (document.hidden) { last = t; return; }
       const dt = Math.min(0.1, (t - last) / 1000);
-      if (dt < (lite ? 1 / 26 : 1 / 40)) return;                           // ~30 fps: plenty, and gentle on a small PC
+      if (dt < (perf.low ? 1 / 26 : 1 / 40)) return;                       // ~30 fps: plenty, and gentle on a small PC
       last = t;
       const g = graph.current, { mode: m, sampleLevel: lvl } = live.current;
       const lv = lvl(); energy += (Math.max(lv.input, lv.output) - energy) * 0.3;
@@ -243,6 +325,7 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
         ctx.beginPath(); ctx.ellipse(cx, cy + S * 0.05, sx, Math.max(1, sx * st * 0.9), 0, 0, Math.PI * 2); ctx.stroke();
       }
       ctx.restore();
+      reactor(ctx, cx, cy, S, dpr, t, m, energy, flare, reduced);
       if (!g) return;
       if ((m === "think" || m === "act") && !reduced) {    // she is searching: her attention sweeps the hubs
         const hubs = g.pts.filter((p) => p.kind === "hub");
@@ -326,7 +409,7 @@ export function MindGraph({ mode, sampleLevel, heard, said, activity, revision }
       // labels as small glass pills; what she is remembering NOW in red
       ctx.font = `${10.5 * dpr}px Inter, system-ui, sans-serif`; ctx.textBaseline = "middle";
       const pick = [...labels.filter((l) => l.hot > 0), ...labels.filter((l) => l.hot === 0 && g.pts[l.i].kind === "hub"),
-        ...labels.filter((l) => l.hot === 0 && g.pts[l.i].kind !== "hub")].slice(0, lite ? 14 : 26);
+        ...labels.filter((l) => l.hot === 0 && g.pts[l.i].kind !== "hub")].slice(0, perf.low ? 14 : 26);
       for (const { i, hot } of pick) {
         const p = g.pts[i], [x, y] = pr[i], text = p.label, w = ctx.measureText(text).width + 12 * dpr, h = 17 * dpr;
         const lx = x + 9 * dpr, ly = y - h / 2;

@@ -488,7 +488,7 @@ html.lite .intro.leaving { filter: none; }   /* a full-screen blur while her voi
 .live-work { position: fixed; right: 18px; bottom: 92px; z-index: 40; width: min(460px, calc(100vw - 36px));
   border-radius: 16px; overflow: hidden; background: rgba(3,10,14,.92); border: 1px solid #6ff0ff40;
   box-shadow: 0 18px 60px #000a, 0 0 40px #46d8e522; backdrop-filter: blur(10px);
-  animation: lw-rise .45s cubic-bezier(.2,.9,.2,1) both; font-family: Inter, system-ui, sans-serif;
+  font-family: Inter, system-ui, sans-serif;
   display: block; box-sizing: border-box; margin: 0; left: auto; top: auto; transform: none; }
 .live-work > * { box-sizing: border-box; width: 100%; }
 .live-work header { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #6ff0ff22;
@@ -518,3 +518,149 @@ html.lite .intro.leaving { filter: none; }   /* a full-screen blur while her voi
 @keyframes lw-blink { 50% { opacity: 0; } }
 html.calm .live-work, html.calm .live-work * { animation: none !important; }
 @media (max-width: 700px) { .live-work .lw-code { height: 150px; } }
+
+/* =====================================================================================================
+   PLANCIA 2492 (HoloHud.tsx + the reactor in MindGraph): the room becomes the bridge of a ship.
+   Only transforms and opacity move every frame (the GPU does them for free); colours follow Maria's state:
+   cyan ready / listening, violet thinking, gold speaking or waiting for you.
+   ===================================================================================================== */
+@property --hcol { syntax: "<color>"; inherits: true; initial-value: #6ff0ff; }
+.hud { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; --hcol: #6ff0ff; --px: 0; --py: 0;
+  transition: --hcol 1.2s ease; }
+.hud-listen { --hcol: #7af5ff; } .hud-think, .hud-act { --hcol: #b89cff; } .hud-speak, .hud-approve { --hcol: #ffd27a; }
+.hud-reconnect { --hcol: #ff8c78; }
+
+/* the floor: a grid of light running towards you, to a horizon behind Maria */
+.hud-floor { position: absolute; left: -25%; right: -25%; bottom: 0; height: 36vh; perspective: 380px; perspective-origin: 50% 0;
+  overflow: hidden; -webkit-mask: linear-gradient(to bottom, transparent 0, #000 30%, #000 72%, transparent 100%);
+  mask: linear-gradient(to bottom, transparent 0, #000 30%, #000 72%, transparent 100%);
+  transform: translate3d(calc(var(--px) * -30px), 0, 0); }
+.hud-floor-grid { position: absolute; left: 0; right: 0; top: 0; height: 220%; transform-origin: 50% 0; will-change: transform;
+  background-image: linear-gradient(color-mix(in srgb, var(--hcol) 30%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--hcol) 24%, transparent) 1px, transparent 1px);
+  background-size: 70px 70px; animation: hud-floor 2.6s linear infinite; }
+@keyframes hud-floor { from { transform: rotateX(70deg) translate3d(0, -70px, 0); } to { transform: rotateX(70deg) translate3d(0, 0, 0); } }
+.hud-think .hud-floor-grid, .hud-act .hud-floor-grid { animation-duration: 1.1s; }
+.hud-approve .hud-floor-grid, .hud-reconnect .hud-floor-grid { animation-duration: 7s; }
+.hud-horizon { position: absolute; left: 0; right: 0; bottom: 36vh; height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--hcol) 70%, transparent) 30%, #fff 50%,
+    color-mix(in srgb, var(--hcol) 70%, transparent) 70%, transparent);
+  box-shadow: 0 0 18px 2px color-mix(in srgb, var(--hcol) 45%, transparent); opacity: .55; }
+.hud-horizon::after { content: ""; position: absolute; left: 20%; right: 20%; top: -60px; height: 120px;
+  background: radial-gradient(ellipse 50% 50% at 50% 50%, color-mix(in srgb, var(--hcol) 16%, transparent), transparent 70%); }
+
+/* the scanner: a band of light passing over the room (fast while she searches) */
+.hud-sweep { position: absolute; left: 0; right: 0; top: 0; height: 140px; will-change: transform;
+  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--hcol) 6%, transparent) 85%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--hcol) 30%, transparent);
+  animation: hud-sweep 11s cubic-bezier(.45,0,.55,1) infinite; }
+@keyframes hud-sweep { 0% { transform: translate3d(0, -160px, 0); } 42% { transform: translate3d(0, 105vh, 0); }
+  100% { transform: translate3d(0, 105vh, 0); } }
+.hud-think .hud-sweep, .hud-act .hud-sweep { animation-duration: 3.4s; }
+.hud-scanlines { position: absolute; inset: 0;
+  background: repeating-linear-gradient(to bottom, rgba(255,255,255,.022) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse 75% 70% at 50% 50%, transparent 55%, rgba(0,0,0,.55)); }
+
+/* the console frame: corners, rulers and two status lines */
+.hud-frame { position: absolute; inset: 92px 14px 12px; transform: translate3d(calc(var(--px) * 10px), calc(var(--py) * 7px), 0); }
+.hud-c { position: absolute; width: 44px; height: 44px; border: 0 solid color-mix(in srgb, var(--hcol) 65%, transparent); }
+.hud-c::after { content: ""; position: absolute; width: 5px; height: 5px; background: var(--hcol); box-shadow: 0 0 10px var(--hcol); }
+.hud-c.tl { left: 0; top: 0; border-top-width: 1.5px; border-left-width: 1.5px; } .hud-c.tl::after { left: 6px; top: 6px; }
+.hud-c.tr { right: 0; top: 0; border-top-width: 1.5px; border-right-width: 1.5px; } .hud-c.tr::after { right: 6px; top: 6px; }
+.hud-c.bl { left: 0; bottom: 0; border-bottom-width: 1.5px; border-left-width: 1.5px; } .hud-c.bl::after { left: 6px; bottom: 6px; }
+.hud-c.br { right: 0; bottom: 0; border-bottom-width: 1.5px; border-right-width: 1.5px; } .hud-c.br::after { right: 6px; bottom: 6px; }
+.hud-ruler { position: absolute; top: 30%; bottom: 30%; width: 11px; opacity: .7;
+  background: repeating-linear-gradient(to bottom, color-mix(in srgb, var(--hcol) 60%, transparent) 0 1px, transparent 1px 56px) 0 0 / 11px 100% no-repeat,
+    repeating-linear-gradient(to bottom, color-mix(in srgb, var(--hcol) 35%, transparent) 0 1px, transparent 1px 8px) 0 0 / 5px 100% no-repeat; }
+.hud-ruler.l { left: -2px; } .hud-ruler.r { right: -2px; transform: scaleX(-1); }
+.hud-ruler::after { content: ""; position: absolute; left: 13px; top: 0; border: 5px solid transparent; border-left-color: var(--hcol);
+  filter: drop-shadow(0 0 4px var(--hcol)); animation: hud-seek 6s ease-in-out infinite alternate; }
+@keyframes hud-seek { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(0, 38vh, 0); } }
+.hud-think .hud-ruler::after, .hud-act .hud-ruler::after { animation-duration: 1.2s; }
+.hud-tag { position: absolute; left: 58px; top: -5px; font: 500 9px/1 var(--mono, ui-monospace, monospace); letter-spacing: .32em;
+  color: color-mix(in srgb, var(--hcol) 75%, #fff); text-shadow: 0 0 8px color-mix(in srgb, var(--hcol) 60%, transparent); }
+.hud-tag-r { left: auto; right: 58px; display: flex; align-items: center; gap: 8px; }
+.hud-blink { width: 6px; height: 6px; border-radius: 50%; background: var(--hcol); box-shadow: 0 0 8px var(--hcol); animation: hud-blink 1.4s steps(2) infinite; }
+@keyframes hud-blink { 50% { opacity: .15; } }
+
+/* readouts: measured, never invented */
+.hud-read { position: absolute; left: 28px; bottom: 74px; margin: 0; width: 236px; display: grid; gap: 4px; padding: 9px 12px 9px 12px;
+  border-left: 1px solid color-mix(in srgb, var(--hcol) 45%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--hcol) 7%, transparent), transparent);
+  font: 10.5px/1.25 var(--mono, ui-monospace, monospace); transform: translate3d(calc(var(--px) * 6px), calc(var(--py) * 4px), 0); }
+.hud-read div { display: flex; justify-content: space-between; gap: 12px; }
+.hud-read dt { color: #6d98a1; font-size: 8.5px; letter-spacing: .2em; padding-top: 1px; }
+.hud-read dd { margin: 0; color: #def5f9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+.hud-read dd.bad { color: #ff9d8a; }
+@media (max-height: 800px) { .mind-log li:nth-child(n+5) { display: none; } }
+@media (max-height: 690px), (max-width: 980px) { .hud-read { display: none; } }
+@media (max-width: 760px) { .hud-frame, .hud-floor, .hud-horizon { display: none; } }
+
+/* the presence title prints itself like a console readout (useDecode), with the faint colour fringe and the
+   rare flicker of a projected image */
+.holo .presence-copy h2, .holo .presence-state { font-variant-ligatures: none; }
+.holo .presence-copy h2 { filter: drop-shadow(-1.5px 0 0 #ff5c8a40) drop-shadow(1.5px 0 0 #6ff0ff55) drop-shadow(0 0 24px #6ff0ff22);
+  animation: hud-flicker 9s steps(1) infinite; }
+@keyframes hud-flicker { 0%, 61%, 63.5%, 100% { opacity: 1; } 62% { opacity: .78; } 63% { opacity: .92; } }
+html.lite .holo .presence-copy h2 { filter: drop-shadow(0 0 18px #6ff0ff22); }
+.holo .presence-state { letter-spacing: .28em; }
+
+/* windows materialise: a line of light opens into the window, then its corners lock on */
+@keyframes hud-materialize {
+  0% { clip-path: inset(50% 50% 50% 50%); opacity: 0; filter: brightness(2.4); }
+  28% { clip-path: inset(49.4% 0 49.4% 0); opacity: 1; filter: brightness(2); }
+  62% { clip-path: inset(0 0 0 0); filter: brightness(1.25); }
+  70% { filter: brightness(1.6); } 76% { filter: brightness(1.05); } 100% { clip-path: inset(0 0 0 0); filter: none; } }
+.holo-board, .holo-palette, .holo-eyes, .team-card { animation: hud-materialize .62s cubic-bezier(.2,.8,.2,1) both !important; }
+.live-work { animation: hud-materialize .62s cubic-bezier(.2,.8,.2,1) both; }
+.work-stage, .holo-table { animation: holo-rise .55s cubic-bezier(.2,.9,.2,1) both, hud-materialize .62s cubic-bezier(.2,.8,.2,1) both; }
+.holo .context-sheet { animation: hud-materialize .62s cubic-bezier(.2,.8,.2,1) both; }
+.holo-palette, .holo-eyes { position: relative; }
+@media (max-width: 1200px) { .holo-board { position: relative; } }
+:is(.holo-board, .live-work, .holo-palette, .holo-eyes, .work-stage)::before { content: ""; position: absolute; inset: 5px; pointer-events: none;
+  z-index: 3; --k: color-mix(in srgb, #6ff0ff 85%, #fff);
+  background:
+    linear-gradient(var(--k), var(--k)) top left / 16px 1.5px no-repeat, linear-gradient(var(--k), var(--k)) top left / 1.5px 16px no-repeat,
+    linear-gradient(var(--k), var(--k)) top right / 16px 1.5px no-repeat, linear-gradient(var(--k), var(--k)) top right / 1.5px 16px no-repeat,
+    linear-gradient(var(--k), var(--k)) bottom left / 16px 1.5px no-repeat, linear-gradient(var(--k), var(--k)) bottom left / 1.5px 16px no-repeat,
+    linear-gradient(var(--k), var(--k)) bottom right / 16px 1.5px no-repeat, linear-gradient(var(--k), var(--k)) bottom right / 1.5px 16px no-repeat;
+  animation: hud-lock .9s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes hud-lock { 0%, 45% { opacity: 0; transform: scale(1.06); } 75% { opacity: 1; } 100% { opacity: .9; transform: none; } }
+.holo-board header .eyebrow, .live-work header b { font-family: var(--mono, ui-monospace, monospace); letter-spacing: .14em; }
+
+/* the nav: a light running along its edge, like data on a bus */
+.holo .tabs::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; pointer-events: none;
+  background: linear-gradient(90deg, transparent 0 44%, var(--cyan) 50%, transparent 56% 100%) 100% 0 / 300% 100% no-repeat;
+  animation: hud-bus 8s linear infinite; }
+@keyframes hud-bus { to { background-position: 0 0; } }
+.holo .tabs button:hover { text-shadow: -1px 0 #ff5c8a88, 1px 0 #6ff0ffaa; }
+
+/* the other screens (Registro, Notte, Siti…): every card gets the console corners */
+.holo .card { position: relative; }
+.holo .card::after { content: ""; position: absolute; inset: -1px; pointer-events: none; border-radius: inherit; --k: #6ff0ff99;
+  background: linear-gradient(var(--k), var(--k)) top left / 12px 1.5px no-repeat, linear-gradient(var(--k), var(--k)) top left / 1.5px 12px no-repeat,
+    linear-gradient(var(--k), var(--k)) bottom right / 12px 1.5px no-repeat, linear-gradient(var(--k), var(--k)) bottom right / 1.5px 12px no-repeat; }
+
+/* calm (?calmo) stays still; lite keeps the look and drops what costs */
+html.calm .hud * { animation: none !important; }
+html.lite .hud-scanlines { background: radial-gradient(ellipse 75% 70% at 50% 50%, transparent 55%, rgba(0,0,0,.5)); }
+html.lite .hud-floor { -webkit-mask: none; mask: none; opacity: .7; }
+html.lite .hud-floor-grid { animation: none; transform: rotateX(70deg); }   /* still: a moving floor cost 15% on the shop laptop */
+html.lite .hud-sweep { display: none; }
+html.lite .hud-horizon { box-shadow: none; }
+
+/* the command list prints itself row by row */
+.holo-palette li { animation: hud-row .32s cubic-bezier(.2,.8,.2,1) both; }
+.holo-palette li:nth-child(1) { animation-delay: 0.205s; }
+.holo-palette li:nth-child(2) { animation-delay: 0.230s; }
+.holo-palette li:nth-child(3) { animation-delay: 0.255s; }
+.holo-palette li:nth-child(4) { animation-delay: 0.280s; }
+.holo-palette li:nth-child(5) { animation-delay: 0.305s; }
+.holo-palette li:nth-child(6) { animation-delay: 0.330s; }
+.holo-palette li:nth-child(7) { animation-delay: 0.355s; }
+.holo-palette li:nth-child(8) { animation-delay: 0.380s; }
+.holo-palette li:nth-child(9) { animation-delay: 0.405s; }
+.holo-palette li:nth-child(10) { animation-delay: 0.430s; }
+.holo-palette li:nth-child(11) { animation-delay: 0.455s; }
+.holo-palette li:nth-child(12) { animation-delay: 0.480s; }
+@keyframes hud-row { from { opacity: 0; transform: translate3d(-10px, 0, 0); } to { opacity: 1; transform: none; } }

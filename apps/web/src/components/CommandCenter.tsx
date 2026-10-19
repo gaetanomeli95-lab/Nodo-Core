@@ -15,6 +15,8 @@ import { MindGraph } from "./holo/MindGraph";
 import { Eyes } from "./holo/Eyes";
 import { Palette, type Action } from "./holo/Palette";
 import { Subtitles } from "./holo/Subtitles";
+import { HoloHud } from "./holo/HoloHud";
+import { useDecode } from "./holo/useDecode";
 
 type Turn = { who: "user" | "nodo"; text: string; done?: boolean };
 type Decision = { id: string; label: string; site?: string; preview?: string; pr?: string; sending?: boolean };
@@ -83,7 +85,11 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     (window as unknown as Record<string, unknown>).nodoSync = { sync, markReady };
     (window as unknown as Record<string, unknown>).nodoWork = (w: Work | null) => setWork(w);
     (window as unknown as Record<string, unknown>).nodoMusic = (on: boolean, style?: string) => on ? startMusic(style) : stopMusic();
+    (window as unknown as Record<string, unknown>).nodoMode = (m: PresenceMode | null, level?: number) => {
+      setForcedMode(m); fakeLevel.current = level ?? null; };
   }, []);
+  const [forcedMode, setForcedMode] = useState<PresenceMode | null>(null);   // ?prova only: show a state by hand
+  const fakeLevel = useRef<number | null>(null);
   const onOpenTabRef = useRef(onOpenTab);
   onOpenTabRef.current = onOpenTab;
   /** «Sul tavolo» cards, plus the screen commands: show a file big, open a tab, close what is shown. */
@@ -331,9 +337,9 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     if (!decision || decision.sending) return;
     voice.answer(decision.id, choice); setDecision({ ...decision, sending: true });
   };
-  const mode: PresenceMode = voice.recovering ? "reconnect" : decision ? "approve" : voice.audioPlaying ? "speak"
+  const mode: PresenceMode = forcedMode ?? (voice.recovering ? "reconnect" : decision ? "approve" : voice.audioPlaying ? "speak"
     : activity ? "act" : busy || ["THINKING", "UNDERSTANDING", "ACTING"].includes(voice.state) ? "think"
-    : voice.microphoneOn ? "listen" : voice.state === "TRANSCRIBING" ? "think" : "rest";
+    : voice.microphoneOn ? "listen" : voice.state === "TRANSCRIBING" ? "think" : "rest");
   const stuck = mode === "think" || mode === "act";
   useEffect(() => {                                   // never «thinking» for minutes: stop, say so, listen again
     if (!stuck) return;
@@ -354,6 +360,9 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
       : mode === "speak" ? (voice.engine === "api" ? "Per interrompermi tocca Interrompi." : "Puoi interrompermi quando vuoi.")
       : "Collego la tua richiesta alle cose che contano.");
 
+  const stateLabel = !voice.connected ? "COLLEGAMENTO IN CORSO" : mode === "rest" ? "PRONTO QUANDO VUOI" : { listen: "IN ASCOLTO", think: "STO PENSANDO", act: "AL LAVORO", speak: "NODO PARLA", approve: "UNA TUA DECISIONE", reconnect: "RICONNESSIONE" }[mode];
+  const shownTitle = useDecode(title);
+  const shownState = useDecode(stateLabel, 380);
   return <section className={`conversation-room ${diary ? "with-diary" : ""} ${dragging ? "dragging" : ""}`}
     onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }}
     onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
@@ -364,14 +373,15 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     <Eyes source={eyes} onClose={() => setEyes(null)} onShot={(f, q) => void handOver(f, q || "Guarda e dimmi cosa vedi.")} />
     <Palette actions={actions} onAsk={(t) => void send(t)} />
     {!diary && <Board revision={boardRev} />}
+    <HoloHud mode={mode} connected={voice.connected} />
     <div className={`voice-stage${(surface || work) && !decision ? " has-holo" : ""}`}>
-      <MindGraph mode={mode} sampleLevel={voice.sampleLevel} heard={voice.partial || lastUser} said={lastNodo}
+      <MindGraph mode={mode} sampleLevel={fakeLevel.current !== null ? () => ({ input: fakeLevel.current ?? 0, output: fakeLevel.current ?? 0 }) : voice.sampleLevel} heard={voice.partial || lastUser} said={lastNodo}
         activity={activity} revision={turns.length + boardRev} />
       <div className="stage-topline"><span className="eyebrow">IL TUO SPAZIO DI LAVORO</span>
         <button className={`quiet-button ${diary ? "selected" : ""}`} aria-expanded={diary} onClick={() => setDiary(!diary)}>Diario <span>↗</span></button></div>
-      <div className="presence-copy" aria-live="polite"><span className={`presence-state ${mode}`}><i />
-        {!voice.connected ? "COLLEGAMENTO IN CORSO" : mode === "rest" ? "PRONTO QUANDO VUOI" : { listen: "IN ASCOLTO", think: "STO PENSANDO", act: "AL LAVORO", speak: "NODO PARLA", approve: "UNA TUA DECISIONE", reconnect: "RICONNESSIONE" }[mode]}</span>
-        <h2>{title}</h2><p>{subtitle}</p></div>
+      <div className="presence-copy" aria-live="polite"><span className={`presence-state ${mode}`} aria-label={stateLabel}><i />
+        {shownState}</span>
+        <h2 aria-label={title}>{shownTitle}</h2><p>{subtitle}</p></div>
       <div className="holo-stage-core mind-spacer" />
       {activity && !work && <div className="holo-chip" role="status"><i />{activity}</div>}
       {work && !surface && !decision && <WorkStage work={work} />}
