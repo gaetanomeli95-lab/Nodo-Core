@@ -1,0 +1,8 @@
+/* The bridge's typefaces, shipped with NODO so they work offline (SIL Open Font License, see LICENSE-*.txt):
+   Michroma for titles and the ship's clock, Chakra Petch for text, JetBrains Mono for readouts. */
+@font-face { font-family: "Michroma"; font-style: normal; font-weight: 400; font-display: swap; src: url("./michroma-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 400; font-display: swap; src: url("./chakra-petch-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 500; font-display: swap; src: url("./chakra-petch-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 600; font-display: swap; src: url("./chakra-petch-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("./jetbrains-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 500; font-display: swap; src: url("./jetbrains-mono-latin-500-normal.woff2") format("woff2"); }

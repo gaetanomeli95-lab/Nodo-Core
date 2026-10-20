@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { startMusic, stopMusic } from "../music";
 import { downloadFile, get, post, streamCommand, type NodoEvent, type VoiceConfig, type VoiceEvent } from "../api";
 import { useVoiceSession } from "./Voice";
@@ -11,11 +11,12 @@ import { markReady, sync } from "../introSync";
 import { HoloTable, type HoloSurface } from "./holo/HoloTable";
 import { patienceFor, SLOW_TOOLS, type Work, WorkStage } from "./holo/WorkStage";
 import { LiveWork } from "./holo/LiveWork";
-import { MindGraph } from "./holo/MindGraph";
 import { Eyes } from "./holo/Eyes";
 import { Palette, type Action } from "./holo/Palette";
 import { Subtitles } from "./holo/Subtitles";
-import { HoloHud } from "./holo/HoloHud";
+import { BridgeGL, STATE_CSS } from "./holo/BridgeGL";
+import { BridgeLeft, BridgeRight, BridgeRings } from "./holo/Bridge";
+import { useMindFeed } from "./holo/useMindFeed";
 import { useDecode } from "./holo/useDecode";
 
 type Turn = { who: "user" | "nodo"; text: string; done?: boolean };
@@ -351,8 +352,8 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     return () => clearTimeout(t);
   }, [stuck, work?.tool]);  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!stuck && !busy) setWork(null); }, [stuck, busy]);
-  const title = { rest: "Sono qui.", listen: "Ti ascolto.", think: "Metto a fuoco.", act: "Ci sto lavorando.",
-    speak: "Un passo avanti.", approve: "Decidiamo insieme.", reconnect: "Riprendo il filo." }[mode];
+  const title = { rest: "Sono qui", listen: "Ti ascolto", think: "Metto a fuoco", act: "Ci sto lavorando",
+    speak: "Un passo avanti", approve: "Decidiamo insieme", reconnect: "Riprendo il filo" }[mode];
   const subtitle = mode === "reconnect" ? "Sto riconnettendo la voce. Attendi un momento prima di parlare."
     : activity || (mode === "rest" ? "Un pensiero, un progetto, una cosa da risolvere."
       : mode === "approve" ? "Guarda la proposta. La scelta resta tua."
@@ -363,6 +364,19 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
   const stateLabel = !voice.connected ? "COLLEGAMENTO IN CORSO" : mode === "rest" ? "PRONTO QUANDO VUOI" : { listen: "IN ASCOLTO", think: "STO PENSANDO", act: "AL LAVORO", speak: "NODO PARLA", approve: "UNA TUA DECISIONE", reconnect: "RICONNESSIONE" }[mode];
   const shownTitle = useDecode(title);
   const shownState = useDecode(stateLabel, 380);
+  // the bridge: one stable function for the real voice level (or the one forced by ?prova), the mind's real feed,
+  // and Maria's two colours on the whole page
+  const levelSrc = useRef(voice.sampleLevel);
+  levelSrc.current = fakeLevel.current !== null ? () => ({ input: fakeLevel.current ?? 0, output: fakeLevel.current ?? 0 }) : voice.sampleLevel;
+  const level = useCallback(() => levelSrc.current(), []);
+  const feed = useMindFeed({ heard: voice.partial || lastUser, said: lastNodo, activity, revision: turns.length + boardRev });
+  useEffect(() => {
+    const [a, b] = STATE_CSS[mode];
+    document.documentElement.style.setProperty("--state", a);
+    document.documentElement.style.setProperty("--state2", b);
+  }, [mode]);
+  const holoUp = !!(surface || work) && !decision;
+  const hint = mode === "reconnect" || mode === "approve" || activity ? subtitle : null;   // only what adds something
   return <section className={`conversation-room ${diary ? "with-diary" : ""} ${dragging ? "dragging" : ""}`}
     onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }}
     onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
@@ -372,21 +386,22 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
     <LiveWork onOpen={(item) => { setViewing(item); onOpenTabRef.current?.("command"); }} />
     <Eyes source={eyes} onClose={() => setEyes(null)} onShot={(f, q) => void handOver(f, q || "Guarda e dimmi cosa vedi.")} />
     <Palette actions={actions} onAsk={(t) => void send(t)} />
-    {!diary && <Board revision={boardRev} />}
-    <HoloHud mode={mode} connected={voice.connected} />
-    <div className={`voice-stage${(surface || work) && !decision ? " has-holo" : ""}`}>
-      <MindGraph mode={mode} sampleLevel={fakeLevel.current !== null ? () => ({ input: fakeLevel.current ?? 0, output: fakeLevel.current ?? 0 }) : voice.sampleLevel} heard={voice.partial || lastUser} said={lastNodo}
-        activity={activity} revision={turns.length + boardRev} />
-      <div className="stage-topline"><span className="eyebrow">IL TUO SPAZIO DI LAVORO</span>
-        <button className={`quiet-button ${diary ? "selected" : ""}`} aria-expanded={diary} onClick={() => setDiary(!diary)}>Diario <span>↗</span></button></div>
-      <div className="presence-copy" aria-live="polite"><span className={`presence-state ${mode}`} aria-label={stateLabel}><i />
-        {shownState}</span>
-        <h2 aria-label={title}>{shownTitle}</h2><p>{subtitle}</p></div>
-      <div className="holo-stage-core mind-spacer" />
+    <BridgeGL mode={mode} sampleLevel={level} pulse={feed.pulse} dim={holoUp || !!decision} />
+    <div className={`voice-stage bridge-stage${holoUp ? " has-holo" : ""}`}>
+      <BridgeRings mode={mode} />
+      <div className="bridge-row">
+        <BridgeLeft stats={feed.stats} sampleLevel={level} />
+        <div className="bridge-center" />
+        <BridgeRight log={feed.log} lit={feed.lit}>{!diary && <Board revision={boardRev} />}</BridgeRight>
+      </div>
       {activity && !work && <div className="holo-chip" role="status"><i />{activity}</div>}
       {work && !surface && !decision && <WorkStage work={work} />}
       {singing && <div className="sing-notes" aria-hidden="true">{["♪", "♫", "♩", "♬", "♪", "♫", "♬", "♩"].map((n, i) =>
         <i key={i} style={{ left: `${8 + i * 11.5}%`, animationDelay: `${i * 0.55}s` }}>{n}</i>)}</div>}
+      <div className="bridge-deck">
+      <div className="presence-copy" aria-live="polite"><span className={`presence-state ${mode}`} aria-label={stateLabel}><i />
+        {shownState}</span>
+        <h2 aria-label={title}>{shownTitle}</h2>{hint && <p>{hint}</p>}</div>
       {!decision && !surface && <Subtitles user={lastUser} nodo={lastNodo} partial={voice.partial} />}
       {error && <div className="voice-notice" role="alert"><span>{error}</span><button aria-label="Chiudi avviso" onClick={() => setError(null)}>×</button></div>}
       {decision ? <section className="context-sheet decision-sheet" aria-label="Decisione in attesa">
@@ -417,6 +432,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
         <button className="quiet-button" aria-expanded={writing} onClick={() => setWriting(!writing)}>{writing ? "Chiudi testo" : "Scrivi un pensiero"}</button>
         <button className="quiet-button" title="Mostra a NODO una foto (scontrino, bolla, etichetta) o un documento" onClick={() => fileInput.current?.click()}>Mostrale una foto</button>
         <button className="quiet-button" title="NODO guarda con la camera" onClick={() => setEyes("camera")}>Occhi</button>
+        <button className={`quiet-button ${diary ? "selected" : ""}`} aria-expanded={diary} onClick={() => setDiary(!diary)}>Diario</button>
         <button className="quiet-button holo-k" title="Tutti i comandi (Ctrl+K)" onClick={() => window.dispatchEvent(new Event("nodo:palette"))}>⌘K</button>
         <input ref={fileInput} type="file" hidden accept="image/*,.pdf,.docx,.xlsx,.pptx,.csv,.txt"
           onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void handOver(f); }} />
@@ -431,6 +447,7 @@ export function CommandCenter({ voiceConfig, onTrace, onActiveContext, onRequest
           <button className={!precise ? "on" : ""} disabled={modeBusy || voice.liveOn} title="Dal vivo: Gemini ascolta e parla, il cervello Claude pensa e ricorda" onClick={() => setVoiceMode("auto")}>Veloce</button>
           <button className={precise ? "on" : ""} disabled={modeBusy || voice.liveOn} title="Risponde il cervello Claude: più preciso su conti e registro" onClick={() => setVoiceMode("precise")}>Precisa</button>
         </span></footer>
+      </div>
     </div>
     {diary && <aside className="conversation-diary"><header><span className="eyebrow">DIARIO</span><button className="quiet-button" onClick={() => setDiary(false)}>Chiudi</button></header>
       <p className="diary-intro">Le parole restano qui. Il lavoro continua al centro.</p>

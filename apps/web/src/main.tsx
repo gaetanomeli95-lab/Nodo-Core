@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./motion";
+import "./fonts/fonts.css";
 import "./styles.css";
 import "./theme.css";
 

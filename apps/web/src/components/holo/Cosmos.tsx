@@ -10,7 +10,7 @@ export function Cosmos() {
     const ctx = el.getContext("2d");
     if (!ctx) return;
     const reduced = calm;
-    let w = 0, h = 0, raf = 0, last = 0;
+    let w = 0, h = 0, raf = 0, last = 0, checked = -1e9, covered = false;
     const stars = Array.from({ length: lite ? 90 : 160 }, () => ({ x: Math.random(), y: Math.random(), r: Math.random() * 1.1 + 0.2, t: Math.random() * 6 }));
     const nodes = Array.from({ length: lite ? 26 : 46 }, () => ({
       x: Math.random(), y: Math.random(), vx: (Math.random() - 0.5) * 0.00012, vy: (Math.random() - 0.5) * 0.00012,
@@ -26,6 +26,8 @@ export function Cosmos() {
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
       if (document.hidden || now - last < (lite ? 80 : 33)) return;   // a background: 12 fps is plenty on a small PC
+      if (now - checked > 1000) { checked = now; const b = document.querySelector(".bridge-gl"); covered = !!b && b.getClientRects().length > 0; }
+      if (covered) { last = now; return; }                              // the bridge is drawing the sky: rest
       const dt = Math.min(64, now - (last || now));
       last = now;
       ctx.clearRect(0, 0, w, h);
