@@ -1,6 +1,6 @@
 # NODO Core — Cognitive Evolution: passaggio di consegne
 
-Aggiornato: 19 ottobre 2026, Europe/Rome. Sessione 02 (Devin): **S02 completata**.
+Aggiornato: 20 ottobre 2026, Europe/Rome. **S02 e P4.5 già pubblicate da Devin; S03 resta la prossima singola attività.** Questa ripresa chiude soltanto il checkpoint documentale della Fase 0.
 
 ## Obiettivo e limiti della sessione
 
@@ -8,7 +8,7 @@ NODO è un assistente personale con interazione principalmente vocale, su Window
 
 Una micro-attività per sessione; riservare tempo a test, commit e push. Nessun nuovo modello neurale, GRU, dipendenza pesante o riscrittura senza necessità e confronto misurato. Nessun agente parallelo necessario in questa sessione. Non avviare fasi successive automaticamente.
 
-**Risultato di questa sessione:** audit circoscritto del percorso richiesta e della telemetria, una lacuna riprodotta e questo documento. Nessun codice applicativo modificato, nessun miglioramento di velocità dichiarato. La baseline qui è strutturale e diagnostica: mancano tempi reali prima/dopo sul PC.
+**Risultato di S01 (19 ottobre):** audit circoscritto del percorso richiesta e della telemetria, una lacuna riprodotta e questo documento. Nessun codice applicativo modificato, nessun miglioramento di velocità dichiarato. La baseline qui è strutturale e diagnostica: mancano tempi reali prima/dopo sul PC.
 
 ## Repository e checkpoint
 
@@ -18,10 +18,12 @@ Una micro-attività per sessione; riservare tempo a test, commit e push. Nessun 
 - Branch creato da quel commit: **`work/nodo-cognitive-evolution-v01`**. Tutto il lavoro di questa iniziativa deve restare qui.
 - La precedente [PR #8](https://github.com/gaetanomeli95-lab/Nodo-Core/pull/8) risulta integrata; il suo commit `5cb85ccf0df62191cd898d75fb21e2419d98bb6f` è antenato della base verificata. Non riapplicare la patch né riutilizzare i vecchi risultati di test come prova dell'attuale versione.
 - Non sono stati modificati `main` o `integration/nodo-core-v01`; nessun merge, release, deploy o force push.
-- File modificato in questa sessione: soltanto `docs/work/NODO_COGNITIVE_EVOLUTION_HANDOFF.md`.
+- File modificato in S01 e nella ripresa documentale del 20 ottobre: soltanto `docs/work/NODO_COGNITIVE_EVOLUTION_HANDOFF.md`.
 - Ultimo commit pubblicato e ricevuta del push: vedere il registro checkpoint in fondo. Per lo SHA della revisione che contiene questo documento usare `git log -1 --format=%H -- docs/work/NODO_COGNITIVE_EVOLUTION_HANDOFF.md`; non tentare di inserire in un commit il suo stesso hash.
 
 ## Architettura osservata e percorso effettivo
+
+La mappa seguente descrive la base S01 (`3683065`). Le evoluzioni S02, P1–P4 e P4.5 sono registrate sotto: riutilizzarle, senza ripetere l'implementazione.
 
 | Passaggio | Codice pertinente | Comportamento attuale da riutilizzare |
 | --- | --- | --- |
@@ -54,8 +56,8 @@ Gli aggiornamenti successivi alla PR #8 includono lavagna viva, ricerca preventi
 
 ## Lacune e ipotesi da distinguere
 
-1. **CORRETTO in S02 (Devin, 2026-10-19):** `VoiceSession.begin_turn()` azzerava `stamps`, perdeva `speech_end`/`speech_started`/`transcript_partial_first` raccolti nella stessa acquisizione, e `mark()` con `setdefault` impediva la rimarcatura nel turno successivo. Ora `begin_turn` conserva i timbri più recenti dell'ultimo `turn_done`, `mark_acquisition()` sovrascrive i timbri pre-turno, e `discard_acquisition_stamps()` pulisce i percorsi che abortiscono senza turno (audio troppo corto, STT fallita/vuota, rumore). Verificato su DB reale: i turni precedenti mostravano solo `model_total`/`tts_total`/`total` — `stt`, `context`, `model_ttft`, `tts_tfa` mancavano in ogni riga di `voice_turn_metrics`.
-2. **Osservato nel codice:** `_live_finalize_input` emette `transcript.final` senza marcare `transcript_final`; la copertura delle misure Live è diversa da quella non-Live. La prima trascrizione parziale Live non è necessariamente l'inizio fisico del parlato. Correggere questo punto in una sessione separata dalla prossima.
+1. **CORRETTO in S02 (Devin, 2026-10-19):** `VoiceSession.begin_turn()` azzerava `stamps`, perdeva `speech_end`/`speech_started`/`transcript_partial_first` raccolti nella stessa acquisizione, e `mark()` con `setdefault` impediva la rimarcatura nel turno successivo. Ora `begin_turn` conserva i timbri più recenti dell'ultimo `turn_done`, `mark_acquisition()` sovrascrive i timbri pre-turno, e `discard_acquisition_stamps()` pulisce i percorsi che abortiscono senza turno (audio troppo corto, STT fallita/vuota, rumore). Secondo la verifica sul DB reale riportata da Devin (non ripetuta in questa ripresa): i turni precedenti mostravano solo `model_total`/`tts_total`/`total` — `stt`, `context`, `model_ttft`, `tts_tfa` mancavano in ogni riga di `voice_turn_metrics`.
+2. **Osservato nel codice:** `_live_finalize_input` emette `transcript.final` senza marcare `transcript_final`; la copertura delle misure Live è diversa da quella non-Live. La prima trascrizione parziale Live non è necessariamente l'inizio fisico del parlato. Confermato al commit `aec24fe`: è il punto di partenza della prossima attività S03. Gli eventi `audio`, `output`, `tool_call` e fine turno non sono una misura fisica di fine parlato; controllarne l'ordine prima di calcolare una latenza.
 3. **Da misurare:** costo delle scansioni memoria e della preparazione del contesto. I limiti di caratteri riducono l'input al modello, non garantiscono meno letture dal database.
 4. **Da misurare:** le richieste di ricordo riconosciute eseguono già `search_knowledge` e `search_conversations` prima del modello; se non trovano risultati invitano a cercare ancora. Non introdurre subito un'altra cache: prima contare le chiamate e verificare query, scadenza e invalidazione.
 5. **Da misurare:** fallback seriali, `provider.available()` e CLI possono dominare l'attesa. I provider in cooldown vengono spostati in fondo, non sempre esclusi. `_live_think` ha nuovamente un margine di 25 secondi oltre `brain_deadline_s`; non ridurlo alla cieca, perché serve anche alla risposta finale e ai lavori lunghi.
@@ -81,11 +83,12 @@ Gli aggiornamenti successivi alla PR #8 includono lavagna viva, ricerca preventi
 | P2 / Agenda-2 (Devin, 2026-10-19) | **Completata** | `/api/v1/activity` (feed EventLog+VoiceTurnMetric); MindGraph lo poll-a: hub toccati si accendono, il core emette un'onda d'urto, il log racconta. Polling saltato a pagina nascosta, rallentato in `lite`. `agent.work` emesso anche a inizio tool. Build web verde. Commit `8ad8f6e`. |
 | P4 / Agenda-4 (Devin, 2026-10-19) | **Completata** | `docs/ARCHITECTURE_STUDY.md` (mappa onesta + strada proprietaria). Router: `_LAT`/`_ATTEMPTS` a livello modulo (core per-request) → EWMA latenza e affidabilità misurate pesano in `_score`; `router_stats()` in `/api/v1/system`. X.2: `_foreign_reply` nel brain loop → risposte inglesi/spagnole/CJK ripetute in italiano. 2 test nuovi. Commit `4e78916`. |
 | Fase 2 | Parzialmente (P3) | Routines = prima pietra associativa predittiva; resta il recupero semantico. |
-| Fase 3 | Parzialmente (P4) | Router ora apprende dalla latenza/esiti reali; prossimo: intent → RouteRequest. |
+| P4.5 / Agenda-4 | **Completata (Devin)** | Intent → requisiti di `RouteRequest` e purpose per-intent. Commit `aec24fe95401d58d4f7886dd7e1079f1087c4d8b`, verificato sul remoto il 20 ottobre. |
+| Fase 3 | Parzialmente (P4 + P4.5) | Pesi da latenza/esiti e routing per intento presenti; efficacia e copertura dei percorsi da misurare. Non ripetere l'implementazione intent → RouteRequest. |
 | Fase 4 | Non iniziata | Valutare le lezioni già presenti e trasformare correzioni in regressioni misurabili. |
 | Fase 5 | Parzialmente (P2) | Feed attività collegato a MindGraph; mancano archi tra ricordi richiamati e nodi specifici. |
 
-**S03, confine preciso:** leggere solo `_live_finalize_input` e i marchi di timestamp nel percorso Live in `voice/runtime.py`, `voice/live.py` e i relativi test (`test_voice_live.py`). Coprire `transcript_final`/fine-parlato dove l'evento reale è disponibile; non inventare un `speech_end` fittizio. Verificare le metriche Live su due turni e un'interruzione; niente nuove colonne, motori, routing, cache o interfaccia. Fermarsi dopo test, HANDOFF, commit e push.
+**S03, confine preciso:** leggere solo `_live_finalize_input` e i marchi di timestamp nel percorso Live in `voice/runtime.py`, `voice/live.py` e i relativi test (`test_voice_live.py`). Coprire `transcript_final`/fine-parlato dove l'evento reale è disponibile; non inventare un `speech_end` fittizio. Verificare le metriche Live su due turni, un'interruzione e l'ordine audio/trascrizione: non retrodatare eventi o attribuire al turno successivo i timbri precedenti. Se manca una coppia di eventi attendibili, lasciare la misura assente e documentarne il motivo; niente nuove colonne, motori, routing, cache o interfaccia. Fermarsi dopo test, HANDOFF, commit e push.
 
 ## Verifiche effettivamente eseguite in S01
 
@@ -94,7 +97,7 @@ Gli aggiornamenti successivi alla PR #8 includono lavagna viva, ricerca preventi
 - Nessuna suite pytest completa, build frontend, prova audio o test Windows eseguiti in S01: modifica solo documentale. Non presentare i 344 test della precedente sessione come risultati attuali.
 - Verifiche del documento e pubblicazione: riportate nel registro checkpoint.
 
-Riproduzione eseguita dalla radice repository (Bash, Python 3.12+):
+Riproduzione storica eseguita alla base `3683065fc55f68b54f44a882aa5f9400133cd94a` dalla radice repository (Bash, Python 3.12+). Non è il test di accettazione della versione attuale: S02 ha modificato intenzionalmente `begin_turn()`. Per le regressioni usare pytest come indicato sotto:
 
 ```bash
 PYTHONPATH=apps/api python3 - <<'PY'
@@ -124,14 +127,14 @@ PY
 2. `git fetch origin work/nodo-cognitive-evolution-v01` e `git switch work/nodo-cognitive-evolution-v01` (oppure creare il checkout da `origin/work/nodo-cognitive-evolution-v01` se assente). Usare `git pull --ff-only`; se diverge, ispezionare e non forzare.
 3. Controllare `git rev-parse HEAD` e `git ls-remote origin refs/heads/work/nodo-cognitive-evolution-v01`. Se la base di integrazione è avanzata, annotarlo; non unirla automaticamente a questa micro-attività.
 4. Eseguire **soltanto S03**, mantenendo guardie di approvazione, registro, memoria, voce e Night Shift.
-5. Nell'ambiente Python esistente, dalla cartella `apps/api`, comandi di verifica previsti per S02 (non eseguiti in S01):
+5. Nell'ambiente Python esistente, dalla cartella `apps/api`, comandi di verifica previsti per **S03** (non eseguiti nella ripresa documentale del 20 ottobre):
 
 ```text
-python -m pytest -q tests/test_voice_ws.py tests/test_responsiveness.py
-python -m ruff check nodo/voice/base.py nodo/voice/runtime.py tests/test_voice_ws.py tests/test_responsiveness.py
+python -m pytest -q tests/test_voice_live.py tests/test_voice_ws.py
+python -m ruff check nodo/voice/runtime.py nodo/voice/live.py tests/test_voice_live.py
 ```
 
-Se manca l'ambiente, creare una venv Python 3.12 e installare `python -m pip install -e ".[dev]"` da `apps/api`; non installare dipendenze audio locali pesanti per test con provider fake. Eseguire dalla venv, senza modificare configurazioni o chiavi dell'utente. Per regressioni Live aggiungere i test Live solo quando quel percorso viene modificato.
+Se manca l'ambiente, creare una venv Python 3.12 e installare `python -m pip install -e ".[dev]"` da `apps/api`; non installare dipendenze audio locali pesanti per test con provider fake. Eseguire dalla venv, senza modificare configurazioni o chiavi dell'utente. I test non-Live controllano le regressioni del runtime condiviso. Se S03 richiede anche una modifica a `base.py`, includerlo nel controllo Ruff; mantenere il perimetro limitato ai timestamp.
 
 6. Aggiornare test/esiti, file, decisione e prossima singola attività in questo HANDOFF; `git diff --check`; aggiungere solo file previsti, mai `.env`, database o log personali.
 7. Commit descrittivo e `git push origin HEAD:refs/heads/work/nodo-cognitive-evolution-v01`. Verificare lo SHA remoto con `git ls-remote`. Se il push è respinto, ispezionare le modifiche remote: nessun force push, nessuna falsa conferma.
@@ -148,6 +151,9 @@ Se manca l'ambiente, creare una venv Python 3.12 e installare `python -m pip ins
 
 
 ### P4.5 — Router per-intent (completamento P4)
+
+Commit `aec24fe95401d58d4f7886dd7e1079f1087c4d8b`; implementazione verificata nel diff remoto il 20 ottobre. I risultati di test seguenti sono quelli riportati da Devin, non nuove esecuzioni di questa ripresa.
+
 - `nodo/providers/router.py`: tabella `INTENT_ROUTES` + `intent_route(intent)`. Ogni intent riconosciuto
   dichiara cosa serve davvero al modello: intent dati (`today`, `night_report`, `pending_approvals`,
   `sites_status`, `run_checks`, `list_projects`) e decisioni nude (`approve`/`reject`/`stop`) →
@@ -161,3 +167,15 @@ Se manca l'ambiente, creare una venv Python 3.12 e installare `python -m pip ins
   chiamante. Voce auto continua a forzare `prefer_fast` come prima.
 - Test: `tests/test_router.py` +3 (shaping per intent, intent ignoto neutro, purpose entro colonna).
 - Verifiche: router 15/15, brain 11/11, core 15/15, responsiveness 24/24, ruff pulito.
+
+### 2026-10-20 — Chiusura del checkpoint documentale (Codex)
+
+- Base di questa ripresa: remoto `work/nodo-cognitive-evolution-v01` a `aec24fe95401d58d4f7886dd7e1079f1087c4d8b` (P4.5). `integration/nodo-core-v01` resta a `3683065fc55f68b54f44a882aa5f9400133cd94a` al controllo iniziale; nessuna modifica richiesta a quel branch.
+- Verificati con `git ls-remote` e lettura GitHub: HEAD di lavoro e documento; letti il diff P4.5, `VoiceSession.begin_turn/mark_acquisition/discard_acquisition_stamps` e i punti pertinenti del runtime Live. Presenza delle modifiche confermata; prestazioni reali non misurate.
+- Unico file modificato: questo HANDOFF. Corretti i riferimenti alla sessione, registrato P4.5 nella roadmap, aggiornati i comandi per S03 e distinta l'evidenza storica dai controlli attuali. Nessuna modifica al codice applicativo.
+- Test di prodotto: nessuna nuova esecuzione pytest, build, prova Windows o audio. I conteggi S02/P1–P4/P4.5 e i dati del PC sono risultati riportati da Devin; non presentarli come verifica indipendente del 20 ottobre.
+- Verifiche documentali superate: sezioni obbligatorie, delimitatori Markdown, assenza di spazi finali, conservazione dei checkpoint precedenti, corrispondenza SHA/blob remoto e presenza dei quattro percorsi per i prossimi test. `git diff --no-index --check` senza diagnostica; il codice 1 indica differenze tra i documenti, non errori di spaziatura.
+- Stato del salvataggio: `aec24fe95401d58d4f7886dd7e1079f1087c4d8b` è l'ultimo checkpoint applicativo verificato prima di questa revisione. Pubblicare questa sola revisione sul medesimo branch e verificare SHA remoto/contenuto; il rapporto finale della sessione riporta lo SHA risultante. Per risalire alla revisione documentale usare il comando indicato nella sezione Repository.
+- Prossima singola attività: **S03, timestamp Live**, nel confine definito sopra. Non iniziata in questa ripresa.
+- Rischio aperto: l'ordine dei messaggi Live può rendere la finalizzazione della trascrizione successiva al primo audio; aggiungere soltanto un timestamp non basta a garantire una misura valida. Servono test con eventi espliciti, senza inventare la fine del parlato.
+- Continuità locale: il checkout della precedente S01 può divergere dal remoto perché il commit documentale locale e quello pubblicato hanno SHA diversi. Non forzare il push o azzerare modifiche: prima ispezionare la divergenza, poi usare un checkout pulito del branch remoto preservando il lavoro esistente.
