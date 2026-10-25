@@ -141,7 +141,9 @@ def open_panel(port: int) -> None:
                 # its OWN browser profile: if Edge is already open, flags given to a second window are ignored
                 # (no sound at start); a separate profile is a separate process that honours them, and it
                 # remembers the microphone permission for NODO alone
-                profile = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "NODO" / "finestra"
+                # NODO_PROFILE_DIR: started from the USB stick, the window profile lives on the stick too
+                profile = os.environ.get("NODO_PROFILE_DIR") or \
+                    Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "NODO" / "finestra"
                 subprocess.Popen([exe, f"--app={url}", "--autoplay-policy=no-user-gesture-required",
                                   f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
                                   "--start-fullscreen"], creationflags=NO_WINDOW)   # F11 to leave

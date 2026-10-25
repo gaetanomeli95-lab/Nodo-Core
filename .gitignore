@@ -100,3 +100,7 @@ nodo-diagnosi.json
 .local-voice/
 *.exe
 nodo.ico
+
+# ---- portable runtime on the USB stick (scripts/avvia-chiavetta.ps1) ----------
+runtime/
+archivio/
