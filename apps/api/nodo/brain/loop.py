@@ -168,6 +168,9 @@ class Brain:
         mem = memory_context(self.s, self.org, tz, query, self.settings.owner_name, self.settings.assistant_name)
         if mem:
             lines.append("\n" + mem)
+        from nodo.pcscan import context_line
+        if pc := context_line():
+            lines.append(pc)
         from nodo.knowledge.service import KnowledgeService
         k = KnowledgeService(self.s, self.org).overview()
         if k["conversations"]:

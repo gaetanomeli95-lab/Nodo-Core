@@ -31,6 +31,9 @@ GROUPS: list[tuple[re.Pattern, set[str]]] = [
                 r"disegn|salva|stampa|tabella|preventiv|fattur|volantin|logo|sito|pagina|html|landing|bozza", re.I),
      {"create_file", "generate_image", "create_document", "ledger_pdf", "create_website", "save_draft", "list_drafts", "update_draft",
       "list_files", "read_file", "save_to_desktop", "open_on_pc", "read_photo"}),
+    (re.compile(r"\bpc\b|computer|\bdisco\b|cartell|desktop|programm|analizz|esplor|scansion|cosa faccio|"
+                r"cosa c'?è (sul|nel|dentro)", re.I),
+     {"pc_overview", "show_on_screen", "open_on_pc", "save_to_desktop"}),
     (re.compile(r"chatgpt|\bgpt\b|claude|chat\b|conversazion|impara|vecchi|studi|stanotte|notte|lezion|miglior", re.I),
      {"read_knowledge", "learn_old_chats", "show_transcript", "study_status"}),
     (re.compile(r"ultimi \d+ minuti|minuti|detto prima|ci siamo detti|trascri", re.I), {"show_transcript"}),

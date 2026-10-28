@@ -219,6 +219,13 @@ class ExtraTools(LedgerTools):
         self._add("open_on_pc", "Apre sul PC di Gaetano un file creato da NODO con il suo programma (PDF col lettore, "
                                 "Excel con Excel...). Per «aprimelo», «aprilo sul computer».",
                   _obj({"name": _STR}, ["name"]), self.open_on_pc)
+        self._add("pc_overview", "Analizza il PC su cui giri (solo il disco di sistema C:, mai dischi esterni o "
+                                 "chiavette): cartelle e quanti file contengono, tipi di file, file recenti, progetti "
+                                 "software, programmi installati. Non apre né legge i file. Per «analizza / esplora / "
+                                 "controlla il PC», «cosa c'è sul computer», «cosa faccio col PC». Il profilo resta "
+                                 "salvato: rifai l'analisi (refresh=true) solo se lo chiede o se è vecchio.",
+                  _obj({"refresh": {"type": "boolean", "description": "true = rifai l'analisi adesso (fino a un "
+                                                                      "minuto e mezzo)"}}), self.pc_overview)
         self._add("board_pin", "Appunta qualcosa sulla LAVAGNA, il riquadro di note sempre visibile sullo schermo di "
                                "Gaetano: cose da ricordare oggi, liste, numeri da tenere sott'occhio. Per «appunta», "
                                "«mettimelo sulla lavagna», «tienimelo davanti».",
@@ -841,6 +848,27 @@ class ExtraTools(LedgerTools):
         except OSError as e:
             return {"error": f"non riesco ad aprirlo sul PC: {e}"}
         return {"opened": hit["title"], "note": "aperto sul PC con il suo programma"}
+
+    async def pc_overview(self, refresh: bool = False) -> dict:
+        import asyncio
+        import os
+
+        from nodo import pcscan
+        if not pcscan.allowed_here():
+            return {"error": "su questo PC il suo utente non ha dato il permesso a NODO (si chiede all'avvio con "
+                             "AVVIA NODO.bat): non lo analizzo"}
+        p = None if refresh else pcscan.load()
+        if p and p.get("computer") not in ("", os.environ.get("COMPUTERNAME", "")):
+            p = None                                  # a profile of ANOTHER PC (NODO moved): analyse this one
+        fresh = p is None
+        if fresh:
+            p = await asyncio.to_thread(pcscan.scan)
+        return {"analysed": "adesso" if fresh else f"il {p['scanned_at'][:10]} (profilo salvato)",
+                "disk": p["disk"], "complete": p["complete"], "files": p["files"], "gigabytes": p["gigabytes"],
+                "by_kind": p["by_kind"], "folders": p["folders"][:15], "software_projects": p["software_projects"][:15],
+                "recent_files": p["recent_files"][:15], "recently_opened": p["recently_opened"][:15],
+                "programs": p["programs"][:70], "not_scanned": pcscan.drives_skipped(),
+                "note": "solo nomi, tipi e date: nessun file è stato aperto. Gli altri dischi non sono stati toccati."}
 
     def _board(self) -> list:
         from nodo.db.models import BoardNote

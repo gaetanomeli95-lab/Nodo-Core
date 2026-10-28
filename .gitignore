@@ -104,3 +104,5 @@ nodo.ico
 # ---- portable runtime on the USB stick (scripts/avvia-chiavetta.ps1) ----------
 runtime/
 archivio/
+# what NODO learned about the PC it runs on (nodo/pcscan.py): personal, never committed
+apps/api/pc-profilo.json

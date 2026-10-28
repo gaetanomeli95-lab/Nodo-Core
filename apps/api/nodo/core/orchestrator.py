@@ -67,6 +67,17 @@ class RequestOutcome:
     model: str | None = None
     reports: list[AgentReport] = field(default_factory=list)
     context_size: dict = field(default_factory=dict)
+    brain_down: str = ""          # why no model could think (the brain fell back to the rules)
+
+
+def brain_down_reply(error: str) -> str:
+    """What to say when no model answered: no internet, or every model busy/out of quota."""
+    e = error.lower()
+    if any(w in e for w in ("getaddrinfo", "transport error", "connect", "timed out", "timeout", "unreachable")):
+        return ("Adesso non riesco a pensare: la connessione a internet non risponde e i modelli che uso sono "
+                "online. Controlla la rete e riprova tra un attimo.")
+    return ("Adesso non riesco a pensare: i modelli che uso sono tutti occupati o hanno finito le richieste "
+            "disponibili per ora. Riprova tra qualche minuto.")
 
 
 class NodoCore:
@@ -142,6 +153,11 @@ class NodoCore:
             elif intent.unresolved or intent.ambiguous:
                 outcome.text = self._clarify(intent)
                 yield _ev("token", request_id, delta=outcome.text)
+            elif intent.name == "general" and outcome.brain_down:
+                # an open question with no model to think: say why, instead of a menu that sounds like a non-answer
+                outcome.text = brain_down_reply(outcome.brain_down)
+                yield _ev("token", request_id, delta=outcome.text)
+                yield _ev("sentence", request_id, text=outcome.text)
             else:
                 pkg = self.context.build(intent)
                 outcome.context_size = pkg.to_dict()["size"]
@@ -217,6 +233,7 @@ class NodoCore:
             async for ev in brain.run(text):
                 yield ev
         except BrainUnavailable as e:
+            outcome.brain_down = str(e)
             self.events.emit("model.failed", {"error": f"brain: {e}"[:500]}, request_id=request_id,
                              organization_id=self.org)
             yield _ev("step", request_id, step="brain", status="fallback")
